@@ -53,3 +53,16 @@ EOF
 echo "✅ 워크트리: $WORKTREE_DIR"
 echo "✅ EXEC_PLAN: $PLAN_FILE"
 echo "👉 작업 시작: cd $WORKTREE_DIR"
+
+# ── 인사이트 로그: 시작 시각 기록 ───────────────────────────────────────────
+mkdir -p .harness/logs
+START_LOG=".harness/logs/${TASK_NAME}.start.json"
+cat > "$START_LOG" <<EOF
+{
+  "task": "$TASK_NAME",
+  "type": "$TASK_TYPE",
+  "started_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "project": "$(basename $(git rev-parse --show-toplevel 2>/dev/null || echo 'unknown'))"
+}
+EOF
+echo "📊 인사이트 로그 기록: $START_LOG"

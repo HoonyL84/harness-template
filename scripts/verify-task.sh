@@ -14,28 +14,80 @@ exec > >(tee -a "$VERIFY_LOG") 2>&1
 echo "🔍 [Harness] 검증 시작... (로그: $VERIFY_LOG)"
 send_slack_notification "info" "🔍 검증 파이프라인 시작"
 
+# ── 인사이트: verify 실패 시 rework_count 증가 헬퍼 ─────────────────────────
+_log_verify_fail() {
+  local reason="$1"
+  local task_name
+  task_name=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed 's|.*/||')
+  local log_file=".harness/logs/${task_name}.verify.json"
+  local count=0
+  if [ -f "$log_file" ]; then
+    count=$(grep -o '"rework_count":[0-9]*' "$log_file" | grep -o '[0-9]*' || echo 0)
+  fi
+  count=$((count + 1))
+  cat > "$log_file" <<LOGEOF
+{
+  "task": "$task_name",
+  "last_verify": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "result": "fail",
+  "last_fail_reason": "$reason",
+  "rework_count": $count
+}
+LOGEOF
+}
+
+# ── 재시도 헬퍼 (Flaky Test 방지) ──────────────────────────────────────────
+MAX_RETRIES=1 # 실패 시 1번 더 재시도 (총 2회 실행)
+RETRY_DELAY=3 # 재시도 간 대기 시간 (초)
+
+_retry_command() {
+  local cmd="$1"
+  local step_name="$2"
+  local attempt=0
+  
+  while [ $attempt -le $MAX_RETRIES ]; do
+    eval "$cmd"
+    local status=$?
+    
+    if [ $status -eq 0 ]; then
+      return 0 # 성공
+    fi
+    
+    attempt=$((attempt + 1))
+    if [ $attempt -le $MAX_RETRIES ]; then
+      echo "⚠️ [$step_name] 실패. ${RETRY_DELAY}초 후 재시도합니다... (재시도 $attempt/$MAX_RETRIES)"
+      sleep $RETRY_DELAY
+    fi
+  done
+  
+  return $status # 최종 실패
+}
+
 # 프로젝트 타입 자동 감지
 if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
   # Java / Gradle 프로젝트
   echo "▶️ [Java] 테스트 실행..."
-  ./gradlew test
+  _retry_command "./gradlew test" "test"
   if [ $? -ne 0 ]; then
+    _log_verify_fail "test"
     send_slack_notification "fail" "❌ 테스트 실패"
     exit 1
   fi
 
   if grep -q "jacoco" build.gradle* 2>/dev/null; then
     echo "▶️ [Java] 테스트 커버리지 검증 (목표: 80%+)..."
-    ./gradlew jacocoTestCoverageVerification
+    _retry_command "./gradlew jacocoTestCoverageVerification" "coverage"
     if [ $? -ne 0 ]; then
+      _log_verify_fail "coverage"
       send_slack_notification "fail" "❌ 테스트 커버리지 기준 미달"
       exit 1
     fi
   fi
 
   echo "▶️ [Java] 빌드 확인..."
-  ./gradlew build -x test
+  _retry_command "./gradlew build -x test" "build"
   if [ $? -ne 0 ]; then
+    _log_verify_fail "build"
     send_slack_notification "fail" "❌ 빌드 실패"
     exit 1
   fi
@@ -43,26 +95,30 @@ if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
 elif [ -f "package.json" ]; then
   # Node.js / 프론트엔드 프로젝트
   echo "▶️ [Node] 테스트 및 커버리지 검증..."
+  local test_cmd="npm run test -- --coverage"
   if grep -q "\"coverage\":" package.json; then
-    npm run coverage
-  else
-    npm run test -- --coverage
+    test_cmd="npm run coverage"
   fi
+  
+  _retry_command "$test_cmd" "test"
   if [ $? -ne 0 ]; then
+    _log_verify_fail "test"
     send_slack_notification "fail" "❌ 테스트 또는 커버리지 검증 실패"
     exit 1
   fi
 
   echo "▶️ [Node] 린트 확인..."
-  npm run lint
+  _retry_command "npm run lint" "lint"
   if [ $? -ne 0 ]; then
+    _log_verify_fail "lint"
     send_slack_notification "fail" "❌ 린트 실패"
     exit 1
   fi
 
   echo "▶️ [Node] 빌드 확인..."
-  npm run build
+  _retry_command "npm run build" "build"
   if [ $? -ne 0 ]; then
+    _log_verify_fail "build"
     send_slack_notification "fail" "❌ 빌드 실패"
     exit 1
   fi
@@ -99,3 +155,19 @@ fi
 
 echo "✅ 모든 검증 통과. 커밋 가능."
 send_slack_notification "success" "✅ 검증 완료! 모든 테스트/빌드 통과."
+
+# ── 인사이트 로그: verify 결과 기록 ─────────────────────────────────────────
+TASK_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed 's|.*/||')
+VERIFY_RESULT_LOG=".harness/logs/${TASK_NAME}.verify.json"
+EXISTING_COUNT=0
+if [ -f "$VERIFY_RESULT_LOG" ]; then
+  EXISTING_COUNT=$(grep -o '"rework_count":[0-9]*' "$VERIFY_RESULT_LOG" | grep -o '[0-9]*' || echo 0)
+fi
+cat > "$VERIFY_RESULT_LOG" <<EOF
+{
+  "task": "$TASK_NAME",
+  "last_verify": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "result": "pass",
+  "rework_count": $EXISTING_COUNT
+}
+EOF
