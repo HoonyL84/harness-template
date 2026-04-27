@@ -1,26 +1,89 @@
 #!/bin/bash
 # ==============================================================================
-# [Harness] 범용 AI 에이전트 트리거
-# AGENTS.md + PLANS.md 를 컨텍스트로 AI API를 호출한다.
+# [Harness] 범용 AI 에이전트 트리거 (모델 라우팅 포함)
 #
 # Usage:
-#   bash scripts/run-agent.sh "Task 1 구현해줘"
+#   bash scripts/run-agent.sh [--type <task-type>] "태스크 설명"
 #
-# 환경변수 (AI_PROVIDER 로 선택):
-#   AI_PROVIDER=openai    → OPENAI_API_KEY 필요
-#   AI_PROVIDER=anthropic → ANTHROPIC_API_KEY 필요
-#   AI_PROVIDER=gemini    → GEMINI_API_KEY 필요
+# Task Types:
+#   --type code       단순 코드 생성/수정  → 빠르고 저렴한 모델
+#   --type architect  아키텍처/설계 결정  → 강력한 추론 모델
+#   --type review     코드 리뷰           → 균형 모델
+#   --type docs       문서 작성           → 저렴한 모델
+#   (기본값)          일반 작업           → 균형 모델
+#
+# AI_PROVIDER: openai | anthropic | gemini  (기본값: openai)
 # ==============================================================================
 
 source "$(dirname "$0")/utils.sh"
 
-TASK_PROMPT="$1"
+# ── 인자 파싱 ──────────────────────────────────────────────────────────────────
+TASK_TYPE="default"
+TASK_PROMPT=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --type)
+      TASK_TYPE="$2"
+      shift 2
+      ;;
+    *)
+      TASK_PROMPT="$1"
+      shift
+      ;;
+  esac
+done
+
 PROVIDER="${AI_PROVIDER:-openai}"
 
 if [ -z "$TASK_PROMPT" ]; then
-  echo "❌ 사용법: bash scripts/run-agent.sh \"태스크 설명\""
+  echo "❌ 사용법: bash scripts/run-agent.sh [--type code|architect|review|docs] \"태스크 설명\""
+  echo ""
+  echo "  --type code       단순 코드 생성/수정 (빠름, 저렴)"
+  echo "  --type architect  아키텍처/설계 (강력한 추론)"
+  echo "  --type review     코드 리뷰 (균형)"
+  echo "  --type docs       문서 작성 (저렴)"
   exit 1
 fi
+
+# ── 모델 라우팅 ────────────────────────────────────────────────────────────────
+#
+# 비용/성능 트레이드오프 전략:
+#   code     → 빠르고 저렴. 단순 CRUD, 보일러플레이트
+#   docs     → 빠르고 저렴. 창의성보다 정확성
+#   review   → 균형. 코드 이해력 + 적당한 속도
+#   architect → 가장 강력. 복잡한 추론, 트레이드오프 분석
+#
+select_model() {
+  local provider=$1
+  local type=$2
+
+  case "$provider" in
+    openai)
+      case "$type" in
+        code|docs) echo "gpt-4o-mini" ;;
+        architect) echo "${OPENAI_MODEL_STRONG:-o3-mini}" ;;
+        review|default|*) echo "${OPENAI_MODEL:-gpt-4o}" ;;
+      esac
+      ;;
+    anthropic)
+      case "$type" in
+        code|docs) echo "claude-haiku-4-5" ;;
+        architect) echo "${ANTHROPIC_MODEL_STRONG:-claude-opus-4-5}" ;;
+        review|default|*) echo "${ANTHROPIC_MODEL:-claude-sonnet-4-5}" ;;
+      esac
+      ;;
+    gemini)
+      case "$type" in
+        code|docs) echo "gemini-2.0-flash" ;;
+        architect) echo "${GEMINI_MODEL_STRONG:-gemini-2.5-pro}" ;;
+        review|default|*) echo "${GEMINI_MODEL:-gemini-2.0-flash}" ;;
+      esac
+      ;;
+  esac
+}
+
+SELECTED_MODEL=$(select_model "$PROVIDER" "$TASK_TYPE")
 
 # ── 컨텍스트 수집 ──────────────────────────────────────────────────────────────
 AGENTS_CONTENT=$(cat AGENTS.md 2>/dev/null || echo "AGENTS.md 없음")
@@ -35,62 +98,55 @@ ${AGENTS_CONTENT}
 === PLANS.md (프로젝트 목표 및 스택) ===
 ${PLANS_CONTENT}
 
+현재 태스크 유형: ${TASK_TYPE}
 규칙:
-1. 코드를 작성할 때는 AGENTS.md의 코딩 규칙을 엄격히 따르세요.
-2. 불확실한 부분은 추측하지 말고 명시적으로 가정(Assumption)을 밝히세요.
+1. 코드 작성 시 AGENTS.md의 코딩 규칙을 엄격히 따르세요.
+2. 불확실한 부분은 추측하지 말고 가정(Assumption)을 명시하세요.
 3. 구현 완료 후 검증 방법을 함께 제시하세요."
 
-USER_PROMPT="$TASK_PROMPT"
-
-echo "🤖 [Harness Agent] Provider: $PROVIDER"
-echo "📋 Task: $TASK_PROMPT"
-echo "─────────────────────────────────────────"
+echo "🤖 [Harness Agent]"
+echo "   Provider : $PROVIDER"
+echo "   Model    : $SELECTED_MODEL  (task-type: $TASK_TYPE)"
+echo "   Task     : $TASK_PROMPT"
+echo "─────────────────────────────────────────────────────────"
 
 # ── API 호출 ──────────────────────────────────────────────────────────────────
 
 call_openai() {
-  if [ -z "$OPENAI_API_KEY" ]; then echo "❌ OPENAI_API_KEY 미설정"; exit 1; fi
-  RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+  [ -z "$OPENAI_API_KEY" ] && echo "❌ OPENAI_API_KEY 미설정" && exit 1
+  curl -s https://api.openai.com/v1/chat/completions \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $OPENAI_API_KEY" \
     -d "{
-      \"model\": \"${OPENAI_MODEL:-gpt-4o}\",
+      \"model\": \"$SELECTED_MODEL\",
       \"messages\": [
         {\"role\": \"system\", \"content\": $(echo "$SYSTEM_PROMPT" | jq -Rs .)},
-        {\"role\": \"user\", \"content\": $(echo "$USER_PROMPT" | jq -Rs .)}
+        {\"role\": \"user\",   \"content\": $(echo "$TASK_PROMPT"   | jq -Rs .)}
       ]
-    }")
-  echo "$RESPONSE" | jq -r '.choices[0].message.content'
+    }" | jq -r '.choices[0].message.content'
 }
 
 call_anthropic() {
-  if [ -z "$ANTHROPIC_API_KEY" ]; then echo "❌ ANTHROPIC_API_KEY 미설정"; exit 1; fi
-  RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+  [ -z "$ANTHROPIC_API_KEY" ] && echo "❌ ANTHROPIC_API_KEY 미설정" && exit 1
+  curl -s https://api.anthropic.com/v1/messages \
     -H "Content-Type: application/json" \
     -H "x-api-key: $ANTHROPIC_API_KEY" \
     -H "anthropic-version: 2023-06-01" \
     -d "{
-      \"model\": \"${ANTHROPIC_MODEL:-claude-opus-4-5}\",
+      \"model\": \"$SELECTED_MODEL\",
       \"max_tokens\": 8192,
       \"system\": $(echo "$SYSTEM_PROMPT" | jq -Rs .),
-      \"messages\": [
-        {\"role\": \"user\", \"content\": $(echo "$USER_PROMPT" | jq -Rs .)}
-      ]
-    }")
-  echo "$RESPONSE" | jq -r '.content[0].text'
+      \"messages\": [{\"role\": \"user\", \"content\": $(echo "$TASK_PROMPT" | jq -Rs .)}]
+    }" | jq -r '.content[0].text'
 }
 
 call_gemini() {
-  if [ -z "$GEMINI_API_KEY" ]; then echo "❌ GEMINI_API_KEY 미설정"; exit 1; fi
-  FULL_PROMPT="${SYSTEM_PROMPT}\n\n---\n\n${USER_PROMPT}"
-  RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL:-gemini-2.0-flash}:generateContent?key=$GEMINI_API_KEY" \
+  [ -z "$GEMINI_API_KEY" ] && echo "❌ GEMINI_API_KEY 미설정" && exit 1
+  FULL_PROMPT="${SYSTEM_PROMPT}\n\n---\n\n${TASK_PROMPT}"
+  curl -s "https://generativelanguage.googleapis.com/v1beta/models/${SELECTED_MODEL}:generateContent?key=$GEMINI_API_KEY" \
     -H "Content-Type: application/json" \
-    -d "{
-      \"contents\": [{
-        \"parts\": [{\"text\": $(echo "$FULL_PROMPT" | jq -Rs .)}]
-      }]
-    }")
-  echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text'
+    -d "{\"contents\": [{\"parts\": [{\"text\": $(echo "$FULL_PROMPT" | jq -Rs .)}]}]}" \
+    | jq -r '.candidates[0].content.parts[0].text'
 }
 
 # ── Provider 분기 ──────────────────────────────────────────────────────────────
@@ -98,13 +154,10 @@ case "$PROVIDER" in
   openai)    call_openai ;;
   anthropic) call_anthropic ;;
   gemini)    call_gemini ;;
-  *)
-    echo "❌ 지원하지 않는 provider: $PROVIDER (openai | anthropic | gemini)"
-    exit 1
-    ;;
+  *) echo "❌ 지원하지 않는 provider: $PROVIDER"; exit 1 ;;
 esac
 
 echo ""
-echo "─────────────────────────────────────────"
-echo "✅ 에이전트 응답 완료"
-send_slack_notification "success" "🤖 Agent 태스크 완료: $TASK_PROMPT"
+echo "─────────────────────────────────────────────────────────"
+echo "✅ 완료 | $PROVIDER / $SELECTED_MODEL"
+send_slack_notification "success" "🤖 [$TASK_TYPE] 완료: $TASK_PROMPT ($SELECTED_MODEL)"
