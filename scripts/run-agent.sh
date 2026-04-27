@@ -104,10 +104,28 @@ ${PLANS_CONTENT}
 2. 불확실한 부분은 추측하지 말고 가정(Assumption)을 명시하세요.
 3. 구현 완료 후 검증 방법을 함께 제시하세요."
 
+# ── 로그 파일 설정 ────────────────────────────────────────────────────────────
+mkdir -p .harness/logs
+LOG_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+LOG_FILE=".harness/logs/${LOG_TIMESTAMP}-${TASK_TYPE}.log"
+
+{
+  echo "======================================================"
+  echo "Harness Agent Log"
+  echo "Timestamp : $LOG_TIMESTAMP"
+  echo "Provider  : $PROVIDER"
+  echo "Model     : $SELECTED_MODEL"
+  echo "Task-Type : $TASK_TYPE"
+  echo "Task      : $TASK_PROMPT"
+  echo "======================================================"
+  echo ""
+} > "$LOG_FILE"
+
 echo "🤖 [Harness Agent]"
 echo "   Provider : $PROVIDER"
 echo "   Model    : $SELECTED_MODEL  (task-type: $TASK_TYPE)"
 echo "   Task     : $TASK_PROMPT"
+echo "   Log      : $LOG_FILE"
 echo "─────────────────────────────────────────────────────────"
 
 # ── API 호출 ──────────────────────────────────────────────────────────────────
@@ -149,15 +167,23 @@ call_gemini() {
     | jq -r '.candidates[0].content.parts[0].text'
 }
 
-# ── Provider 분기 ──────────────────────────────────────────────────────────────
+# ── Provider 분기 (출력 + 로그 동시 저장) ─────────────────────────────────────
 case "$PROVIDER" in
-  openai)    call_openai ;;
-  anthropic) call_anthropic ;;
-  gemini)    call_gemini ;;
+  openai)    call_openai    | tee -a "$LOG_FILE" ;;
+  anthropic) call_anthropic | tee -a "$LOG_FILE" ;;
+  gemini)    call_gemini    | tee -a "$LOG_FILE" ;;
   *) echo "❌ 지원하지 않는 provider: $PROVIDER"; exit 1 ;;
 esac
+
+{
+  echo ""
+  echo "======================================================"
+  echo "완료: $(date)"
+  echo "======================================================"
+} >> "$LOG_FILE"
 
 echo ""
 echo "─────────────────────────────────────────────────────────"
 echo "✅ 완료 | $PROVIDER / $SELECTED_MODEL"
+echo "📄 로그: $LOG_FILE"
 send_slack_notification "success" "🤖 [$TASK_TYPE] 완료: $TASK_PROMPT ($SELECTED_MODEL)"

@@ -6,7 +6,12 @@
 
 source "$(dirname "$0")/utils.sh"
 
-echo "🔍 [Harness] 검증 시작..."
+# ── 로그 설정 ──────────────────────────────────────────────────────────────────
+mkdir -p .harness/logs
+VERIFY_LOG=".harness/logs/$(date +"%Y-%m-%d_%H-%M-%S")-verify.log"
+exec > >(tee -a "$VERIFY_LOG") 2>&1
+
+echo "🔍 [Harness] 검증 시작... (로그: $VERIFY_LOG)"
 send_slack_notification "info" "🔍 검증 파이프라인 시작"
 
 # 프로젝트 타입 자동 감지
