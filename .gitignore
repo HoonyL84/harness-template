@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Build outputs
+dist/
+build/
+*.log
+out/
+target/
+
+# Environment variables (절대 커밋 금지)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.secret
+application-prod.yml
+
+# Harness Worktrees
+.worktrees/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.DS_Store
+
+# Gradle
+.gradle/
+build/
