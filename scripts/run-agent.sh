@@ -61,23 +61,23 @@ select_model() {
   case "$provider" in
     openai)
       case "$type" in
-        code|docs) echo "gpt-4o-mini" ;;
-        architect) echo "${OPENAI_MODEL_STRONG:-o3-mini}" ;;
-        review|default|*) echo "${OPENAI_MODEL:-gpt-4o}" ;;
+        code|docs) echo "${OPENAI_MODEL_FAST:-gpt-5.5}" ;;
+        architect) echo "${OPENAI_MODEL_STRONG:-gpt-5.5-pro}" ;;
+        review|default|*) echo "${OPENAI_MODEL:-gpt-5.5}" ;;
       esac
       ;;
     anthropic)
       case "$type" in
-        code|docs) echo "claude-haiku-4-5" ;;
-        architect) echo "${ANTHROPIC_MODEL_STRONG:-claude-opus-4-5}" ;;
-        review|default|*) echo "${ANTHROPIC_MODEL:-claude-sonnet-4-5}" ;;
+        code|docs) echo "${ANTHROPIC_MODEL_FAST:-claude-haiku-4-5}" ;;
+        architect) echo "${ANTHROPIC_MODEL_STRONG:-claude-opus-4-7}" ;;
+        review|default|*) echo "${ANTHROPIC_MODEL:-claude-sonnet-4-6}" ;;
       esac
       ;;
     gemini)
       case "$type" in
-        code|docs) echo "gemini-2.0-flash" ;;
-        architect) echo "${GEMINI_MODEL_STRONG:-gemini-2.5-pro}" ;;
-        review|default|*) echo "${GEMINI_MODEL:-gemini-2.0-flash}" ;;
+        code|docs) echo "${GEMINI_MODEL_FAST:-gemini-3-flash}" ;;
+        architect) echo "${GEMINI_MODEL_STRONG:-gemini-3-1-pro}" ;;
+        review|default|*) echo "${GEMINI_MODEL:-gemini-3-flash}" ;;
       esac
       ;;
   esac
