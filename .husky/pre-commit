@@ -1,0 +1,20 @@
+#!/bin/sh
+# [Harness] pre-commit hook: 금지된 패턴 커밋 차단
+
+# console.log 커밋 차단 (JS/TS)
+if git diff --cached --name-only | grep -qE '\.(js|ts|jsx|tsx)$'; then
+  if git diff --cached | grep -qE '^\+.*console\.log'; then
+    echo "❌ [Harness] console.log 커밋 금지. 제거 후 다시 커밋하세요."
+    exit 1
+  fi
+fi
+
+# System.out.println 커밋 차단 (Java)
+if git diff --cached --name-only | grep -qE '\.java$'; then
+  if git diff --cached | grep -qE '^\+.*System\.out\.println'; then
+    echo "❌ [Harness] System.out.println 커밋 금지. 로거를 사용하세요."
+    exit 1
+  fi
+fi
+
+echo "✅ pre-commit 통과"

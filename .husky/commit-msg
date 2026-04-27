@@ -1,0 +1,5 @@
+#!/bin/sh
+# [Harness] commit-msg hook: 커밋 메시지 형식 강제 검사
+# 허용 형식: feat(scope): description
+
+npx --no -- commitlint --edit "$1"
