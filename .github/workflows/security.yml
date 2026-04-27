@@ -16,16 +16,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # npm 프로젝트 취약점 스캔
       - name: npm audit
         if: ${{ hashFiles('package.json') != '' }}
         run: npm audit --audit-level=high
 
-      # GitHub의 내장 Dependency 취약점 스캔 (Dependabot alerts)
+      # 시크릿 스캔 (TruffleHog)
       - name: Check for secrets in code
         uses: trufflesecurity/trufflehog@main
         with:
-          path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
+          extra_args: --debug --only-verified
