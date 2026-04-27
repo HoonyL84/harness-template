@@ -1,0 +1,31 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  schedule:
+    # 매주 월요일 오전 9시 자동 실행
+    - cron: '0 0 * * 1'
+
+jobs:
+  dependency-audit:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # npm 프로젝트 취약점 스캔
+      - name: npm audit
+        if: ${{ hashFiles('package.json') != '' }}
+        run: npm audit --audit-level=high
+
+      # GitHub의 내장 Dependency 취약점 스캔 (Dependabot alerts)
+      - name: Check for secrets in code
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
