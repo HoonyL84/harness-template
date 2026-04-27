@@ -24,6 +24,15 @@ if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
     exit 1
   fi
 
+  if grep -q "jacoco" build.gradle* 2>/dev/null; then
+    echo "▶️ [Java] 테스트 커버리지 검증 (목표: 80%+)..."
+    ./gradlew jacocoTestCoverageVerification
+    if [ $? -ne 0 ]; then
+      send_slack_notification "fail" "❌ 테스트 커버리지 기준 미달"
+      exit 1
+    fi
+  fi
+
   echo "▶️ [Java] 빌드 확인..."
   ./gradlew build -x test
   if [ $? -ne 0 ]; then
@@ -33,10 +42,14 @@ if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
 
 elif [ -f "package.json" ]; then
   # Node.js / 프론트엔드 프로젝트
-  echo "▶️ [Node] 테스트 실행..."
-  npm run test
+  echo "▶️ [Node] 테스트 및 커버리지 검증..."
+  if grep -q "\"coverage\":" package.json; then
+    npm run coverage
+  else
+    npm run test -- --coverage
+  fi
   if [ $? -ne 0 ]; then
-    send_slack_notification "fail" "❌ 테스트 실패"
+    send_slack_notification "fail" "❌ 테스트 또는 커버리지 검증 실패"
     exit 1
   fi
 

@@ -28,8 +28,12 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Run tests
-        run: ./gradlew test
+      - name: Run tests & coverage
+        run: |
+          ./gradlew test
+          if grep -q "jacoco" build.gradle* 2>/dev/null; then
+            ./gradlew jacocoTestCoverageVerification
+          fi
 
       - name: Build
         run: ./gradlew build -x test
@@ -54,8 +58,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test
+      - name: Run tests & coverage
+        run: |
+          if grep -q "\"coverage\":" package.json; then
+            npm run coverage
+          else
+            npm run test -- --coverage
+          fi
 
       - name: Lint
         run: npm run lint
