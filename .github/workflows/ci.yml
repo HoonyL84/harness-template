@@ -7,9 +7,33 @@ on:
     branches: [ master, main ]
 
 jobs:
+  detect-project:
+    name: Detect Project Type
+    runs-on: ubuntu-latest
+    outputs:
+      has_java: ${{ steps.detect.outputs.has_java }}
+      has_node: ${{ steps.detect.outputs.has_node }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect files
+        id: detect
+        run: |
+          if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+            echo "has_java=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_java=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -f "package.json" ]; then
+            echo "has_node=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_node=false" >> "$GITHUB_OUTPUT"
+          fi
+
   harness-governance:
     name: Harness Governance
     runs-on: ubuntu-latest
+    needs: detect-project
     steps:
       - uses: actions/checkout@v4
       - name: Health check
@@ -25,7 +49,8 @@ jobs:
   java-ci:
     name: Java CI (Gradle)
     runs-on: ubuntu-latest
-    if: ${{ hashFiles('build.gradle', 'build.gradle.kts') != '' }}
+    needs: detect-project
+    if: ${{ needs.detect-project.outputs.has_java == 'true' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +81,8 @@ jobs:
   node-ci:
     name: Node CI (npm)
     runs-on: ubuntu-latest
-    if: ${{ hashFiles('package.json') != '' }}
+    needs: detect-project
+    if: ${{ needs.detect-project.outputs.has_node == 'true' }}
 
     steps:
       - uses: actions/checkout@v4
