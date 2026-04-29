@@ -41,9 +41,9 @@ fi
 echo "✅ Task [$TASK_NAME] 정리 완료."
 
 # ── 인사이트 로그: 최종 기록 생성 ───────────────────────────────────────────
-START_LOG=".harness/logs/${TASK_NAME}.start.json"
-VERIFY_LOG=".harness/logs/${TASK_NAME}.verify.json"
-INSIGHT_LOG=".harness/logs/${TASK_NAME}.done.json"
+START_LOG="observability/metrics/${TASK_NAME}.start.json"
+VERIFY_LOG="observability/metrics/${TASK_NAME}.verify.json"
+INSIGHT_LOG="observability/metrics/${TASK_NAME}.done.json"
 
 STARTED_AT="unknown"
 TASK_TYPE="unknown"

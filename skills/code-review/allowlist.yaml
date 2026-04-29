@@ -1,0 +1,6 @@
+﻿version: 1
+skill: code-review
+allowed_agents:
+  - default
+  - reviewer
+

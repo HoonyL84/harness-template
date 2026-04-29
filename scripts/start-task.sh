@@ -55,8 +55,8 @@ echo "✅ EXEC_PLAN: $PLAN_FILE"
 echo "👉 작업 시작: cd $WORKTREE_DIR"
 
 # ── 인사이트 로그: 시작 시각 기록 ───────────────────────────────────────────
-mkdir -p .harness/logs
-START_LOG=".harness/logs/${TASK_NAME}.start.json"
+mkdir -p observability/metrics
+START_LOG="observability/metrics/${TASK_NAME}.start.json"
 cat > "$START_LOG" <<EOF
 {
   "task": "$TASK_NAME",

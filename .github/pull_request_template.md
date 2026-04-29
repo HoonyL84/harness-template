@@ -17,10 +17,13 @@
 
 ## ✅ 셀프 체크리스트
 - [ ] `verify-task.sh` 통과
+- [ ] `verify-task.sh --offline` 통과 (키/네트워크 없는 환경 기준)
+- [ ] `health-check.sh` 통과
 - [ ] 새 N+1 쿼리 없음
 - [ ] Redis Key TTL 설정됨
 - [ ] `console.log` / `System.out.println` 제거
 - [ ] 시크릿 하드코딩 없음
+- [ ] 컨텍스트 문서 갱신 (`memory/*` 또는 `.harness/tasks/active/*` 필요 시)
 
 ---
 

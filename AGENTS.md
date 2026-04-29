@@ -86,7 +86,22 @@
 |------|------|
 | `docs/design-docs/core-beliefs.md` | 아키텍처 원칙, 코딩 규칙, 안전 가드레일 |
 | `docs/design-docs/tech-stack.md` | 기본 기술 스택 (PLANS.md에서 override 가능) |
+| `docs/design-docs/memory-governance.md` | memory 레이어 포맷/갱신 규칙 |
 | `docs/skills/code-review.md` | 코드 리뷰 수행 방법 |
 | `docs/skills/git-workflow.md` | Git 컨벤션 및 커밋 규칙 |
 | `docs/adr/` | 아키텍처 결정 기록 |
 | `docs/project/PLANS.md` | 프로젝트 목표 및 로드맵 |
+
+---
+
+## 5. 고급 에이전트 시스템 구조 (Agent OS)
+
+새로 도입된 에이전트 시스템 아키텍처입니다. (현재 점진적 도입 중)
+
+| 폴더명 | 역할 및 목적 |
+|--------|--------------|
+| `observability/` | 에이전트 수행 로그(`traces`), 이벤트, 성과 지표(`metrics`/rework_count 등) 수집 |
+| `evals/` | 에이전트 스킬 고립 테스트(`per_skill`), 복합 테스트(`compositional`), 회귀 테스트(`regression`) |
+| `memory/` | 단기 컨텍스트(`working`), 도메인 지식(`semantic`), 과거 결정(`episodic`), 절차적 노하우(`procedural`) 관리 |
+| `prompts/` | 프롬프트 시스템 관리 (`system`, `templates`, `fragments`) |
+| `tools/` | Model Context Protocol (`mcp`) 및 로컬 함수 도구 등 레지스트리 관리 |

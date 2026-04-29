@@ -8,7 +8,7 @@
 #   1. Doc Drift   — 최근 변경된 코드가 문서에 반영되었는가?
 #   2. Config Drift — .env.template에 없는 환경 변수가 코드에 있는가?
 #   3. Task Drift   — 14일 이상 방치된 active 태스크
-#   4. Log Drift    — .harness/logs가 과도하게 쌓였는가? (100개 초과)
+#   4. Log Drift    — observability/traces/가 과도하게 쌓였는가? (100개 초과)
 # ==============================================================================
 
 source "$(dirname "$0")/utils.sh"
@@ -35,7 +35,7 @@ fi
 
 # ── 2. Log Drift: 로그 파일 과적 감지 ──────────────────────────────────────────
 echo "▶ [2/4] Log Drift 검사..."
-LOG_DIR=".harness/logs"
+LOG_DIR="observability/traces"
 if [ -d "$LOG_DIR" ]; then
   LOG_COUNT=$(find "$LOG_DIR" -name "*.log" 2>/dev/null | wc -l)
   if [ "$LOG_COUNT" -gt 100 ]; then

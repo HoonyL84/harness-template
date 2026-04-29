@@ -1,0 +1,18 @@
+# Tool Registry Template
+# This file is intentionally scaffolded for template repositories.
+# Fill entries when a real project binds actual tools.
+#
+# version: 1
+# tools:
+#   - id: "mcp.example.search"
+#     kind: "mcp"          # mcp | local
+#     owner: "platform"
+#     description: "Example MCP tool"
+#     entrypoint: "tools/mcp/example.yaml"
+#     enabled: true
+#   - id: "local.verify"
+#     kind: "local"
+#     owner: "devx"
+#     description: "Local verification helper"
+#     entrypoint: "tools/local/verify.sh"
+#     enabled: false

@@ -1,10 +1,10 @@
 #!/bin/bash
 # ==============================================================================
-# [Harness] 인사이트 리포트 — .harness/logs/*.done.json 기반 통계 출력
+# [Harness] 인사이트 리포트 — observability/metrics/*.done.json 기반 통계 출력
 # Usage: bash scripts/insights.sh
 # ==============================================================================
 
-LOG_DIR=".harness/logs"
+LOG_DIR="observability/metrics"
 DONE_FILES=("$LOG_DIR"/*.done.json)
 
 if [ ! -f "${DONE_FILES[0]}" ]; then

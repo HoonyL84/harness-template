@@ -1,0 +1,2 @@
+﻿{"input":"PR #42 code review","expected":"findings-first response with file+line references"}
+{"input":"Review this auth refactor","expected":"security and regression risk findings"}

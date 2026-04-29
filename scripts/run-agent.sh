@@ -86,17 +86,26 @@ select_model() {
 SELECTED_MODEL=$(select_model "$PROVIDER" "$TASK_TYPE")
 
 # ── 컨텍스트 수집 ──────────────────────────────────────────────────────────────
-AGENTS_CONTENT=$(cat AGENTS.md 2>/dev/null || echo "AGENTS.md 없음")
-PLANS_CONTENT=$(cat docs/project/PLANS.md 2>/dev/null || echo "PLANS.md 없음")
+TASK_NAME="${TASK_ID:-}"
+if [ -z "$TASK_NAME" ]; then
+  TASK_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | sed 's|.*/||')
+fi
+
+CONTEXT_BUNDLE=$(bash scripts/load-context.sh --task-type "$TASK_TYPE" --task-name "$TASK_NAME" 2>/dev/null)
+if [ -z "$CONTEXT_BUNDLE" ]; then
+  AGENTS_CONTENT=$(cat AGENTS.md 2>/dev/null || echo "AGENTS.md 없음")
+  PLANS_CONTENT=$(cat docs/project/PLANS.md 2>/dev/null || echo "PLANS.md 없음")
+  CONTEXT_BUNDLE="=== AGENTS.md (행동 강령) ===
+${AGENTS_CONTENT}
+
+=== PLANS.md (프로젝트 목표 및 스택) ===
+${PLANS_CONTENT}"
+fi
 
 SYSTEM_PROMPT="당신은 하네스(Harness Engineering) 원칙을 따르는 시니어 소프트웨어 엔지니어입니다.
 아래 규칙과 프로젝트 컨텍스트를 읽고 주어진 태스크를 수행하세요.
 
-=== AGENTS.md (행동 강령) ===
-${AGENTS_CONTENT}
-
-=== PLANS.md (프로젝트 목표 및 스택) ===
-${PLANS_CONTENT}
+${CONTEXT_BUNDLE}
 
 현재 태스크 유형: ${TASK_TYPE}
 규칙:
@@ -105,9 +114,9 @@ ${PLANS_CONTENT}
 3. 구현 완료 후 검증 방법을 함께 제시하세요."
 
 # ── 로그 파일 설정 ────────────────────────────────────────────────────────────
-mkdir -p .harness/logs
+mkdir -p observability/traces
 LOG_TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-LOG_FILE=".harness/logs/${LOG_TIMESTAMP}-${TASK_TYPE}.log"
+LOG_FILE="observability/traces/${LOG_TIMESTAMP}-${TASK_TYPE}.log"
 
 {
   echo "======================================================"

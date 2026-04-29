@@ -7,6 +7,18 @@ on:
     branches: [ master, main ]
 
 jobs:
+  harness-governance:
+    name: Harness Governance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Health check
+        run: bash scripts/health-check.sh
+      - name: Memory governance check
+        run: bash scripts/validate-memory.sh
+      - name: Drift check
+        run: bash scripts/scan-drift.sh
+
   # ──────────────────────────────────────────
   # Java / Gradle 프로젝트 감지 시 실행
   # ──────────────────────────────────────────
@@ -60,14 +72,26 @@ jobs:
 
       - name: Run tests & coverage
         run: |
-          if grep -q "\"coverage\":" package.json; then
+          if node -e "const s=require('./package.json').scripts||{}; process.exit(s.coverage?0:1)"; then
             npm run coverage
-          else
+          elif node -e "const s=require('./package.json').scripts||{}; process.exit(s.test?0:1)"; then
             npm run test -- --coverage
+          else
+            echo "No test script found. Skipping tests."
           fi
 
       - name: Lint
-        run: npm run lint
+        run: |
+          if node -e "const s=require('./package.json').scripts||{}; process.exit(s.lint?0:1)"; then
+            npm run lint
+          else
+            echo "No lint script found. Skipping lint."
+          fi
 
       - name: Build
-        run: npm run build
+        run: |
+          if node -e "const s=require('./package.json').scripts||{}; process.exit(s.build?0:1)"; then
+            npm run build
+          else
+            echo "No build script found. Skipping build."
+          fi
