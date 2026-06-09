@@ -88,6 +88,9 @@ print_file_block "Tech Stack" "docs/design-docs/tech-stack.md" 200
 print_file_block "Agent Roles" "docs/design-docs/agent-roles.md" 220
 
 # Priority 2: active task plan (if provided / infer by name)
+print_dir_index "Backlog Ticket Index" ".harness/tasks/backlog" 30
+print_latest_file_block "Latest Backlog Ticket" ".harness/tasks/backlog" "*.md" 120
+
 if [ -n "$TASK_NAME" ]; then
   print_file_block "Active Task EXEC_PLAN" ".harness/tasks/active/${TASK_NAME}.md" 200
 else

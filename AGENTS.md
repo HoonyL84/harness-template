@@ -13,7 +13,8 @@
 3. **`docs/design-docs/core-beliefs.md`** — 아키텍처 핵심 신념 및 코딩 규칙
 4. **`docs/design-docs/tech-stack.md`** — 기본 기술 스택 및 설정
 5. **`docs/design-docs/agent-roles.md`** — 역할 기반 에이전트 책임
-6. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
+6. **`.harness/tasks/backlog/`** — PLANS.md와 사용자 피드백에서 분해된 티켓
+7. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
 
 > 필요한 스킬이 있으면 `skills/`의 `SKILL.md`를 우선 탐색하고, 긴 절차 문서는 `docs/skills/`를 참고하라.
 
@@ -62,7 +63,7 @@
 
 ## 2. 절대 원칙 (3가지만)
 
-1. **master 브랜치 직접 수정 금지** — `bash scripts/start-task.sh <task> <type>`으로만 작업
+1. **master 브랜치 직접 수정 금지** — backlog/active 티켓 단위로만 작업
 2. **커밋 전 검증 필수** — `bash scripts/verify-task.sh` 통과 후에만 커밋
 3. **고위험 결정은 슬랙 승인** — DB 스키마 변경, 인프라 변경은 자동 실행 금지
 
@@ -71,9 +72,9 @@
 ## 3. 작업 루프 (5단계)
 
 ```
-[1] PLANS.md 읽고 목표 파악 → 성공 기준 명시 (Goal-Driven)
-[2] start-task.sh → 워크트리 + EXEC_PLAN 생성
-[3] 워크트리에서 구현 (core-beliefs.md + tech-stack.md 준수)
+[1] PLANS.md 읽고 큰 목표 파악 → backlog 티켓으로 분해 (Goal-Driven)
+[2] start-ticket.sh 또는 start-task.sh → active EXEC_PLAN 생성
+[3] active 태스크 기준으로 구현 (core-beliefs.md + tech-stack.md 준수)
     └─ 불확실하면 멈추고 질문 / 요청 외 수정 금지 (Karpathy Rules)
 [4] verify-task.sh → 테스트 + 린트 + 빌드 통과
 [5] git commit → complete-task.sh
@@ -94,6 +95,9 @@
 | `docs/skills/git-workflow.md` | Git 컨벤션 및 커밋 규칙 |
 | `docs/adr/` | 아키텍처 결정 기록 |
 | `docs/project/PLANS.md` | 프로젝트 목표 및 로드맵 |
+| `.harness/tasks/backlog/` | 아직 시작하지 않은 티켓 |
+| `.harness/tasks/active/` | 현재 진행 중인 티켓 |
+| `.harness/tasks/archive/` | 완료된 티켓 기록 |
 
 ---
 

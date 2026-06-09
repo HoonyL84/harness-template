@@ -19,7 +19,7 @@
 2. `cp .env.template .env.local` 로 환경 변수 파일 생성
 3. `npm install` 로 Husky/commitlint 설치
 4. `docs/project/PLANS.md` 작성 (프로젝트 목표/로드맵)
-5. `bash scripts/start-task.sh <task-name> <feat|fix|refactor|docs|chore|experiment>` 로 첫 태스크 시작
+5. `scripts/create-ticket.*`로 backlog 티켓 생성 후 `scripts/start-ticket.*`로 active 승격
 
 ## 문서 진입점
 
@@ -49,6 +49,8 @@ scratch/
 ## 핵심 스크립트
 
 - `scripts/start-task.sh`: 워크트리 + EXEC_PLAN 생성
+- `scripts/create-ticket.sh` / `scripts/create-ticket.ps1`: backlog 티켓 생성
+- `scripts/start-ticket.sh` / `scripts/start-ticket.ps1`: backlog 티켓을 active로 승격
 - `scripts/verify-task.sh`: 테스트/린트/빌드/정책 검증
 - `scripts/verify-task.sh --offline`: 네트워크/키 없는 환경용 로컬 검증
 - `scripts/run-agent.sh --role <role>`: Planner/Reviewer 등 역할 프롬프트로 AI 호출
