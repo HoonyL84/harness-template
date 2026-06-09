@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # ============================================================================
 # [Harness] 4단계: 전체 검증 (테스트 + 린트 + 빌드)
 # Usage: bash scripts/verify-task.sh [--offline]
@@ -107,33 +107,48 @@ if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
   fi
 
 elif [ -f "package.json" ]; then
-  echo "[Node] Running tests/coverage..."
-  test_cmd="npm run test -- --coverage"
-  if grep -q '"coverage":' package.json; then
-    test_cmd="npm run coverage"
+  # 1. Test
+  if grep -q '"test":' package.json || grep -q '"coverage":' package.json; then
+    echo "[Node] Running tests/coverage..."
+    test_cmd="npm run test -- --coverage"
+    if grep -q '"coverage":' package.json; then
+      test_cmd="npm run coverage"
+    fi
+
+    _retry_command "$test_cmd" "test"
+    if [ $? -ne 0 ]; then
+      _log_verify_fail "test"
+      notify "fail" "Test or coverage failed"
+      exit 1
+    fi
+  else
+    echo "[Node] Skipping tests (no 'test' or 'coverage' script in package.json)"
   fi
 
-  _retry_command "$test_cmd" "test"
-  if [ $? -ne 0 ]; then
-    _log_verify_fail "test"
-    notify "fail" "Test or coverage failed"
-    exit 1
+  # 2. Lint
+  if grep -q '"lint":' package.json; then
+    echo "[Node] Lint check..."
+    _retry_command "npm run lint" "lint"
+    if [ $? -ne 0 ]; then
+      _log_verify_fail "lint"
+      notify "fail" "Lint failed"
+      exit 1
+    fi
+  else
+    echo "[Node] Skipping lint (no 'lint' script in package.json)"
   fi
 
-  echo "[Node] Lint check..."
-  _retry_command "npm run lint" "lint"
-  if [ $? -ne 0 ]; then
-    _log_verify_fail "lint"
-    notify "fail" "Lint failed"
-    exit 1
-  fi
-
-  echo "[Node] Build check..."
-  _retry_command "npm run build" "build"
-  if [ $? -ne 0 ]; then
-    _log_verify_fail "build"
-    notify "fail" "Build failed"
-    exit 1
+  # 3. Build
+  if grep -q '"build":' package.json; then
+    echo "[Node] Build check..."
+    _retry_command "npm run build" "build"
+    if [ $? -ne 0 ]; then
+      _log_verify_fail "build"
+      notify "fail" "Build failed"
+      exit 1
+    fi
+  else
+    echo "[Node] Skipping build (no 'build' script in package.json)"
   fi
 else
   echo "No supported project type detected. Please verify manually."
@@ -141,26 +156,45 @@ else
 fi
 
 if [ "$OFFLINE_MODE" != "true" ]; then
-  echo "[AI] Semantic review against core-beliefs..."
-  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    DIFF_CONTENT=$(git diff HEAD 2>/dev/null | head -n 500)
-    if [ -n "$DIFF_CONTENT" ]; then
-      PROMPT_FILE="observability/traces/semantic-prompt.txt"
-      echo -e "Review the following git diff against docs/design-docs/core-beliefs.md.\nIf there is a violation, output: FAIL: <reason>.\nIf compliant, output: PASS\n\n$DIFF_CONTENT" > "$PROMPT_FILE"
+  # API Key 존재 여부 확인
+  API_KEY_EXISTS=false
+  PROVIDER_UPPER=$(echo "${AI_PROVIDER:-openai}" | tr '[:lower:]' '[:upper:]')
 
-      AI_REVIEW_RESULT=$(bash scripts/run-agent.sh --type review "$(cat "$PROMPT_FILE")")
+  if [ "$PROVIDER_UPPER" == "OPENAI" ] && [ -n "$OPENAI_API_KEY" ]; then
+    API_KEY_EXISTS=true
+  elif [ "$PROVIDER_UPPER" == "ANTHROPIC" ] && [ -n "$ANTHROPIC_API_KEY" ]; then
+    API_KEY_EXISTS=true
+  elif [ "$PROVIDER_UPPER" == "GEMINI" ] && [ -n "$GEMINI_API_KEY" ]; then
+    API_KEY_EXISTS=true
+  elif [ -z "$AI_PROVIDER" ] && [ -n "$OPENAI_API_KEY" ]; then
+    # 기본값 openai 대응
+    API_KEY_EXISTS=true
+  fi
 
-      if echo "$AI_REVIEW_RESULT" | grep -q "FAIL"; then
-        echo "[AI Review] Policy violation detected"
-        echo "$AI_REVIEW_RESULT" | grep "FAIL" -A 5
-        notify "fail" "AI semantic review failed"
-        exit 1
+  if [ "$API_KEY_EXISTS" == "true" ]; then
+    echo "[AI] Semantic review against core-beliefs..."
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      DIFF_CONTENT=$(git diff HEAD 2>/dev/null | head -n 500)
+      if [ -n "$DIFF_CONTENT" ]; then
+        PROMPT_FILE="observability/traces/semantic-prompt.txt"
+        echo -e "Review the following git diff against docs/design-docs/core-beliefs.md.\nIf there is a violation, output: FAIL: <reason>.\nIf compliant, output: PASS\n\n$DIFF_CONTENT" > "$PROMPT_FILE"
+
+        AI_REVIEW_RESULT=$(bash scripts/run-agent.sh --type review "$(cat "$PROMPT_FILE")")
+
+        if echo "$AI_REVIEW_RESULT" | grep -q "FAIL"; then
+          echo "[AI Review] Policy violation detected"
+          echo "$AI_REVIEW_RESULT" | grep "FAIL" -A 5
+          notify "fail" "AI semantic review failed"
+          exit 1
+        else
+          echo "[AI Review] PASS"
+        fi
       else
-        echo "[AI Review] PASS"
+        echo "No code diff found. Skipping AI review."
       fi
-    else
-      echo "No code diff found. Skipping AI review."
     fi
+  else
+    echo "⚠️ [AI Review] AI Provider Key가 설정되어 있지 않아 AI Semantic Review를 생략합니다."
   fi
 else
   echo "[OFFLINE] AI semantic review skipped"
