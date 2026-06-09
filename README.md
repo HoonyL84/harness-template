@@ -69,7 +69,8 @@ scratch/
 - `scripts/complete-task.ps1`: Windows/PowerShell 환경용 태스크 종료 및 기록 정리
 - `scripts/scan-drift.sh`: 운영 드리프트 점검
 - `scripts/health-check.sh`: 필수 구조/파일/최근 verify 상태 점검
-- `scripts/load-context.sh`: 에이전트용 컨텍스트 번들 생성 (`run-agent.sh`가 자동 사용)
+- `tools/harness-cli/index.js`: OS 공통 실행 레이어 및 API 에이전트 컨텍스트 번들 기준
+- `scripts/load-context.sh`: legacy/Unix 파이프라인용 컨텍스트 출력기
 - `scripts/validate-memory.sh`: memory frontmatter 규칙 점검
 
 ## 실행 환경

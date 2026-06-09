@@ -27,6 +27,7 @@
 - [CI workflow](.github/workflows/ci.yml): project detection, tests, and build checks.
 - [Security workflow](.github/workflows/security.yml): vulnerability and secret scanning.
 - [Harness CLI](tools/harness-cli/index.js): OS-neutral command layer for check, tickets, verification, completion, and API-key agent calls.
+- [Legacy context loader](scripts/load-context.sh): Unix pipeline context printer; keep in sync with Harness CLI context bundle rules when context sources change.
 - [Start task](scripts/start-task.sh): create a task worktree and EXEC_PLAN.
 - [Verify task](scripts/verify-task.sh): run project verification.
 - [Complete task](scripts/complete-task.sh): archive completed task context.

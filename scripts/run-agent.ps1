@@ -20,4 +20,4 @@ if ($Prompt) {
   $nodeArgs += ($Prompt -join " ")
 }
 
-node @nodeArgs
+& node @nodeArgs

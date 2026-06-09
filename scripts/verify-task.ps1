@@ -11,4 +11,4 @@ if ($Offline) {
   $nodeArgs += "--offline"
 }
 
-node @nodeArgs
+& node @nodeArgs

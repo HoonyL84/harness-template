@@ -14,4 +14,4 @@ if ($Force) {
   $nodeArgs += "--force"
 }
 
-node @nodeArgs
+& node @nodeArgs

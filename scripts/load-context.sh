@@ -3,6 +3,12 @@
 # [Harness] Context Loader
 # Usage:
 #   bash scripts/load-context.sh [--task-type <type>] [--task-name <name>]
+#
+# Note:
+#   Node Harness CLI (`tools/harness-cli/index.js`) is the canonical runtime for
+#   API-key agent execution. This shell loader is kept as a legacy/portable
+#   context printer for Unix-style pipelines. If core context sources change,
+#   update both this file and `buildContextBundle()` in the Node CLI.
 # ============================================================================
 
 TASK_TYPE="${CONTEXT_TASK_TYPE:-default}"
