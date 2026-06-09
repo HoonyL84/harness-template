@@ -101,6 +101,36 @@ function parseEnvFile(relPath = ".env.local") {
   return parsed;
 }
 
+async function sendSlackNotification(status, message) {
+  const webhook = process.env.SLACK_WEBHOOK_URL;
+  if (!webhook || webhook.includes("YOUR/WEBHOOK/URL")) {
+    log("  [Slack] 웹훅 미설정 — 알림 생략");
+    return;
+  }
+  const color = status === "fail" ? "#ff0000" : "#36a64f";
+  const taskId = process.env.TASK_ID || "unknown";
+  const payload = {
+    attachments: [{
+      fallback: `Harness: ${message}`,
+      color,
+      title: `[Harness] Task: ${taskId}`,
+      text: message,
+      footer: "Harness Engineering",
+      ts: Math.floor(Date.now() / 1000),
+    }]
+  };
+  try {
+    const res = await fetch(webhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) log(`  [Slack] Notification HTTP failed: ${res.status}`);
+  } catch (err) {
+    log(`  [Slack] Notification exception: ${err.message}`);
+  }
+}
+
 function ensureEnvLocal() {
   const localPath = path.join(ROOT, ".env.local");
   const templatePath = path.join(ROOT, ".env.template");
@@ -182,7 +212,7 @@ function hasGitRemoteOrigin() {
   return run("git", ["remote", "get-url", "origin"], { capture: true }).status === 0;
 }
 
-function commandCheck() {
+async function commandCheck() {
   let failed = 0;
   let warned = 0;
   const pass = (message) => log(`[PASS] ${message}`);
@@ -198,9 +228,40 @@ function commandCheck() {
   log("[Harness] Environment preflight started");
 
   const envState = ensureEnvLocal();
-  if (envState.created) pass(".env.local was created from .env.template");
-  else if (envState.exists) pass(".env.local found");
-  else warn(".env.local not found and .env.template is missing");
+  if (envState.created) {
+    pass(".env.local was created from .env.template");
+    // Interactive setup helper
+    if (process.stdout.isTTY) {
+      const readline = require("readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const question = (query) => new Promise((resolve) => rl.question(query, resolve));
+      
+      log("\n⚙️  [Harness Setup] .env.local 설정 도우미");
+      const wantSetup = await question("API Key를 입력하시겠습니까? (y/n, 기본값: n): ");
+      if (wantSetup.toLowerCase().startsWith("y")) {
+        const providerChoice = await question("AI Provider를 선택하세요 (openai/anthropic/gemini): ");
+        const provider = ["openai", "anthropic", "gemini"].includes(providerChoice.toLowerCase()) ? providerChoice.toLowerCase() : "openai";
+        const key = await question(`[${provider}] API Key를 입력하세요: `);
+        
+        if (key && !isPlaceholder(key)) {
+          let envContent = fs.readFileSync(path.join(ROOT, ".env.local"), "utf8");
+          envContent = envContent.replace("HARNESS_AGENT_MODE=interactive", "HARNESS_AGENT_MODE=api");
+          envContent = envContent.replace("AI_PROVIDER=openai", `AI_PROVIDER=${provider}`);
+          if (provider === "openai") envContent = envContent.replace("OPENAI_API_KEY=sk-...", `OPENAI_API_KEY=${key}`);
+          else if (provider === "anthropic") envContent = envContent.replace("ANTHROPIC_API_KEY=sk-ant-...", `ANTHROPIC_API_KEY=${key}`);
+          else if (provider === "gemini") envContent = envContent.replace("GEMINI_API_KEY=AIza...", `GEMINI_API_KEY=${key}`);
+          
+          fs.writeFileSync(path.join(ROOT, ".env.local"), envContent, "utf8");
+          log(`✅ [Harness Setup] API 모드 활성화 및 ${provider} 키 구성 완료!\n`);
+        }
+      }
+      rl.close();
+    }
+  } else if (envState.exists) {
+    pass(".env.local found");
+  } else {
+    warn(".env.local not found and .env.template is missing");
+  }
 
   parseEnvFile();
 
@@ -351,9 +412,41 @@ function commandCompleteTask(args) {
     fail("Task verification is not marked as pass. Re-run verification or use --force.");
   }
 
+  let start = { started_at: "unknown", type: "unknown", project: "unknown" };
+  if (exists(startRel)) {
+    start = { ...start, ...JSON.parse(readText(startRel)) };
+  }
+
+  // Find exact branch name
+  let branchName = "";
+  if (start.type && start.type !== "unknown") {
+    branchName = `${start.type}/${name}`;
+  } else {
+    const gitList = run("git", ["branch", "--list", `*/${name}`, `*${name}`], { capture: true });
+    if (gitList.status === 0 && gitList.stdout.trim()) {
+      branchName = gitList.stdout.replace(/\*/g, "").trim().split(/\s+/)[0];
+    }
+  }
+
+  // Branch safety check: Compare local commit SHA with remote tracked commit SHA
+  if (branchName && !options.force && hasGitRemoteOrigin()) {
+    const localRef = run("git", ["rev-parse", "--quiet", "--verify", branchName], { capture: true });
+    if (localRef.status === 0 && localRef.stdout.trim()) {
+      const localSha = localRef.stdout.trim();
+      const remoteRef = run("git", ["rev-parse", "--quiet", "--verify", `origin/${branchName}`], { capture: true });
+      
+      if (remoteRef.status !== 0 || remoteRef.stdout.trim() !== localSha) {
+        fail(`Branch "${branchName}" has unpushed commits or is not synced with origin. Please push changes first, or complete with --force.`);
+      }
+    }
+  }
+
   const worktreeRel = `.worktrees/${name}`;
   if (exists(worktreeRel)) {
     run("git", ["worktree", "remove", "-f", worktreeRel]);
+    if (branchName) {
+      run("git", ["branch", "-D", branchName], { capture: true });
+    }
     for (const prefix of VALID_TYPES) {
       run("git", ["branch", "-D", `${prefix}/${name}`], { capture: true });
     }
@@ -369,10 +462,7 @@ function commandCompleteTask(args) {
     log(`[Harness] EXEC_PLAN not found: ${activeRel}`);
   }
 
-  let start = { started_at: "unknown", type: "unknown", project: "unknown" };
-  if (exists(startRel)) {
-    start = { ...start, ...JSON.parse(readText(startRel)) };
-  }
+  // Already loaded 'start' info above
 
   writeText(doneRel, JSON.stringify({
     task: name,
@@ -547,6 +637,7 @@ Please review the error logs, identify the root cause, and apply surgical change
       // Verification failed and no healing/exhausted attempts
       recordVerify("fail", failedStep.label);
       writeText(logRel, lines.join(os.EOL));
+      await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-healing attempts: ${attempt}/${maxHealAttempts}`);
       process.exit(failedStep.status);
     }
   }
@@ -722,7 +813,7 @@ async function main() {
   switch (command) {
     case "check":
     case "check-environment":
-      commandCheck(args);
+      await commandCheck(args);
       break;
     case "create-ticket":
       commandCreateTicket(args);
