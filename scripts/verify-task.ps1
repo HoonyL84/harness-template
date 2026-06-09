@@ -10,5 +10,6 @@ $nodeArgs = @("tools/harness-cli/index.js", "verify")
 if ($Offline) {
   $nodeArgs += "--offline"
 }
+$nodeArgs += $args
 
-& node @nodeArgs
+node @nodeArgs

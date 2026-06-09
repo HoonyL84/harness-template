@@ -419,10 +419,15 @@ function recordVerify(result, reason) {
   }, null, 2));
 }
 
-function commandVerify(args) {
+async function commandVerify(args) {
   parseEnvFile();
   const { options } = parseArgs(args);
   const offline = options.offline || process.env.HARNESS_OFFLINE === "1" || process.env.HARNESS_OFFLINE === "true";
+  const heal = options.heal || process.env.HARNESS_HEAL === "true";
+  const maxHealAttempts = 3;
+  let attempt = 0;
+  let verifyPassed = false;
+
   ensureDir("observability/traces");
   ensureDir("observability/metrics");
   const logRel = `observability/traces/${fileTimestamp()}-verify.log`;
@@ -432,46 +437,119 @@ function commandVerify(args) {
     log(message);
   };
 
-  say(`[Harness] Verify start... (log: ${logRel})`);
-  if (offline) say("[OFFLINE] AI review skipped");
-
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const gradleCommand = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
 
-  const runStep = (label, command, stepArgs) => {
-    say(`[${label}] ${command} ${stepArgs.join(" ")}`);
-    const result = run(command, stepArgs);
-    if (result.status !== 0) {
-      recordVerify("fail", label);
-      writeText(logRel, lines.join(os.EOL));
-      process.exit(result.status);
+  while (attempt <= maxHealAttempts && !verifyPassed) {
+    say(`[Harness] Verify execution started (Attempt ${attempt + 1}/${maxHealAttempts + 1})`);
+    if (offline) say("[OFFLINE] AI review skipped");
+
+    let failedStep = null;
+    const runStep = (label, command, stepArgs) => {
+      say(`[${label}] ${command} ${stepArgs.join(" ")}`);
+      // Run and capture outputs in case of failure for self-healing
+      const result = run(command, stepArgs, { capture: true });
+      if (result.status !== 0) {
+        failedStep = { label, command, stepArgs, status: result.status, stdout: result.stdout, stderr: result.stderr };
+        return false;
+      }
+      return true;
+    };
+
+    let success = true;
+    if (exists("build.gradle") || exists("build.gradle.kts")) {
+      success = runStep("Java test", gradleCommand, ["test"]);
+      const buildFiles = (exists("build.gradle") ? readText("build.gradle") : "") + "\n" + (exists("build.gradle.kts") ? readText("build.gradle.kts") : "");
+      if (success && buildFiles.includes("jacoco")) {
+        success = runStep("Java coverage", gradleCommand, ["jacocoTestCoverageVerification"]);
+      }
+      if (success) {
+        success = runStep("Java build", gradleCommand, ["build", "-x", "test"]);
+      }
+    } else if (exists("package.json")) {
+      const scripts = packageScripts();
+      if (scripts.coverage) {
+        success = runStep("Node coverage", npmCommand, ["run", "coverage"]);
+      } else if (scripts.test) {
+        success = runStep("Node test", npmCommand, ["run", "test", "--", "--coverage"]);
+      } else {
+        say("[Node] Skipping tests (no test or coverage script)");
+      }
+
+      if (success && scripts.lint) {
+        success = runStep("Node lint", npmCommand, ["run", "lint"]);
+      } else if (success) {
+        say("[Node] Skipping lint (no lint script)");
+      }
+
+      if (success && scripts.build) {
+        success = runStep("Node build", npmCommand, ["run", "build"]);
+      } else if (success) {
+        say("[Node] Skipping build (no build script)");
+      }
+    } else {
+      recordVerify("fail", "unsupported-project");
+      fail("No supported project type detected. Please verify manually.");
     }
-  };
 
-  if (exists("build.gradle") || exists("build.gradle.kts")) {
-    runStep("Java test", gradleCommand, ["test"]);
-    const buildFiles = `${readText("build.gradle")}\n${readText("build.gradle.kts")}`;
-    if (buildFiles.includes("jacoco")) runStep("Java coverage", gradleCommand, ["jacocoTestCoverageVerification"]);
-    runStep("Java build", gradleCommand, ["build", "-x", "test"]);
-  } else if (exists("package.json")) {
-    const scripts = packageScripts();
-    if (scripts.coverage) runStep("Node coverage", npmCommand, ["run", "coverage"]);
-    else if (scripts.test) runStep("Node test", npmCommand, ["run", "test", "--", "--coverage"]);
-    else say("[Node] Skipping tests (no test or coverage script)");
+    if (success) {
+      verifyPassed = true;
+      recordVerify("pass");
+      say("All checks passed. Safe to commit.");
+      writeText(logRel, lines.join(os.EOL));
+      break;
+    }
 
-    if (scripts.lint) runStep("Node lint", npmCommand, ["run", "lint"]);
-    else say("[Node] Skipping lint (no lint script)");
+    // If we failed and self-healing is requested
+    if (heal && attempt < maxHealAttempts) {
+      attempt++;
+      const mode = process.env.HARNESS_AGENT_MODE || "interactive";
+      if (mode !== "api") {
+        say(`\n======================================================`);
+        say(`🚨 [AGENT_COMMAND: SELF_HEAL_REQUIRED]`);
+        say(`------------------------------------------------------`);
+        say(`Verification step failed in interactive mode.`);
+        say(`Step: ${failedStep.label}`);
+        say(`Command: ${failedStep.command} ${failedStep.stepArgs.join(" ")}`);
+        say(`\n[ERROR LOGS]`);
+        say(`Stderr:\n${failedStep.stderr.slice(-2000)}`);
+        say(`Stdout:\n${failedStep.stdout.slice(-1000)}`);
+        say(`------------------------------------------------------`);
+        say(`👉 INSTRUCTION FOR ACTIVE AGENT:`);
+        say(`1. Analyze the verification failure details above.`);
+        say(`2. Use codebase search / file write tools to fix the root cause.`);
+        say(`3. Once fixed, execute verification again using: npm run harness -- verify`);
+        say(`======================================================\n`);
+        recordVerify("fail", failedStep.label);
+        writeText(logRel, lines.join(os.EOL));
+        process.exit(failedStep.status);
+      }
 
-    if (scripts.build) runStep("Node build", npmCommand, ["run", "build"]);
-    else say("[Node] Skipping build (no build script)");
-  } else {
-    recordVerify("fail", "unsupported-project");
-    fail("No supported project type detected. Please verify manually.");
+      say(`[Heal] Step "${failedStep.label}" failed. Initiating self-healing (Attempt ${attempt}/${maxHealAttempts})...`);
+
+      const healingPrompt = `The verification step "${failedStep.label}" failed during task execution.
+Command executed: ${failedStep.command} ${failedStep.stepArgs.join(" ")}
+
+Stderr Output:
+${failedStep.stderr.slice(-2500)}
+
+Stdout Output:
+${failedStep.stdout.slice(-1500)}
+
+Please review the error logs, identify the root cause, and apply surgical changes to the codebase to fix the linting, testing, or build failure.`;
+
+      try {
+        await commandRunAgent(["--type", "fix", "--role", "implementer", healingPrompt]);
+      } catch (err) {
+        say(`[Heal] Self-healing agent call failed: ${err.message}`);
+      }
+    } else {
+      // Verification failed and no healing/exhausted attempts
+      recordVerify("fail", failedStep.label);
+      writeText(logRel, lines.join(os.EOL));
+      process.exit(failedStep.status);
+    }
   }
-
-  recordVerify("pass");
-  say("All checks passed. Safe to commit.");
-  writeText(logRel, lines.join(os.EOL));
 }
 
 function inferRole(type) {
@@ -656,7 +734,7 @@ async function main() {
       commandCompleteTask(args);
       break;
     case "verify":
-      commandVerify(args);
+      await commandVerify(args);
       break;
     case "run-agent":
       await commandRunAgent(args);
