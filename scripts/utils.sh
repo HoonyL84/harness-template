@@ -5,7 +5,10 @@
 
 # .env.local 로드
 if [ -f ".env.local" ]; then
-  export $(grep -v '^#' .env.local | xargs)
+  set -a
+  # shellcheck disable=SC1091
+  source ".env.local"
+  set +a
 fi
 
 send_slack_notification() {

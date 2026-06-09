@@ -13,8 +13,9 @@
 3. **`docs/design-docs/core-beliefs.md`** — 아키텍처 핵심 신념 및 코딩 규칙
 4. **`docs/design-docs/tech-stack.md`** — 기본 기술 스택 및 설정
 5. **`docs/design-docs/agent-roles.md`** — 역할 기반 에이전트 책임
-6. **`.harness/tasks/backlog/`** — PLANS.md와 사용자 피드백에서 분해된 티켓
-7. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
+6. **`docs/design-docs/execution-modes.md`** — OS/CLI/API-key 실행 모드와 제한
+7. **`.harness/tasks/backlog/`** — PLANS.md와 사용자 피드백에서 분해된 티켓
+8. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
 
 > 필요한 스킬이 있으면 `skills/`의 `SKILL.md`를 우선 탐색하고, 긴 절차 문서는 `docs/skills/`를 참고하라.
 
@@ -73,11 +74,12 @@
 
 ```
 [1] PLANS.md 읽고 큰 목표 파악 → backlog 티켓으로 분해 (Goal-Driven)
-[2] start-ticket.sh 또는 start-task.sh → active EXEC_PLAN 생성
-[3] active 태스크 기준으로 구현 (core-beliefs.md + tech-stack.md 준수)
+[2] npm run harness -- check → 현재 OS/토큰/Git 상태 점검
+[3] start-ticket.sh 또는 start-task.sh → active EXEC_PLAN 생성
+[4] active 태스크 기준으로 구현 (core-beliefs.md + tech-stack.md 준수)
     └─ 불확실하면 멈추고 질문 / 요청 외 수정 금지 (Karpathy Rules)
-[4] verify-task.sh → 테스트 + 린트 + 빌드 통과
-[5] git commit → complete-task.sh
+[5] verify-task.sh → 테스트 + 린트 + 빌드 통과
+[6] git commit → complete-task.sh
 ```
 
 ---
@@ -89,6 +91,7 @@
 | `docs/design-docs/core-beliefs.md` | 아키텍처 원칙, 코딩 규칙, 안전 가드레일 |
 | `docs/design-docs/tech-stack.md` | 기본 기술 스택 (PLANS.md에서 override 가능) |
 | `docs/design-docs/agent-roles.md` | Planner/Architect/Reviewer 등 역할 계약 |
+| `docs/design-docs/execution-modes.md` | Windows/macOS/Linux/CI/API-key 실행 모드 |
 | `docs/design-docs/memory-governance.md` | memory 레이어 포맷/갱신 규칙 |
 | `skills/` | 에이전트가 직접 호출 가능한 이식형 스킬 패키지 |
 | `docs/skills/code-review.md` | 코드 리뷰 수행 방법 |

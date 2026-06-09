@@ -84,6 +84,13 @@ cp .env.template .env.local
 npm install
 ```
 
+### Step 3-1. 환경 사전 점검
+작업 장소나 OS를 바꿨다면 먼저 실행합니다.
+
+```bash
+npm run harness -- check
+```
+
 ### Step 4. PLANS.md 작성 ← **가장 중요**
 `docs/project/PLANS.md`를 열고 작성:
 ```markdown
@@ -101,16 +108,16 @@ npm install
 
 ### Step 5. 첫 티켓 생성 및 시작
 ```bash
-bash scripts/create-ticket.sh user-auth feat --goal "JWT 기반 사용자 인증을 구현한다"
-bash scripts/start-ticket.sh user-auth
+npm run harness -- create-ticket user-auth feat --goal "JWT 기반 사용자 인증을 구현한다"
+npm run harness -- start-ticket user-auth
 # 여기서 구현 작업
-bash scripts/verify-task.sh
+npm run harness -- verify
 git add -A
 git commit -m "feat(auth): JWT 기반 사용자 인증 구현"
-bash scripts/complete-task.sh user-auth
+npm run harness -- complete-task user-auth
 ```
 
-Windows/PowerShell 환경에서 Bash 실행이 막혀 있다면 아래 대체 스크립트를 사용할 수 있습니다.
+기존 Bash/PowerShell wrapper도 호환용으로 유지됩니다.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/complete-task.ps1 user-auth -Force
@@ -123,6 +130,9 @@ powershell -ExecutionPolicy Bypass -File scripts/create-ticket.ps1 user-auth fea
 powershell -ExecutionPolicy Bypass -File scripts/start-ticket.ps1 user-auth
 ```
 
+자세한 OS/CLI/API-key 지원 범위는 `docs/design-docs/execution-modes.md`를 기준으로 확인하세요.
+현재 기준은 macOS/Linux/WSL/Git Bash가 Bash 스크립트의 1급 실행 환경이고, Windows PowerShell은 티켓 생성/시작/완료를 네이티브로 지원합니다.
+
 ---
 
 ## 🤖 AI 에이전트 활용 방법
@@ -134,31 +144,32 @@ powershell -ExecutionPolicy Bypass -File scripts/start-ticket.ps1 user-auth
 
 ```bash
 # .env.local에 API 키 설정 후
+HARNESS_AGENT_MODE=api
 
 # 일반 코드 생성 (저렴한 모델 자동 선택)
-bash scripts/run-agent.sh --type code "UserRepository CRUD 구현해줘"
+npm run harness -- run-agent --type code "UserRepository CRUD 구현해줘"
 
 # 역할을 명시한 호출
-bash scripts/run-agent.sh --role planner "PLANS.md 기준으로 첫 태스크를 쪼개줘"
-bash scripts/run-agent.sh --role reviewer --type review "이번 diff를 리뷰해줘"
+npm run harness -- run-agent --role planner "PLANS.md 기준으로 첫 태스크를 쪼개줘"
+npm run harness -- run-agent --role reviewer --type review "이번 diff를 리뷰해줘"
 
 # 아키텍처 설계 (강력한 모델 자동 선택)
-bash scripts/run-agent.sh --type architect "Redis + MySQL 하이브리드 캐싱 설계해줘"
+npm run harness -- run-agent --type architect "Redis + MySQL 하이브리드 캐싱 설계해줘"
 
 # 코드 리뷰
-bash scripts/run-agent.sh --type review "이번 PR 코드 리뷰해줘"
+npm run harness -- run-agent --type review "이번 PR 코드 리뷰해줘"
 
 # 문서 작성
-bash scripts/run-agent.sh --type docs "API 문서 작성해줘"
+npm run harness -- run-agent --type docs "API 문서 작성해줘"
 ```
 
 **모델 자동 라우팅:**
 
 | Task Type | OpenAI | Anthropic | Gemini |
 |-----------|--------|-----------|--------|
-| `code` / `docs` | gpt-5.5 | claude-haiku-4-5 | gemini-3-flash |
-| `review` / 기본 | gpt-5.5 | claude-sonnet-4-6 | gemini-3-flash |
-| `architect` | gpt-5.5-pro | claude-opus-4-7 | gemini-3.1-pro |
+| `code` / `docs` | gpt-5-mini | claude-haiku-4-5 | gemini-3-flash |
+| `review` / 기본 | gpt-5.2 | claude-sonnet-4-6 | gemini-3-flash |
+| `architect` | gpt-5.2 | claude-opus-4-7 | gemini-3.1-pro |
 
 **Provider 선택:**
 ```bash
@@ -266,10 +277,13 @@ git commit -m "docs(adr): Redis 캐싱 전략 결정 기록"
 에이전트가 "프로젝트 목표를 모르는 상태"로 일합니다. 반드시 작성하세요.
 
 **Q. 스크립트가 Windows에서 안 돌아요.**
-`bash` 실행을 위해 WSL 또는 Git Bash가 필요합니다.
+우선 `npm run harness -- ...`를 사용하세요. Bash/PowerShell 스크립트는 호환용 wrapper입니다.
+
+**Q. Codex가 아니라 macOS/Linux CLI와 API 키로도 같은 방식으로 진행할 수 있나요?**
+네. 같은 `AGENTS.md`, `PLANS.md`, backlog/active/archive 규칙을 사용합니다. 차이는 인터페이스뿐이며, API 직접 호출은 `.env.local`에 `HARNESS_AGENT_MODE=api`와 provider key를 넣고 `npm run harness -- run-agent --role <role>`를 사용합니다.
 
 **Q. 모델을 바꾸고 싶어요.**
-`.env.local`에서 `OPENAI_MODEL=gpt-5.5-pro`처럼 덮어쓰면 됩니다.
+`.env.local`에서 `OPENAI_MODEL=gpt-5.2`처럼 덮어쓰면 됩니다.
 
 **Q. 새 스킬을 추가하려면?**
 `docs/skills/새스킬.md`를 만들고 `AGENTS.md`의 세부 문서 링크 테이블에 추가하세요.

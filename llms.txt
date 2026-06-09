@@ -13,6 +13,7 @@
 - [Core beliefs](docs/design-docs/core-beliefs.md): architecture principles and coding guardrails.
 - [Tech stack](docs/design-docs/tech-stack.md): default technology choices.
 - [Agent roles](docs/design-docs/agent-roles.md): role contracts for planner, architect, implementer, reviewer, verifier, recorder, memory, and release.
+- [Execution modes](docs/design-docs/execution-modes.md): supported OS, CLI, CI, and API-key workflows.
 - [Memory governance](docs/design-docs/memory-governance.md): memory layer update rules.
 
 ## Agent Capabilities
@@ -25,6 +26,7 @@
 
 - [CI workflow](.github/workflows/ci.yml): project detection, tests, and build checks.
 - [Security workflow](.github/workflows/security.yml): vulnerability and secret scanning.
+- [Harness CLI](tools/harness-cli/index.js): OS-neutral command layer for check, tickets, verification, completion, and API-key agent calls.
 - [Start task](scripts/start-task.sh): create a task worktree and EXEC_PLAN.
 - [Verify task](scripts/verify-task.sh): run project verification.
 - [Complete task](scripts/complete-task.sh): archive completed task context.

@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Harness Engineering Template",
   "scripts": {
+    "harness": "node tools/harness-cli/index.js",
     "prepare": "husky"
   },
   "devDependencies": {

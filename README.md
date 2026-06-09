@@ -21,6 +21,16 @@
 4. `docs/project/PLANS.md` 작성 (프로젝트 목표/로드맵)
 5. `scripts/create-ticket.*`로 backlog 티켓 생성 후 `scripts/start-ticket.*`로 active 승격
 
+공통 실행 명령은 OS와 상관없이 아래 형식을 권장합니다.
+
+```bash
+npm run harness -- check
+npm run harness -- create-ticket my-task feat --goal "작업 목표"
+npm run harness -- start-ticket my-task
+npm run harness -- verify
+npm run harness -- complete-task my-task --force
+```
+
 ## 문서 진입점
 
 - 전체 사용 가이드: [docs/HARNESS_GUIDE.md](docs/HARNESS_GUIDE.md)
@@ -30,6 +40,7 @@
 - AI 문서 지도: [llms.txt](llms.txt)
 - 프로젝트 목표 문서: [docs/project/PLANS.md](docs/project/PLANS.md)
 - 에이전트 역할 정의: [docs/design-docs/agent-roles.md](docs/design-docs/agent-roles.md)
+- 실행 모드/OS 호환성: [docs/design-docs/execution-modes.md](docs/design-docs/execution-modes.md)
 - 메모리 운영 규칙: [docs/design-docs/memory-governance.md](docs/design-docs/memory-governance.md)
 
 ## 디렉터리 요약
@@ -51,15 +62,36 @@ scratch/
 - `scripts/start-task.sh`: 워크트리 + EXEC_PLAN 생성
 - `scripts/create-ticket.sh` / `scripts/create-ticket.ps1`: backlog 티켓 생성
 - `scripts/start-ticket.sh` / `scripts/start-ticket.ps1`: backlog 티켓을 active로 승격
-- `scripts/verify-task.sh`: 테스트/린트/빌드/정책 검증
-- `scripts/verify-task.sh --offline`: 네트워크/키 없는 환경용 로컬 검증
-- `scripts/run-agent.sh --role <role>`: Planner/Reviewer 등 역할 프롬프트로 AI 호출
+- `scripts/verify-task.sh` / `scripts/verify-task.ps1`: 테스트/린트/빌드/정책 검증
+- `scripts/verify-task.sh --offline` / `scripts/verify-task.ps1 -Offline`: 네트워크/키 없는 환경용 로컬 검증
+- `scripts/check-environment.sh` / `scripts/check-environment.ps1`: OS/토큰/필수 도구/Git 상태 사전 점검
+- `scripts/run-agent.sh` / `scripts/run-agent.ps1`: Planner/Reviewer 등 역할 프롬프트로 AI 호출
 - `scripts/complete-task.sh`: 태스크 종료 및 기록 정리
 - `scripts/complete-task.ps1`: Windows/PowerShell 환경용 태스크 종료 및 기록 정리
 - `scripts/scan-drift.sh`: 운영 드리프트 점검
 - `scripts/health-check.sh`: 필수 구조/파일/최근 verify 상태 점검
 - `scripts/load-context.sh`: 에이전트용 컨텍스트 번들 생성 (`run-agent.sh`가 자동 사용)
 - `scripts/validate-memory.sh`: memory frontmatter 규칙 점검
+
+## 실행 환경
+
+- 대화형 에이전트(Codex/Cursor/Claude Code 등): `AGENTS.md`와 `PLANS.md`를 기준으로 진행
+- macOS/Linux/WSL/Git Bash: `npm run harness -- ...` 또는 `bash scripts/*.sh` 지원
+- Windows PowerShell: `npm run harness -- ...` 또는 `scripts/*.ps1` 지원
+- GitHub Actions: CI/security로 공통 검증
+- API-key CLI: `.env.local`에 `HARNESS_AGENT_MODE=api`와 provider key를 두고 `npm run harness -- run-agent --role <role>` 사용
+
+자세한 지원 범위와 제한은 [docs/design-docs/execution-modes.md](docs/design-docs/execution-modes.md)를 기준으로 판단하세요.
+
+작업 환경을 바꿨다면 시작 전에 아래 중 하나를 먼저 실행하세요.
+
+```bash
+npm run harness -- check
+```
+
+```powershell
+npm run harness -- check
+```
 
 ## 참고
 

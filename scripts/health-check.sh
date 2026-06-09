@@ -41,8 +41,13 @@ REQUIRED_FILES=(
   "docs/project/PLANS.md"
   "docs/design-docs/core-beliefs.md"
   "docs/design-docs/tech-stack.md"
+  "docs/design-docs/execution-modes.md"
   "tools/registry.yaml"
   ".env.template"
+  ".gitattributes"
+  "tools/harness-cli/index.js"
+  "scripts/check-environment.sh"
+  "scripts/check-environment.ps1"
 )
 
 for dir in "${REQUIRED_DIRS[@]}"; do
