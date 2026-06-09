@@ -30,3 +30,10 @@ application-prod.yml
 # Gradle
 .gradle/
 build/
+
+# Harness Telemetry & Metrics (로컬 실행 결과물이므로 git 제외)
+observability/traces/*
+!observability/traces/.gitkeep
+observability/metrics/*.json
+!observability/metrics/.gitkeep
+
