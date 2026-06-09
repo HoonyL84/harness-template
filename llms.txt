@@ -1,0 +1,29 @@
+# Harness Engineering Template
+
+> A reusable development harness for AI-assisted software projects.
+
+## Start Here
+
+- [Agent entry map](AGENTS.md): canonical operating rules for coding agents.
+- [Project plan](docs/project/PLANS.md): current project goals, roadmap, and stack overrides.
+- [Harness guide](docs/HARNESS_GUIDE.md): human-readable setup and operating manual.
+
+## Design Rules
+
+- [Core beliefs](docs/design-docs/core-beliefs.md): architecture principles and coding guardrails.
+- [Tech stack](docs/design-docs/tech-stack.md): default technology choices.
+- [Memory governance](docs/design-docs/memory-governance.md): memory layer update rules.
+
+## Agent Capabilities
+
+- [Skills directory](skills/README.md): portable skill package structure.
+- [Code review skill](skills/code-review/SKILL.md): review behavior and output contract.
+- [Tool registry](tools/registry.yaml): declared local and MCP tool inventory.
+
+## Automation
+
+- [CI workflow](.github/workflows/ci.yml): project detection, tests, and build checks.
+- [Security workflow](.github/workflows/security.yml): vulnerability and secret scanning.
+- [Start task](scripts/start-task.sh): create a task worktree and EXEC_PLAN.
+- [Verify task](scripts/verify-task.sh): run project verification.
+- [Complete task](scripts/complete-task.sh): archive completed task context.

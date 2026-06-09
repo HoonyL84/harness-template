@@ -14,7 +14,7 @@
 4. **`docs/design-docs/tech-stack.md`** — 기본 기술 스택 및 설정
 5. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
 
-> 필요한 스킬이 있으면 `docs/skills/`를 탐색하라.
+> 필요한 스킬이 있으면 `skills/`의 `SKILL.md`를 우선 탐색하고, 긴 절차 문서는 `docs/skills/`를 참고하라.
 
 ---
 
@@ -87,6 +87,7 @@
 | `docs/design-docs/core-beliefs.md` | 아키텍처 원칙, 코딩 규칙, 안전 가드레일 |
 | `docs/design-docs/tech-stack.md` | 기본 기술 스택 (PLANS.md에서 override 가능) |
 | `docs/design-docs/memory-governance.md` | memory 레이어 포맷/갱신 규칙 |
+| `skills/` | 에이전트가 직접 호출 가능한 이식형 스킬 패키지 |
 | `docs/skills/code-review.md` | 코드 리뷰 수행 방법 |
 | `docs/skills/git-workflow.md` | Git 컨벤션 및 커밋 규칙 |
 | `docs/adr/` | 아키텍처 결정 기록 |

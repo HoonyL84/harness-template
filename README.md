@@ -18,12 +18,15 @@
 2. `cp .env.template .env.local` 로 환경 변수 파일 생성
 3. `npm install` 로 Husky/commitlint 설치
 4. `docs/project/PLANS.md` 작성 (프로젝트 목표/로드맵)
-5. `bash scripts/start-task.sh <task-name> <feat|fix|refactor>` 로 첫 태스크 시작
+5. `bash scripts/start-task.sh <task-name> <feat|fix|refactor|docs|chore|experiment>` 로 첫 태스크 시작
 
 ## 문서 진입점
 
 - 전체 사용 가이드: [docs/HARNESS_GUIDE.md](docs/HARNESS_GUIDE.md)
 - 에이전트 작업 규칙: [AGENTS.md](AGENTS.md)
+- GitHub Copilot 규칙: [.github/copilot-instructions.md](.github/copilot-instructions.md)
+- Claude/Gemini 진입점: [CLAUDE.md](CLAUDE.md), [GEMINI.md](GEMINI.md)
+- AI 문서 지도: [llms.txt](llms.txt)
 - 프로젝트 목표 문서: [docs/project/PLANS.md](docs/project/PLANS.md)
 - 메모리 운영 규칙: [docs/design-docs/memory-governance.md](docs/design-docs/memory-governance.md)
 
@@ -55,4 +58,4 @@ scratch/
 ## 참고
 
 - 템플릿 저장소이므로 일부 파일(예: `docs/project/PLANS.md`, `tools/registry.yaml`)은 의도적으로 기본 골격만 제공합니다.
-- 표준 스킬 구조는 `skills/<skill_name>/`를 사용합니다.
+- 표준 스킬 구조는 `skills/<skill_name>/`를 사용하며, `SKILL.md`는 YAML frontmatter의 `name`/`description`을 포함합니다.

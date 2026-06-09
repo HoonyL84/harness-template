@@ -1,4 +1,18 @@
-﻿# SKILL: code-review
+---
+name: code-review
+description: Review code changes, PR diffs, or local modifications for bugs, regressions, missing tests, and behavioral risks.
+version: 1.0.0
+tags:
+  - review
+  - quality
+  - testing
+platforms:
+  - codex
+  - claude-code
+  - github-copilot
+---
+
+# Code Review
 
 ## 목적
 - 변경사항에서 버그/리스크/회귀 가능성을 식별한다.
@@ -15,4 +29,3 @@
 2. 예외 처리/경계값/동시성/성능 리스크 점검
 3. 테스트 누락 여부 확인
 4. finding 없으면 residual risk 명시
-
