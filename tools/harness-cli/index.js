@@ -275,7 +275,6 @@ async function commandCheck() {
         if (key && !isPlaceholder(key)) {
           let envContent = fs.readFileSync(path.join(ROOT, ".env.local"), "utf8");
           envContent = envContent.replace("HARNESS_AGENT_MODE=interactive", "HARNESS_AGENT_MODE=api");
-          envContent = envContent.replace("HARNESS_DIAGNOSE=false", "HARNESS_DIAGNOSE=true");
           envContent = envContent.replace("AI_PROVIDER=openai", `AI_PROVIDER=${provider}`);
           if (provider === "openai") envContent = envContent.replace("OPENAI_API_KEY=sk-...", `OPENAI_API_KEY=${key}`);
           else if (provider === "anthropic") envContent = envContent.replace("ANTHROPIC_API_KEY=sk-ant-...", `ANTHROPIC_API_KEY=${key}`);
@@ -627,7 +626,7 @@ async function commandVerify(args) {
   parseEnvFile();
   const { options } = parseArgs(args);
   const diagnose = options.diagnose || process.env.HARNESS_DIAGNOSE === "true";
-  const offline = options.offline || false;
+  const offline = options.offline || process.env.HARNESS_OFFLINE === "1" || process.env.HARNESS_OFFLINE === "true";
   const maxAttempts = 1; // For diagnosis, 1 attempt is sufficient to generate guide
   let attempt = 0;
   let verifyPassed = false;
