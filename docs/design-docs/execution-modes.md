@@ -41,6 +41,8 @@ npm run harness -- check
 ```
 
 preflight는 필수 도구, `.env.local`, `HARNESS_AGENT_MODE`, provider key, Git remote, 작업 트리 변경, active 티켓 수, 줄바꿈 정책을 점검한다.
+`.env.local`이 없으면 `.env.template`에서 자동 생성한다.
+PowerShell에서 `npm`이 실행 정책에 막히면 `npm.cmd run harness -- check`를 사용한다.
 
 ### macOS/Linux/WSL
 

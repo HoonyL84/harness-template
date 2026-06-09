@@ -1,11 +1,10 @@
-> [!IMPORTANT]
-> Windows users: run scripts with **WSL** or **Git Bash** (`bash` required).
-> PowerShell/CMD alone may fail for `scripts/*.sh`.
->
 > [!NOTE]
 > Recommended text encoding for this repository is **UTF-8**.
 > If Korean text appears broken in terminal, switch terminal/codepage to UTF-8.
 > For Java source files on Windows, prefer **UTF-8 without BOM**. PowerShell 5 `Set-Content -Encoding UTF8` may create a BOM that `javac` rejects.
+>
+> Windows PowerShell에서 `npm`이 실행 정책 오류로 막히면 `npm.cmd run harness -- check`를 사용하세요.
+> `.ps1` wrapper를 직접 실행할 때는 `powershell -ExecutionPolicy Bypass -File scripts/check-environment.ps1`처럼 실행할 수 있습니다.
 
 # Harness Engineering Template
 
@@ -16,7 +15,7 @@
 ## 빠른 시작
 
 1. 템플릿 복제 후 클론
-2. `cp .env.template .env.local` 로 환경 변수 파일 생성
+2. `npm run harness -- check` 로 `.env.local` 자동 생성 및 환경 점검
 3. `npm install` 로 Husky/commitlint 설치
 4. `docs/project/PLANS.md` 작성 (프로젝트 목표/로드맵)
 5. `scripts/create-ticket.*`로 backlog 티켓 생성 후 `scripts/start-ticket.*`로 active 승격
@@ -90,8 +89,10 @@ npm run harness -- check
 ```
 
 ```powershell
-npm run harness -- check
+npm.cmd run harness -- check
 ```
+
+`check`는 `.env.local`이 없으면 `.env.template`에서 자동 생성합니다. 생성된 `.env.local`에 필요한 API 키와 provider 옵션을 채우면 됩니다.
 
 ## 참고
 

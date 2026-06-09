@@ -101,6 +101,22 @@ function parseEnvFile(relPath = ".env.local") {
   return parsed;
 }
 
+function ensureEnvLocal() {
+  const localPath = path.join(ROOT, ".env.local");
+  const templatePath = path.join(ROOT, ".env.template");
+
+  if (fs.existsSync(localPath)) {
+    return { created: false, exists: true };
+  }
+
+  if (!fs.existsSync(templatePath)) {
+    return { created: false, exists: false };
+  }
+
+  fs.copyFileSync(templatePath, localPath);
+  return { created: true, exists: true };
+}
+
 function isPlaceholder(value) {
   return !value || value.startsWith("your_") || value === "sk-..." || value === "sk-ant-..." || value === "AIza...";
 }
@@ -167,7 +183,6 @@ function hasGitRemoteOrigin() {
 }
 
 function commandCheck() {
-  parseEnvFile();
   let failed = 0;
   let warned = 0;
   const pass = (message) => log(`[PASS] ${message}`);
@@ -182,8 +197,12 @@ function commandCheck() {
 
   log("[Harness] Environment preflight started");
 
-  if (exists(".env.local")) pass(".env.local found");
-  else warn(".env.local not found. Copy .env.template when API keys or local settings are needed.");
+  const envState = ensureEnvLocal();
+  if (envState.created) pass(".env.local was created from .env.template");
+  else if (envState.exists) pass(".env.local found");
+  else warn(".env.local not found and .env.template is missing");
+
+  parseEnvFile();
 
   const mode = process.env.HARNESS_AGENT_MODE || "interactive";
   const provider = process.env.AI_PROVIDER || "openai";
@@ -236,6 +255,14 @@ function commandCheck() {
 
   if (exists(".gitattributes")) pass(".gitattributes found for cross-OS line ending policy");
   else warn(".gitattributes missing. Shell scripts may drift between LF/CRLF across OSes.");
+
+  if (exists("package.json")) {
+    const pkg = JSON.parse(readText("package.json"));
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    const sdkDeps = ["openai", "@anthropic-ai/sdk", "@google/generative-ai", "@google/genai"].filter((name) => deps[name]);
+    if (sdkDeps.length > 0) warn(`Provider SDK dependencies detected: ${sdkDeps.join(", ")}. Harness CLI is designed to use Node fetch directly.`);
+    else pass("No provider SDK dependencies detected");
+  }
 
   const activeDir = path.join(ROOT, ".harness", "tasks", "active");
   const activeCount = fs.existsSync(activeDir)

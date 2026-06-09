@@ -73,10 +73,23 @@ GitHub에서 **"Use this template"** → 새 레포 생성 → 클론
 
 ### Step 2. 환경 변수 설정
 ```bash
-cp .env.template .env.local
+npm run harness -- check
+# .env.local이 없으면 자동 생성됩니다.
 # .env.local을 열고 아래 항목 입력:
 # - SLACK_WEBHOOK_URL (작업 알림)
 # - OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY (AI 사용 시)
+```
+
+Windows PowerShell에서 `npm`이 실행 정책 오류로 막히면 아래처럼 `npm.cmd`를 사용합니다.
+
+```powershell
+npm.cmd run harness -- check
+```
+
+PowerShell wrapper를 직접 실행할 때 권한 오류가 나면 현재 프로세스에서만 우회합니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/check-environment.ps1
 ```
 
 ### Step 3. 의존성 설치 (Git Hooks 활성화)
@@ -278,6 +291,9 @@ git commit -m "docs(adr): Redis 캐싱 전략 결정 기록"
 
 **Q. 스크립트가 Windows에서 안 돌아요.**
 우선 `npm run harness -- ...`를 사용하세요. Bash/PowerShell 스크립트는 호환용 wrapper입니다.
+
+**Q. PowerShell에서 `npm` 또는 `.ps1` 실행이 UnauthorizedAccess로 막혀요.**
+`npm.cmd run harness -- check`를 먼저 사용하세요. `.ps1` wrapper를 직접 실행해야 한다면 `powershell -ExecutionPolicy Bypass -File scripts/check-environment.ps1`처럼 현재 실행에만 우회 옵션을 붙입니다.
 
 **Q. Codex가 아니라 macOS/Linux CLI와 API 키로도 같은 방식으로 진행할 수 있나요?**
 네. 같은 `AGENTS.md`, `PLANS.md`, backlog/active/archive 규칙을 사용합니다. 차이는 인터페이스뿐이며, API 직접 호출은 `.env.local`에 `HARNESS_AGENT_MODE=api`와 provider key를 넣고 `npm run harness -- run-agent --role <role>`를 사용합니다.
