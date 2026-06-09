@@ -275,6 +275,7 @@ async function commandCheck() {
         if (key && !isPlaceholder(key)) {
           let envContent = fs.readFileSync(path.join(ROOT, ".env.local"), "utf8");
           envContent = envContent.replace("HARNESS_AGENT_MODE=interactive", "HARNESS_AGENT_MODE=api");
+          envContent = envContent.replace("HARNESS_DIAGNOSE=false", "HARNESS_DIAGNOSE=true");
           envContent = envContent.replace("AI_PROVIDER=openai", `AI_PROVIDER=${provider}`);
           if (provider === "openai") envContent = envContent.replace("OPENAI_API_KEY=sk-...", `OPENAI_API_KEY=${key}`);
           else if (provider === "anthropic") envContent = envContent.replace("ANTHROPIC_API_KEY=sk-ant-...", `ANTHROPIC_API_KEY=${key}`);
@@ -518,6 +519,9 @@ function findFilesInDir(dir, filter, list = []) {
     const filePath = path.join(dir, file);
     const stat = fs.statSync(filePath);
     if (stat.isDirectory()) {
+      if (file === "node_modules" || file === ".git" || file === ".worktrees") {
+        continue;
+      }
       findFilesInDir(filePath, filter, list);
     } else if (filter.test(filePath)) {
       list.push(filePath);
@@ -622,9 +626,9 @@ function recordVerify(result, reason) {
 async function commandVerify(args) {
   parseEnvFile();
   const { options } = parseArgs(args);
-  const offline = options.offline || process.env.HARNESS_OFFLINE === "1" || process.env.HARNESS_OFFLINE === "true";
-  const heal = options.heal || process.env.HARNESS_HEAL === "true";
-  const maxHealAttempts = 3;
+  const diagnose = options.diagnose || process.env.HARNESS_DIAGNOSE === "true";
+  const offline = options.offline || false;
+  const maxAttempts = 1; // For diagnosis, 1 attempt is sufficient to generate guide
   let attempt = 0;
   let verifyPassed = false;
 
@@ -640,8 +644,8 @@ async function commandVerify(args) {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const gradleCommand = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
 
-  while (attempt <= maxHealAttempts && !verifyPassed) {
-    say(`[Harness] Verify execution started (Attempt ${attempt + 1}/${maxHealAttempts + 1})`);
+  while (attempt < maxAttempts && !verifyPassed) {
+    say(`[Harness] Verify execution started (Attempt ${attempt + 1}/${maxAttempts})`);
     if (offline) say("[OFFLINE] AI review skipped");
 
     let failedStep = null;
@@ -701,7 +705,7 @@ async function commandVerify(args) {
     }
 
     // If we failed and self-diagnose is requested
-    if (heal && attempt < maxHealAttempts) {
+    if (diagnose && attempt < maxAttempts) {
       attempt++;
       const mode = process.env.HARNESS_AGENT_MODE || "interactive";
       if (mode !== "api") {
@@ -726,7 +730,7 @@ async function commandVerify(args) {
         process.exit(failedStep.status);
       }
 
-      say(`[Diagnose] Step "${failedStep.label}" failed. Initiating self-diagnosis (Attempt ${attempt}/${maxHealAttempts})...`);
+      say(`[Diagnose] Step "${failedStep.label}" failed. Initiating self-diagnosis (Attempt ${attempt}/${maxAttempts})...`);
 
       const diagnosePrompt = `The verification step "${failedStep.label}" failed during task execution.
 Command executed: ${failedStep.command} ${failedStep.stepArgs.join(" ")}
@@ -745,11 +749,17 @@ Please review the error logs, identify the root cause, and write a detailed reco
       } catch (err) {
         say(`[Diagnose] Self-diagnosis agent call failed: ${err.message}`);
       }
+
+      // Exit immediately after generating the diagnose guidance in API mode
+      recordVerify("fail", failedStep.label);
+      writeText(logRel, lines.join(os.EOL));
+      await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis completed. Recovery guide generated.`);
+      process.exit(failedStep.status);
     } else {
       // Verification failed and no diagnose/exhausted attempts
       recordVerify("fail", failedStep.label);
       writeText(logRel, lines.join(os.EOL));
-      await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis attempts: ${attempt}/${maxHealAttempts}`);
+      await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis is disabled or completed.`);
       process.exit(failedStep.status);
     }
   }
@@ -914,7 +924,7 @@ Usage:
   node tools/harness-cli/index.js check
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name>
-  node tools/harness-cli/index.js verify [--offline]
+  node tools/harness-cli/index.js verify [--offline] [--diagnose]
   node tools/harness-cli/index.js run-agent [--type type] [--role role] "prompt"
   node tools/harness-cli/index.js complete-task <name> [--force]
   node tools/harness-cli/index.js scan-drift

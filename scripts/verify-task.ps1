@@ -1,5 +1,6 @@
 param(
-  [switch]$Offline
+  [switch]$Offline,
+  [switch]$Diagnose
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,6 +10,9 @@ Set-Location $root
 $nodeArgs = @("tools/harness-cli/index.js", "verify")
 if ($Offline) {
   $nodeArgs += "--offline"
+}
+if ($Diagnose) {
+  $nodeArgs += "--diagnose"
 }
 $nodeArgs += $args
 
