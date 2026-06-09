@@ -19,4 +19,16 @@ $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
 
-& node "tools/harness-cli/index.js" create-ticket $TicketName $Type --goal $Goal --scope $Scope --out-of-scope $OutOfScope --acceptance $Acceptance --risk $Risk
+$nodeArgs = @(
+  "tools/harness-cli/index.js",
+  "create-ticket",
+  $TicketName,
+  $Type,
+  "--goal", $Goal,
+  "--scope", $Scope,
+  "--out-of-scope", $OutOfScope,
+  "--acceptance", $Acceptance,
+  "--risk", $Risk
+)
+
+& node @nodeArgs

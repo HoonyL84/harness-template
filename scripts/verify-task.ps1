@@ -12,4 +12,4 @@ if ($Offline) {
 }
 $nodeArgs += $args
 
-node @nodeArgs
+& node @nodeArgs
