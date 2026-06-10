@@ -741,6 +741,9 @@ function commandCompleteTask(args) {
   if (!options.force && verify.result !== "pass") {
     fail("Task verification is not marked as pass. Re-run verification or use --force.");
   }
+  if (!options.force) {
+    requireCurrentVerifiedContent(name, verify);
+  }
 
   let start = { started_at: "unknown", type: "unknown", project: "unknown" };
   if (exists(startRel)) {
@@ -836,6 +839,7 @@ function archiveVerifiedTicket(name) {
   const verify = exists(verifyRel) ? JSON.parse(readText(verifyRel)) : {};
   const start = exists(startRel) ? JSON.parse(readText(startRel)) : {};
   if (verify.result !== "pass") fail(`Cannot archive unverified L5 ticket: ${name}`);
+  requireCurrentVerifiedContent(name, verify);
   if (exists(activeRel)) {
     moveFile(activeRel, archiveRel);
     appendTaskCompletion(archiveRel, verify);
@@ -1144,6 +1148,41 @@ function describeWorktreeDrift(before, after) {
     : "verification changed files that were already dirty";
 }
 
+function repositoryContentFingerprint() {
+  const files = run("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { capture: true });
+  if (files.status !== 0 || files.error) return null;
+
+  const hash = crypto.createHash("sha256");
+  const paths = files.stdout.split("\0").filter(Boolean).sort();
+  for (const rel of paths) {
+    const absolute = path.join(ROOT, rel);
+    if (!fs.existsSync(absolute)) continue;
+    const stat = fs.lstatSync(absolute);
+    hash.update(`\0${rel}\0`);
+    if (stat.isSymbolicLink()) {
+      hash.update(`link:${fs.readlinkSync(absolute)}`);
+    } else if (stat.isFile()) {
+      hash.update(fs.readFileSync(absolute));
+    } else {
+      hash.update("non-file");
+    }
+  }
+  return hash.digest("hex");
+}
+
+function requireCurrentVerifiedContent(name, verify) {
+  if (!verify.content_fingerprint) {
+    fail(`Verification record for "${name}" predates content binding. Re-run verification.`);
+  }
+  const currentFingerprint = repositoryContentFingerprint();
+  if (!currentFingerprint) {
+    fail("Could not calculate the current repository content fingerprint.");
+  }
+  if (currentFingerprint !== verify.content_fingerprint) {
+    fail(`Repository content changed after verification for "${name}". Re-run verification before completing the task.`);
+  }
+}
+
 function gitHeadSha() {
   const result = run("git", ["rev-parse", "HEAD"], { capture: true });
   return result.status === 0 ? result.stdout.trim() : "unknown";
@@ -1414,7 +1453,7 @@ function packageScripts() {
   return JSON.parse(readText("package.json")).scripts || {};
 }
 
-function recordVerify(result, reason) {
+function recordVerify(result, reason, contentFingerprint) {
   const task = resolveTaskId();
   const rel = `observability/metrics/${task}.verify.json`;
   let reworkCount = 0;
@@ -1436,6 +1475,7 @@ function recordVerify(result, reason) {
     last_verify: currentTimestamp(),
     result,
     ...(lastFailReason ? { last_fail_reason: lastFailReason } : {}),
+    ...(contentFingerprint ? { content_fingerprint: contentFingerprint } : {}),
     rework_count: reworkCount,
   }, null, 2));
 }
@@ -1553,7 +1593,12 @@ async function commandVerify(args) {
 
     if (success) {
       verifyPassed = true;
-      recordVerify("pass");
+      const contentFingerprint = repositoryContentFingerprint();
+      if (!contentFingerprint) {
+        recordVerify("fail", "repository-content-fingerprint-unavailable");
+        fail("Verification passed, but the repository content fingerprint could not be calculated.");
+      }
+      recordVerify("pass", "", contentFingerprint);
       if (appliedPatchRel) {
         say(`[Auto-fix] Verification passed. Patch retained for review: ${appliedPatchRel}`);
         await sendSlackNotification("success", `✅ Low-risk auto-fix passed verification. Review patch: ${appliedPatchRel}`);
