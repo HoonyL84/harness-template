@@ -103,7 +103,7 @@ jobs:
           if node -e "const s=require('./package.json').scripts||{}; process.exit(s.coverage?0:1)"; then
             npm run coverage
           elif node -e "const s=require('./package.json').scripts||{}; process.exit(s.test?0:1)"; then
-            npm run test -- --coverage
+            npm run test
           else
             echo "No test script found. Skipping tests."
           fi

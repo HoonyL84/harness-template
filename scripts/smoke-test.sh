@@ -62,7 +62,7 @@ HARNESS_AUTONOMY_LEVEL=5 node tools/harness-cli/index.js autonomy
 HARNESS_AUTONOMY_LEVEL=5 node tools/harness-cli/index.js autonomy --verify-current
 
 echo "[Smoke Test] 4. Verifying task..."
-export TASK_ID="$TICKET_NAME"
+export TASK_ID="local"
 bash scripts/verify-task.sh --offline
 
 if [ ! -f "observability/metrics/$TICKET_NAME.verify.json" ]; then
@@ -75,6 +75,10 @@ node tools/harness-cli/index.js complete-task "$TICKET_NAME"
 
 if [ ! -f ".harness/tasks/archive/$TICKET_NAME.md" ]; then
   echo "Error: Archive ticket file was not created."
+  exit 1
+fi
+if ! grep -q "## Completion" ".harness/tasks/archive/$TICKET_NAME.md"; then
+  echo "Error: Archive ticket completion metadata was not recorded."
   exit 1
 fi
 

@@ -127,6 +127,16 @@ function listTaskNames(folder) {
     .map((name) => name.replace(/\.md$/, ""));
 }
 
+function resolveTaskId() {
+  const configured = String(process.env.TASK_ID || "").trim();
+  if (configured && configured !== "local") return configured;
+  const active = listTaskNames("active");
+  if (active.length === 1) return active[0];
+  const branchTask = getGitBranch().split("/").pop();
+  if (branchTask && !["main", "master", "unknown", "HEAD"].includes(branchTask)) return branchTask;
+  return configured || "local";
+}
+
 function readAutonomyState() {
   if (!exists(AUTONOMY_STATE_REL)) return {};
   try {
@@ -293,11 +303,12 @@ function applyGitPatch(patchRel, reverse = false) {
 }
 
 function run(command, args, options = {}) {
+  const needsWindowsCommandShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
   const result = spawnSync(command, args, {
     cwd: ROOT,
     stdio: options.capture ? "pipe" : "inherit",
     encoding: "utf8",
-    shell: false,
+    shell: needsWindowsCommandShell,
     env: options.env ? { ...process.env, ...options.env } : process.env,
   });
 
@@ -349,7 +360,7 @@ async function sendSlackNotification(status, message) {
     return;
   }
   const color = status === "fail" ? "#ff0000" : "#36a64f";
-  const taskId = process.env.TASK_ID || "unknown";
+  const taskId = resolveTaskId();
   const payload = {
     attachments: [{
       fallback: `Harness: ${message}`,
@@ -752,6 +763,7 @@ function commandCompleteTask(args) {
 
   if (exists(activeRel)) {
     moveFile(activeRel, archiveRel);
+    appendTaskCompletion(archiveRel, verify);
     log("[Harness] EXEC_PLAN archived");
   } else {
     log(`[Harness] EXEC_PLAN not found: ${activeRel}`);
@@ -777,6 +789,19 @@ function commandCompleteTask(args) {
   log("[Harness] Task complete.");
 }
 
+function appendTaskCompletion(archiveRel, verify) {
+  const current = readText(archiveRel);
+  if (!current || current.includes("\n## Completion\n")) return;
+  writeText(archiveRel, `${current.trimEnd()}
+
+## Completion
+- Completed At: ${currentTimestamp()}
+- Verify Result: ${verify.result || "unknown"}
+- Rework Count: ${verify.rework_count || 0}
+- Last Failure: ${verify.last_fail_reason || "none"}
+`);
+}
+
 function archiveVerifiedTicket(name) {
   const verifyRel = `observability/metrics/${name}.verify.json`;
   const startRel = `observability/metrics/${name}.start.json`;
@@ -786,7 +811,10 @@ function archiveVerifiedTicket(name) {
   const verify = exists(verifyRel) ? JSON.parse(readText(verifyRel)) : {};
   const start = exists(startRel) ? JSON.parse(readText(startRel)) : {};
   if (verify.result !== "pass") fail(`Cannot archive unverified L5 ticket: ${name}`);
-  if (exists(activeRel)) moveFile(activeRel, archiveRel);
+  if (exists(activeRel)) {
+    moveFile(activeRel, archiveRel);
+    appendTaskCompletion(archiveRel, verify);
+  }
   writeText(doneRel, JSON.stringify({
     task: name,
     type: start.type || "unknown",
@@ -1332,7 +1360,7 @@ function packageScripts() {
 }
 
 function recordVerify(result, reason) {
-  const task = process.env.TASK_ID || getGitBranch().split("/").pop() || "local";
+  const task = resolveTaskId();
   const rel = `observability/metrics/${task}.verify.json`;
   let reworkCount = 0;
   if (exists(rel)) {
@@ -1407,7 +1435,7 @@ async function commandVerify(args) {
       if (scripts.coverage) {
         success = runStep("Node coverage", npmCommand, ["run", "coverage"]);
       } else if (scripts.test) {
-        success = runStep("Node test", npmCommand, ["run", "test", "--", "--coverage"]);
+        success = runStep("Node test", npmCommand, ["run", "test"]);
       } else {
         say("[Node] Skipping tests (no test or coverage script)");
       }
@@ -1683,7 +1711,7 @@ async function commandRunAgent(args) {
 
   const provider = process.env.AI_PROVIDER || "openai";
   const model = selectModel(provider, type);
-  const taskName = process.env.TASK_ID || getGitBranch().split("/").pop();
+  const taskName = resolveTaskId();
   const rolePrompt = readText(`prompts/system/roles/${role}.md`);
   const context = buildContextBundle(type, taskName);
   const systemPrompt = renderPrompt("prompts/templates/agent-system.md", {
@@ -1828,5 +1856,5 @@ async function main() {
 
 main().catch((error) => {
   process.stderr.write(`[FAIL] ${error.message}\n`);
-  process.exit(error.code || 1);
+  process.exit(Number.isInteger(error.code) ? error.code : 1);
 });

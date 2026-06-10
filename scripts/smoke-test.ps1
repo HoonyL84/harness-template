@@ -66,7 +66,7 @@ try {
   $env:HARNESS_AUTONOMY_LEVEL = $previousLevel
 
   Write-Host "[Smoke Test] 4. Verifying task..."
-  $env:TASK_ID = $TicketName
+  $env:TASK_ID = "local"
   & .\scripts\verify-task.ps1 -Offline
 
   if (-not (Test-Path "observability/metrics/$TicketName.verify.json")) {
@@ -78,6 +78,9 @@ try {
 
   if (-not (Test-Path ".harness/tasks/archive/$TicketName.md")) {
     throw "Error: Archive ticket file was not created."
+  }
+  if (-not (Select-String -Path ".harness/tasks/archive/$TicketName.md" -Pattern "## Completion" -Quiet)) {
+    throw "Error: Archive ticket completion metadata was not recorded."
   }
 
   if (-not (Test-Path "observability/metrics/$TicketName.done.json")) {
