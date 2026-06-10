@@ -206,6 +206,23 @@ AI_PROVIDER=anthropic bash scripts/run-agent.sh --type architect "설계해줘"
 
 ## ⚙️ 자동화 메커니즘
 
+### L4.5 제한적 자동 수정
+
+API 모드에서 명시적으로 활성화하면 검증 실패 시 저위험 소스/테스트 패치를 한 번 생성해 적용하고 전체 검증을 다시 실행합니다.
+
+```bash
+npm run harness -- verify --auto-fix
+```
+
+- 기본 비활성화: `HARNESS_AUTO_FIX=false`
+- 기존 소스/테스트 파일만 수정
+- 최대 5개 파일, 100KB
+- 설정, 의존성, CI, 스크립트, 인프라, migration, 비밀값 차단
+- 재검증 실패 시 자동 원복
+- 커밋, 푸시, 병합은 사람의 검토 후 수행
+
+상세 정책: [`docs/design-docs/auto-fix-policy.md`](design-docs/auto-fix-policy.md)
+
 ### Git Hooks (커밋 시 자동 실행)
 | Hook | 검사 항목 |
 |------|-----------|

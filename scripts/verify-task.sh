@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================================
 # [Harness] Verify task
-# Usage: bash scripts/verify-task.sh [--offline] [--diagnose]
+# Usage: bash scripts/verify-task.sh [--offline] [--diagnose] [--auto-fix]
 # ============================================================================
 
 set -euo pipefail

@@ -20,6 +20,9 @@ cleanup() {
   rm -f "observability/metrics/$TICKET_NAME.verify.json"
   rm -f "observability/metrics/$TICKET_NAME.start.json"
   rm -f "observability/metrics/$TICKET_NAME.done.json"
+  rm -f ".harness/valid-auto-fix.patch"
+  rm -f ".harness/blocked-auto-fix.patch"
+  rm -f ".harness/new-file-auto-fix.patch"
 }
 trap cleanup EXIT
 
@@ -69,6 +72,43 @@ fi
 
 if [ ! -f "observability/metrics/$TICKET_NAME.done.json" ]; then
   echo "Error: Done metric JSON file was not created."
+  exit 1
+fi
+
+echo "[Smoke Test] 6. Validating L4.5 auto-fix policy..."
+cat > ".harness/valid-auto-fix.patch" <<'EOF'
+diff --git a/packages/example/src/example.js b/packages/example/src/example.js
+--- a/packages/example/src/example.js
++++ b/packages/example/src/example.js
+@@ -1 +1 @@
+-const value = 1;
++const value = 2;
+EOF
+node tools/harness-cli/index.js validate-auto-fix ".harness/valid-auto-fix.patch"
+
+cat > ".harness/blocked-auto-fix.patch" <<'EOF'
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -1 +1 @@
+-{}
++{"scripts":{}}
+EOF
+if node tools/harness-cli/index.js validate-auto-fix ".harness/blocked-auto-fix.patch"; then
+  echo "Error: Protected package.json patch was not rejected."
+  exit 1
+fi
+
+cat > ".harness/new-file-auto-fix.patch" <<'EOF'
+diff --git a/src/new-file.js b/src/new-file.js
+new file mode 100644
+--- /dev/null
++++ b/src/new-file.js
+@@ -0,0 +1 @@
++export const created = true;
+EOF
+if node tools/harness-cli/index.js validate-auto-fix ".harness/new-file-auto-fix.patch"; then
+  echo "Error: New file patch was not rejected."
   exit 1
 fi
 

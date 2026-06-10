@@ -17,6 +17,9 @@ function Cleanup-TestFiles {
   Remove-Item -Path "observability/metrics/$TicketName.verify.json" -ErrorAction SilentlyContinue
   Remove-Item -Path "observability/metrics/$TicketName.start.json" -ErrorAction SilentlyContinue
   Remove-Item -Path "observability/metrics/$TicketName.done.json" -ErrorAction SilentlyContinue
+  Remove-Item -Path ".harness/valid-auto-fix.patch" -ErrorAction SilentlyContinue
+  Remove-Item -Path ".harness/blocked-auto-fix.patch" -ErrorAction SilentlyContinue
+  Remove-Item -Path ".harness/new-file-auto-fix.patch" -ErrorAction SilentlyContinue
 }
 
 # Clean up before run
@@ -62,6 +65,45 @@ try {
 
   if (-not (Test-Path "observability/metrics/$TicketName.done.json")) {
     throw "Error: Done metric JSON file was not created."
+  }
+
+  Write-Host "[Smoke Test] 6. Validating L4.5 auto-fix policy..."
+  @"
+diff --git a/packages/example/src/example.js b/packages/example/src/example.js
+--- a/packages/example/src/example.js
++++ b/packages/example/src/example.js
+@@ -1 +1 @@
+-const value = 1;
++const value = 2;
+"@ | Set-Content -Encoding UTF8 ".harness/valid-auto-fix.patch"
+  & node "tools/harness-cli/index.js" validate-auto-fix ".harness/valid-auto-fix.patch"
+
+  @"
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -1 +1 @@
+-{}
++{"scripts":{}}
+"@ | Set-Content -Encoding UTF8 ".harness/blocked-auto-fix.patch"
+
+  & node "tools/harness-cli/index.js" validate-auto-fix ".harness/blocked-auto-fix.patch"
+  if ($LASTEXITCODE -eq 0) {
+    throw "Error: Protected package.json patch was not rejected."
+  }
+
+  @"
+diff --git a/src/new-file.js b/src/new-file.js
+new file mode 100644
+--- /dev/null
++++ b/src/new-file.js
+@@ -0,0 +1 @@
++export const created = true;
+"@ | Set-Content -Encoding UTF8 ".harness/new-file-auto-fix.patch"
+
+  & node "tools/harness-cli/index.js" validate-auto-fix ".harness/new-file-auto-fix.patch"
+  if ($LASTEXITCODE -eq 0) {
+    throw "Error: New file patch was not rejected."
   }
 
   Write-Host "[Smoke Test] Success! Complete harness flow works seamlessly."

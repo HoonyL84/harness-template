@@ -10,6 +10,22 @@ process.chdir(ROOT);
 
 const VALID_TYPES = new Set(["feat", "fix", "refactor", "docs", "chore", "experiment"]);
 const VALID_ROLES = new Set(["planner", "architect", "implementer", "reviewer", "verifier", "recorder", "memory", "release"]);
+const AUTO_FIX_ALLOWED_ROOTS = new Set(["src", "app", "lib", "test", "tests", "__tests__"]);
+const AUTO_FIX_ALLOWED_EXTENSIONS = new Set([
+  ".c", ".cc", ".cpp", ".cs", ".css", ".go", ".h", ".hpp", ".html",
+  ".java", ".js", ".jsx", ".kt", ".php", ".py", ".rb", ".rs", ".scss",
+  ".svelte", ".ts", ".tsx", ".vue",
+]);
+const AUTO_FIX_FORBIDDEN_SEGMENTS = new Set([
+  ".git", ".github", ".harness", ".venv", "build", "coverage", "dist", "docs",
+  "evals", "infra", "memory", "migrations", "node_modules", "observability",
+  "prompts", "scripts", "target", "terraform", "tools", "vendor", "venv",
+]);
+const AUTO_FIX_FORBIDDEN_FILES = new Set([
+  ".env", ".env.local", "docker-compose.yml", "docker-compose.yaml", "dockerfile",
+  "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
+  "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+]);
 
 function log(message = "") {
   process.stdout.write(`${message}\n`);
@@ -51,6 +67,113 @@ function moveFile(fromRel, toRel) {
   const to = path.join(ROOT, toRel);
   fs.mkdirSync(path.dirname(to), { recursive: true });
   fs.renameSync(from, to);
+}
+
+function normalizeRepoPath(filePath) {
+  return filePath.replace(/\\/g, "/").replace(/^[ab]\//, "");
+}
+
+function extractUnifiedDiff(text) {
+  const fenced = text.match(/```(?:diff|patch)?\s*\n([\s\S]*?)```/i);
+  const candidate = (fenced ? fenced[1] : text).trim();
+  const diffIndex = candidate.indexOf("diff --git ");
+  if (diffIndex === -1) {
+    fail("Auto-fix response did not contain a unified diff.");
+  }
+  return `${candidate.slice(diffIndex).trim()}\n`;
+}
+
+function validateAutoFixPatch(patch) {
+  patch = patch.replace(/^\uFEFF/, "");
+
+  if (Buffer.byteLength(patch, "utf8") > 100_000) {
+    fail("Auto-fix patch exceeds the 100 KB safety limit.");
+  }
+
+  const paths = [];
+  const headerRegex = /^diff --git a\/(.+) b\/(.+)$/gm;
+  let match;
+  while ((match = headerRegex.exec(patch)) !== null) {
+    const before = normalizeRepoPath(match[1]);
+    const after = normalizeRepoPath(match[2]);
+    if (before !== after) {
+      fail(`Auto-fix patch cannot rename files: ${before} -> ${after}`);
+    }
+    paths.push(after);
+  }
+
+  const headerPaths = [];
+  const fileHeaderRegex = /^(?:---|\+\+\+) (?:[ab]\/(.+)|\/dev\/null)$/gm;
+  while ((match = fileHeaderRegex.exec(patch)) !== null) {
+    if (match[1]) headerPaths.push(normalizeRepoPath(match[1]));
+  }
+
+  if (paths.length === 0) {
+    fail("Auto-fix patch does not contain any file changes.");
+  }
+  const uniquePaths = [...new Set(paths)];
+  if (uniquePaths.length > 5) {
+    fail("Auto-fix patch exceeds the 5-file safety limit.");
+  }
+  if (/^(?:---|\+\+\+) \/dev\/null$/m.test(patch)) {
+    fail("Auto-fix patch cannot create or delete files.");
+  }
+  if (/^(?:rename|copy) (?:from|to) /m.test(patch)) {
+    fail("Auto-fix patch cannot rename or copy files.");
+  }
+  if (/^(?:old mode|new mode|new file mode|deleted file mode) /m.test(patch)) {
+    fail("Auto-fix patch cannot change file modes.");
+  }
+  if (/^(?:GIT binary patch|Binary files )/m.test(patch)) {
+    fail("Auto-fix patch cannot contain binary changes.");
+  }
+  if (headerPaths.some((filePath) => !uniquePaths.includes(filePath))) {
+    fail("Auto-fix patch contains file headers not declared by diff --git.");
+  }
+
+  for (const filePath of uniquePaths) {
+    const normalized = path.posix.normalize(filePath);
+    const segments = normalized.split("/");
+    const fileName = segments[segments.length - 1].toLowerCase();
+    const extension = path.posix.extname(fileName).toLowerCase();
+    const resolved = path.resolve(ROOT, normalized);
+
+    if (normalized.startsWith("../") || (!resolved.startsWith(`${ROOT}${path.sep}`) && resolved !== ROOT)) {
+      fail(`Auto-fix patch escapes the repository: ${filePath}`);
+    }
+    if (!segments.some((segment) => AUTO_FIX_ALLOWED_ROOTS.has(segment.toLowerCase()))) {
+      fail(`Auto-fix path is outside low-risk source/test roots: ${filePath}`);
+    }
+    if (segments.some((segment) => AUTO_FIX_FORBIDDEN_SEGMENTS.has(segment.toLowerCase()))) {
+      fail(`Auto-fix path contains a protected segment: ${filePath}`);
+    }
+    if (AUTO_FIX_FORBIDDEN_FILES.has(fileName) || fileName.startsWith(".env")) {
+      fail(`Auto-fix cannot modify protected files: ${filePath}`);
+    }
+    if (!AUTO_FIX_ALLOWED_EXTENSIONS.has(extension)) {
+      fail(`Auto-fix file type is not allowed: ${filePath}`);
+    }
+  }
+
+  return uniquePaths;
+}
+
+function applyGitPatch(patchRel, reverse = false) {
+  const checkArgs = ["apply", "--check"];
+  if (reverse) checkArgs.push("-R");
+  checkArgs.push(patchRel);
+  const checked = run("git", checkArgs, { capture: true });
+  if (checked.status !== 0) {
+    fail(`Auto-fix patch ${reverse ? "rollback" : "validation"} failed: ${checked.stderr || checked.stdout}`);
+  }
+
+  const applyArgs = ["apply"];
+  if (reverse) applyArgs.push("-R");
+  applyArgs.push(patchRel);
+  const applied = run("git", applyArgs, { capture: true });
+  if (applied.status !== 0) {
+    fail(`Auto-fix patch ${reverse ? "rollback" : "application"} failed: ${applied.stderr || applied.stdout}`);
+  }
 }
 
 function run(command, args, options = {}) {
@@ -595,6 +718,23 @@ function commandScanDrift(args) {
   }
 }
 
+function commandValidateAutoFix(args) {
+  const { positional } = parseArgs(args);
+  const [patchFile] = positional;
+  if (!patchFile) {
+    fail("Usage: node tools/harness-cli/index.js validate-auto-fix <patch-file>");
+  }
+
+  const patchPath = path.resolve(ROOT, patchFile);
+  if (!patchPath.startsWith(`${ROOT}${path.sep}`) || !fs.existsSync(patchPath)) {
+    fail(`Patch file not found inside repository: ${patchFile}`);
+  }
+
+  const patch = fs.readFileSync(patchPath, "utf8");
+  const changedFiles = validateAutoFixPatch(patch);
+  log(`Auto-fix patch policy passed: ${changedFiles.join(", ")}`);
+}
+
 function packageScripts() {
   if (!exists("package.json")) return {};
   return JSON.parse(readText("package.json")).scripts || {};
@@ -626,10 +766,12 @@ async function commandVerify(args) {
   parseEnvFile();
   const { options } = parseArgs(args);
   const diagnose = options.diagnose || process.env.HARNESS_DIAGNOSE === "true";
+  const autoFix = options["auto-fix"] || process.env.HARNESS_AUTO_FIX === "true";
   const offline = options.offline || process.env.HARNESS_OFFLINE === "1" || process.env.HARNESS_OFFLINE === "true";
-  const maxAttempts = 1; // For diagnosis, 1 attempt is sufficient to generate guide
+  const maxAttempts = autoFix ? 2 : 1;
   let attempt = 0;
   let verifyPassed = false;
+  let appliedPatchRel = "";
 
   ensureDir("observability/traces");
   ensureDir("observability/metrics");
@@ -698,9 +840,70 @@ async function commandVerify(args) {
     if (success) {
       verifyPassed = true;
       recordVerify("pass");
+      if (appliedPatchRel) {
+        say(`[Auto-fix] Verification passed. Patch retained for review: ${appliedPatchRel}`);
+        await sendSlackNotification("success", `✅ Low-risk auto-fix passed verification. Review patch: ${appliedPatchRel}`);
+      }
       say("All checks passed. Safe to commit.");
       writeText(logRel, lines.join(os.EOL));
       break;
+    }
+
+    if (appliedPatchRel) {
+      try {
+        applyGitPatch(appliedPatchRel, true);
+        say(`[Auto-fix] Verification still failed. Applied patch was rolled back: ${appliedPatchRel}`);
+      } catch (err) {
+        say(`[Auto-fix] CRITICAL: Automatic rollback failed: ${err.message}`);
+      }
+      recordVerify("fail", failedStep.label);
+      writeText(logRel, lines.join(os.EOL));
+      await sendSlackNotification("fail", `❌ Auto-fix failed verification and rollback was attempted.\nStep: ${failedStep.label}\nPatch: ${appliedPatchRel}`);
+      process.exit(failedStep.status);
+    }
+
+    if (autoFix) {
+      const mode = process.env.HARNESS_AGENT_MODE || "interactive";
+      if (offline) {
+        say("[Auto-fix] Disabled because offline mode is active.");
+      } else if (mode !== "api") {
+        say("[Auto-fix] Requires HARNESS_AGENT_MODE=api. Falling back to diagnosis guidance.");
+      } else {
+        const autoFixPrompt = `A verification step failed.
+Step: ${failedStep.label}
+Command: ${failedStep.command} ${failedStep.stepArgs.join(" ")}
+
+Stderr:
+${failedStep.stderr.slice(-3000)}
+
+Stdout:
+${failedStep.stdout.slice(-2000)}
+
+Generate a minimal unified diff that fixes only the root cause.
+Safety contract:
+- Output only a unified diff, optionally inside a diff code fence.
+- Change at most 5 files.
+- Modify only existing low-risk source or test files in paths containing src/, app/, lib/, test/, tests/, or __tests__/.
+- Do not modify configuration, dependencies, lockfiles, CI, scripts, infrastructure, database migrations, secrets, or documentation.
+- Do not create, delete, or rename files.
+- Avoid unrelated formatting or refactoring.`;
+
+        try {
+          say("[Auto-fix] Requesting one low-risk patch from the configured AI provider...");
+          const response = await commandRunAgent(["--type", "fix", "--role", "implementer", autoFixPrompt]);
+          const patch = extractUnifiedDiff(response);
+          const changedFiles = validateAutoFixPatch(patch);
+          appliedPatchRel = `observability/traces/${fileTimestamp()}-auto-fix.patch`;
+          writeText(appliedPatchRel, patch);
+          applyGitPatch(appliedPatchRel);
+          say(`[Auto-fix] Patch applied to: ${changedFiles.join(", ")}`);
+          say("[Auto-fix] Re-running verification once.");
+          attempt++;
+          continue;
+        } catch (err) {
+          say(`[Auto-fix] Patch generation or application rejected: ${err.message}`);
+        }
+      }
     }
 
     // If we failed and self-diagnose is requested
@@ -798,6 +1001,7 @@ function buildContextBundle(type, taskName) {
     ["Tech Stack", "docs/design-docs/tech-stack.md", 200],
     ["Agent Roles", "docs/design-docs/agent-roles.md", 220],
     ["Execution Modes", "docs/design-docs/execution-modes.md", 220],
+    ["Auto-fix Policy", "docs/design-docs/auto-fix-policy.md", 220],
   ];
   const out = [`# Harness Context Bundle`, `GeneratedAt: ${currentTimestamp()}`, `TaskType: ${type}`, `TaskName: ${taskName || "unknown"}`, ""];
   for (const [title, rel, maxLines] of blocks) {
@@ -914,6 +1118,7 @@ ${rolePrompt}
     "",
     text,
   ].join("\n"));
+  return text;
 }
 
 function usage() {
@@ -923,10 +1128,11 @@ Usage:
   node tools/harness-cli/index.js check
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name>
-  node tools/harness-cli/index.js verify [--offline] [--diagnose]
+  node tools/harness-cli/index.js verify [--offline] [--diagnose] [--auto-fix]
   node tools/harness-cli/index.js run-agent [--type type] [--role role] "prompt"
   node tools/harness-cli/index.js complete-task <name> [--force]
   node tools/harness-cli/index.js scan-drift
+  node tools/harness-cli/index.js validate-auto-fix <patch-file>
 `);
 }
 
@@ -954,6 +1160,9 @@ async function main() {
       break;
     case "scan-drift":
       commandScanDrift(args);
+      break;
+    case "validate-auto-fix":
+      commandValidateAutoFix(args);
       break;
     case "help":
     case "--help":

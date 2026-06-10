@@ -14,6 +14,7 @@
 - [Tech stack](docs/design-docs/tech-stack.md): default technology choices.
 - [Agent roles](docs/design-docs/agent-roles.md): role contracts for planner, architect, implementer, reviewer, verifier, recorder, memory, and release.
 - [Execution modes](docs/design-docs/execution-modes.md): supported OS, CLI, CI, and API-key workflows.
+- [L4.5 auto-fix policy](docs/design-docs/auto-fix-policy.md): bounded source/test patching, verification, and rollback rules.
 - [Memory governance](docs/design-docs/memory-governance.md): memory layer update rules.
 
 ## Agent Capabilities

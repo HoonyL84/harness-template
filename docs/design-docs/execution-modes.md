@@ -25,6 +25,7 @@
 | Windows PowerShell CLI | Windows | 선택: `.env.local` API 키 | `powershell -File scripts/*.ps1` | 호환 지원 | 내부적으로 Node Harness CLI를 호출한다. |
 | GitHub Actions | GitHub hosted runner | GitHub token, optional secrets | `.github/workflows/*.yml` | 1급 지원 | CI/security가 로컬 OS 차이를 보완하는 최종 검증선이다. |
 | API-key Agent CLI | Windows/macOS/Linux | `OPENAI_API_KEY` 또는 호환 provider key | `npm run harness -- run-agent --role <role>` | 1급 지원 | 로컬에서 에이전트를 직접 호출할 때 사용한다. |
+| L4.5 Auto-fix | Windows/macOS/Linux | provider API key + 명시적 opt-in | `npm run harness -- verify --auto-fix` | 제한적 지원 | 저위험 기존 소스/테스트 파일만 1회 수정하고 재검증하며, 실패 시 원복한다. |
 
 ---
 
@@ -105,6 +106,9 @@ GEMINI_API_KEY=
 API 키는 커밋하지 않는다. 필요한 값은 `.env.local`에 두고, 공유해야 할 키 이름만 `.env.template`에 남긴다.
 `HARNESS_AGENT_MODE=interactive` 상태에서는 대화형 Codex/Cursor/Claude Code 사용을 기본으로 보고, `run-agent` 직접 호출은 막는다.
 회사 macOS처럼 토큰 기반 CLI를 쓸 때는 `.env.local`에서 `HARNESS_AGENT_MODE=api`로 바꾼 뒤 provider key를 넣는다.
+
+L4.5 자동 수정은 추가로 `HARNESS_AUTO_FIX=true`를 설정하거나 `verify --auto-fix`를 명시해야 한다.
+자동 수정 범위와 원복 규칙은 `docs/design-docs/auto-fix-policy.md`를 따른다.
 
 ---
 

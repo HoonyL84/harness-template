@@ -14,8 +14,9 @@
 4. **`docs/design-docs/tech-stack.md`** — 기본 기술 스택 및 설정
 5. **`docs/design-docs/agent-roles.md`** — 역할 기반 에이전트 책임
 6. **`docs/design-docs/execution-modes.md`** — OS/CLI/API-key 실행 모드와 제한
-7. **`.harness/tasks/backlog/`** — PLANS.md와 사용자 피드백에서 분해된 티켓
-8. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
+7. **`docs/design-docs/auto-fix-policy.md`** — L4.5 저위험 자동 수정 범위와 원복 규칙
+8. **`.harness/tasks/backlog/`** — PLANS.md와 사용자 피드백에서 분해된 티켓
+9. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
 
 > 필요한 스킬이 있으면 `skills/`의 `SKILL.md`를 우선 탐색하고, 긴 절차 문서는 `docs/skills/`를 참고하라.
 
@@ -92,6 +93,7 @@
 | `docs/design-docs/tech-stack.md` | 기본 기술 스택 (PLANS.md에서 override 가능) |
 | `docs/design-docs/agent-roles.md` | Planner/Architect/Reviewer 등 역할 계약 |
 | `docs/design-docs/execution-modes.md` | Windows/macOS/Linux/CI/API-key 실행 모드 |
+| `docs/design-docs/auto-fix-policy.md` | L4.5 자동 수정 허용 범위, 재검증, 원복 규칙 |
 | `docs/design-docs/memory-governance.md` | memory 레이어 포맷/갱신 규칙 |
 | `skills/` | 에이전트가 직접 호출 가능한 이식형 스킬 패키지 |
 | `docs/skills/code-review.md` | 코드 리뷰 수행 방법 |

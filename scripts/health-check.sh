@@ -42,6 +42,7 @@ REQUIRED_FILES=(
   "docs/design-docs/core-beliefs.md"
   "docs/design-docs/tech-stack.md"
   "docs/design-docs/execution-modes.md"
+  "docs/design-docs/auto-fix-policy.md"
   "tools/registry.yaml"
   ".env.template"
   ".gitattributes"

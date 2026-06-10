@@ -40,6 +40,7 @@ npm run harness -- complete-task my-task --force
 - 프로젝트 목표 문서: [docs/project/PLANS.md](docs/project/PLANS.md)
 - 에이전트 역할 정의: [docs/design-docs/agent-roles.md](docs/design-docs/agent-roles.md)
 - 실행 모드/OS 호환성: [docs/design-docs/execution-modes.md](docs/design-docs/execution-modes.md)
+- L4.5 자동 수정 정책: [docs/design-docs/auto-fix-policy.md](docs/design-docs/auto-fix-policy.md)
 - 메모리 운영 규칙: [docs/design-docs/memory-governance.md](docs/design-docs/memory-governance.md)
 
 ## 디렉터리 요약
@@ -62,6 +63,7 @@ scratch/
 - `scripts/create-ticket.sh` / `scripts/create-ticket.ps1`: backlog 티켓 생성
 - `scripts/start-ticket.sh` / `scripts/start-ticket.ps1`: backlog 티켓을 active로 승격
 - `scripts/verify-task.sh` / `scripts/verify-task.ps1`: 테스트/린트/빌드/정책 검증
+- `npm run harness -- verify --auto-fix`: API 모드에서 저위험 소스/테스트 패치를 1회 적용하고 재검증, 실패 시 원복
 - `scripts/verify-task.sh --offline` / `scripts/verify-task.ps1 -Offline`: 네트워크/키 없는 환경용 로컬 검증
 - `scripts/check-environment.sh` / `scripts/check-environment.ps1`: OS/토큰/필수 도구/Git 상태 사전 점검
 - `scripts/run-agent.sh` / `scripts/run-agent.ps1`: Planner/Reviewer 등 역할 프롬프트로 AI 호출
@@ -94,6 +96,20 @@ npm.cmd run harness -- check
 ```
 
 `check`는 `.env.local`이 없으면 `.env.template`에서 자동 생성합니다. 생성된 `.env.local`에 필요한 API 키와 provider 옵션을 채우면 됩니다.
+
+## L4.5 제한적 자동 수정
+
+기본값은 비활성화입니다. `.env.local`에서 `HARNESS_AGENT_MODE=api`, provider API 키,
+`HARNESS_AUTO_FIX=true`를 설정하거나 명령에 `--auto-fix`를 전달하면 검증 실패를 한 번 복구합니다.
+
+```bash
+npm run harness -- verify --auto-fix
+```
+
+자동 수정은 기존 소스/테스트 파일 최대 5개와 100KB 패치로 제한됩니다. 설정, 의존성, CI,
+스크립트, 인프라, migration, 비밀값은 수정하지 않으며 재검증 실패 시 패치를 원복합니다.
+커밋과 푸시는 자동으로 수행하지 않습니다. 상세 기준은
+[L4.5 자동 수정 정책](docs/design-docs/auto-fix-policy.md)을 참고하세요.
 
 ## 참고
 
