@@ -1,7 +1,9 @@
 param(
   [switch]$Offline,
   [switch]$Diagnose,
-  [switch]$AutoFix
+  [switch]$AutoFix,
+  [switch]$Quick,
+  [switch]$Full
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +19,12 @@ if ($Diagnose) {
 }
 if ($AutoFix) {
   $nodeArgs += "--auto-fix"
+}
+if ($Quick) {
+  $nodeArgs += "--quick"
+}
+if ($Full) {
+  $nodeArgs += "--full"
 }
 $nodeArgs += $args
 

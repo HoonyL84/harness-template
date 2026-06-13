@@ -11,6 +11,9 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 TICKET_NAME="smoke-test-ticket"
+CONFIG_PATH=".harness/config.json"
+CONFIG_BACKUP="$(mktemp)"
+cp "$CONFIG_PATH" "$CONFIG_BACKUP"
 
 check_l5_checkpoint() {
   echo "[Smoke Test] Checking interactive L5 checkpoint..."
@@ -33,8 +36,11 @@ cleanup() {
   rm -f ".harness/risky-l5.patch"
   rm -f ".harness/protected-l5.patch"
   rm -f "observability/autonomy/state.json"
+  rm -f "smoke-fingerprint.tmp" "smoke-generated.tmp"
+  rm -f observability/metrics/cleanup-*.json
+  cp "$CONFIG_BACKUP" "$CONFIG_PATH"
 }
-trap cleanup EXIT
+trap 'cleanup; rm -f "$CONFIG_BACKUP"' EXIT
 
 echo "[Smoke Test] Cleaning up old test files..."
 cleanup
@@ -111,8 +117,57 @@ if [ ! -f "observability/metrics/$TICKET_NAME.verify.json" ]; then
   echo "Error: Verify metric JSON file was not created."
   exit 1
 fi
+if ! node -e "const r=require('./observability/metrics/$TICKET_NAME.verify.json'); if(r.last_full?.result!=='pass') process.exit(1)"; then
+  echo "Error: Full verification record was not stored separately."
+  exit 1
+fi
+bash scripts/verify-task.sh --offline --quick
+if ! node -e "const r=require('./observability/metrics/$TICKET_NAME.verify.json'); if(r.last_full?.result!=='pass'||r.last_quick?.result!=='inconclusive') process.exit(1)"; then
+  echo "Error: Inconclusive quick verification did not preserve the full verification record."
+  exit 1
+fi
 
-echo "[Smoke Test] 5. Completing task..."
+echo "[Smoke Test] 5. Checking stale fingerprint rejection..."
+printf 'changed after full verify' > smoke-fingerprint.tmp
+if node tools/harness-cli/index.js complete-task "$TICKET_NAME" >/dev/null 2>&1; then
+  echo "Error: Completion accepted content changed after full verification."
+  exit 1
+fi
+rm -f smoke-fingerprint.tmp
+
+echo "[Smoke Test] 6. Checking quick/full isolation and approved cleanup..."
+node - <<'NODE'
+const fs = require("fs");
+const path = ".harness/config.json";
+const config = JSON.parse(fs.readFileSync(path, "utf8"));
+config.verify.quick = {
+  "**/*": ["node -e \"require('fs').writeFileSync('smoke-generated.tmp','generated')\""]
+};
+fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+NODE
+bash scripts/verify-task.sh --offline
+if bash scripts/verify-task.sh --offline --quick >/dev/null 2>&1; then
+  echo "Error: Quick verification did not detect its generated worktree artifact."
+  exit 1
+fi
+if ! node -e "const r=require('./observability/metrics/$TICKET_NAME.verify.json'); if(r.last_full?.result!=='pass'||r.last_quick?.result!=='fail') process.exit(1)"; then
+  echo "Error: Quick verification overwrote or failed to preserve the full verification record."
+  exit 1
+fi
+CLEANUP_OUTPUT="$(node tools/harness-cli/index.js cleanup --dry-run)"
+echo "$CLEANUP_OUTPUT"
+MANIFEST_ID="$(printf '%s\n' "$CLEANUP_OUTPUT" | sed -nE 's/.*Manifest ID: ([a-f0-9]{12}).*/\1/p' | head -n 1)"
+if [ -z "$MANIFEST_ID" ]; then
+  echo "Error: Cleanup dry-run did not produce an integrity-bound manifest."
+  exit 1
+fi
+node tools/harness-cli/index.js cleanup --approve "$MANIFEST_ID"
+if [ -e smoke-generated.tmp ]; then
+  echo "Error: Approved cleanup did not remove the verification-generated file."
+  exit 1
+fi
+
+echo "[Smoke Test] 7. Completing task..."
 COMPLETE_OUTPUT="$(node tools/harness-cli/index.js complete-task "$TICKET_NAME")"
 echo "$COMPLETE_OUTPUT"
 if git remote get-url origin >/dev/null 2>&1; then
@@ -139,7 +194,16 @@ if [ ! -f "observability/metrics/$TICKET_NAME.done.json" ]; then
   exit 1
 fi
 
-echo "[Smoke Test] 6. Validating L4.5 auto-fix policy..."
+echo "[Smoke Test] 8. Validating config fail-closed and help bypass..."
+printf '{ invalid json' > "$CONFIG_PATH"
+if node tools/harness-cli/index.js validate-prompts >/dev/null 2>&1; then
+  echo "Error: Invalid config did not fail closed."
+  exit 1
+fi
+node tools/harness-cli/index.js help >/dev/null
+cp "$CONFIG_BACKUP" "$CONFIG_PATH"
+
+echo "[Smoke Test] 9. Validating L4.5 auto-fix policy..."
 cat > ".harness/valid-auto-fix.patch" <<'EOF'
 diff --git a/packages/example/src/example.js b/packages/example/src/example.js
 --- a/packages/example/src/example.js
@@ -176,7 +240,7 @@ if node tools/harness-cli/index.js validate-auto-fix ".harness/new-file-auto-fix
   exit 1
 fi
 
-echo "[Smoke Test] 7. Validating L5 policy and opt-in gate..."
+echo "[Smoke Test] 10. Validating L5 policy and opt-in gate..."
 node tools/harness-cli/index.js validate-prompts
 node tools/harness-cli/index.js validate-api-retry
 node tools/harness-cli/index.js validate-recovery

@@ -5,6 +5,10 @@
   "description": "Harness Engineering Template",
   "scripts": {
     "harness": "node tools/harness-cli/index.js",
+    "test": "node tests/harness-cli/run.js",
+    "test:soak": "node tools/harness-cli/index.js validate-l5-soak --cycles 10000",
+    "lint": "node --check tools/harness-cli/index.js && node --check tools/harness-cli/config.js && node --check tools/harness-cli/verify-utils.js && node --check tools/harness-cli/cleanup-utils.js && node --check tools/harness-cli/autonomy-utils.js && node --check tools/harness-cli/orchestration-utils.js && node --check tools/harness-cli/orchestration-command.js",
+    "build": "npm run lint",
     "prepare": "husky"
   },
   "devDependencies": {
