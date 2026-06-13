@@ -498,7 +498,9 @@ async function commandCheck() {
       const readline = require("readline");
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
       
-      const question = (query) => new Promise((resolve) => rl.question(query, resolve));
+      const question = (query) => new Promise((resolve) => {
+        rl.question(query, resolve);
+      });
       
       const questionMasked = (query) => new Promise((resolve) => {
         let isMuted = false;
@@ -1225,7 +1227,9 @@ async function commandValidateApiRetry() {
     if (!quotaFailed || quotaRequests !== 1) fail("API quota self-test retried a non-retryable quota error.");
     log("API retry policy passed.");
   } finally {
-    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => {
+      server.close(resolve);
+    });
     const restore = (key, value) => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -2292,12 +2296,16 @@ async function postJson(url, headers, body) {
         }
       }
       log(`[API] Retryable HTTP ${response.status}. Retrying in ${delayMs}ms (${attempt + 1}/${maxRetries}).`);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
     } catch (err) {
       if (err.noRetry || attempt === maxRetries) throw err;
       const delayMs = Math.min(maxDelayMs, baseDelayMs * (2 ** attempt));
       log(`[API] Network error: ${err.message}. Retrying in ${delayMs}ms (${attempt + 1}/${maxRetries}).`);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
     }
   }
   fail("API request exhausted retry attempts.");

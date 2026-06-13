@@ -103,6 +103,19 @@ npm.cmd run harness -- check
 
 `check`는 `.env.local`이 없으면 `.env.template`에서 자동 생성합니다. 생성된 `.env.local`에 필요한 API 키와 provider 옵션을 채우면 됩니다.
 
+## 품질 검증
+
+```bash
+npm test
+npm run coverage
+npm run lint
+npm run build
+npm run harness -- verify --full
+```
+
+`coverage`는 전체 CLI 테스트의 최소 lines/statements 65%, functions/branches 70%를
+강제합니다. 이 기준은 신규 모듈 테스트와 함께 점진적으로 높입니다.
+
 ## 선택형 멀티에이전트
 
 멀티에이전트 orchestration은 기본적으로 비활성화된 실험 기능입니다. 단일 에이전트 작업 흐름은 그대로 유지되며, 역할 분리나 격리된 병렬 작업이 필요한 티켓에서만 명시적으로 사용합니다.

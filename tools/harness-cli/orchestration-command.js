@@ -13,12 +13,20 @@ const {
   nextRecoveryAction,
   normalizeArtifact,
   normalizePath,
-  readState,
   selectMode,
-  stateFingerprint,
   validateWorkerPlan,
   writeJsonAtomic
 } = require("./orchestration-utils");
+const {
+  listTaskRuns,
+  readRunState,
+  requireRuntimeBudget,
+  requireTaskOrchestrationReady,
+  reserveProviderBudget,
+  runtimeNow,
+  saveRunState,
+  stateDir
+} = require("./orchestration-state");
 
 function parseArgs(args) {
   const positional = [];
@@ -50,23 +58,6 @@ function runGit(root, args, { cwd = root, allowFailure = false } = {}) {
   return result;
 }
 
-function stateDir(root, runId) {
-  if (!/^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(String(runId || ""))) {
-    throw new Error("Orchestration run id is invalid.");
-  }
-  return path.join(root, "observability", "orchestration", runId);
-}
-
-function statePath(root, runId) {
-  return path.join(stateDir(root, runId), "state.json");
-}
-
-function readRunState(root, runId) {
-  const filePath = statePath(root, runId);
-  if (!fs.existsSync(filePath)) throw new Error(`Orchestration run not found: ${runId}`);
-  return readState(filePath);
-}
-
 function resolveRepositoryFile(root, value, label) {
   const resolved = path.resolve(root, String(value || ""));
   const normalizedRoot = path.resolve(root);
@@ -74,128 +65,6 @@ function resolveRepositoryFile(root, value, label) {
     throw new Error(`${label} must stay inside the repository.`);
   }
   return resolved;
-}
-
-function saveRunState(root, state, patch = {}) {
-  const filePath = statePath(root, state.run_id);
-  const lockPath = `${filePath}.lock`;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  let lock;
-  const createLock = () => {
-    const descriptor = fs.openSync(lockPath, "wx");
-    fs.writeFileSync(descriptor, JSON.stringify({
-      pid: process.pid,
-      created_at: new Date().toISOString()
-    }));
-    return descriptor;
-  };
-  const tryAcquireLock = () => {
-    try {
-      return createLock();
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      let stale = false;
-      try {
-        const metadata = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-        const ageMs = Date.now() - Date.parse(metadata.created_at);
-        let ownerAlive = true;
-        try {
-          process.kill(Number(metadata.pid), 0);
-        } catch (processError) {
-          ownerAlive = processError.code === "EPERM";
-        }
-        stale = Number.isFinite(ageMs) && ageMs > 10 * 60 * 1000 && !ownerAlive;
-      } catch {
-        stale = false;
-      }
-      if (!stale) {
-        throw new Error("Orchestration state is being updated by another process. Retry shortly.");
-      }
-      fs.unlinkSync(lockPath);
-      return createLock();
-    }
-  };
-  try {
-    lock = tryAcquireLock();
-    if (fs.existsSync(filePath)) {
-      const current = readState(filePath);
-      if (!state.state_fingerprint || current.state_fingerprint !== state.state_fingerprint) {
-        throw new Error("Orchestration state changed concurrently. Reload the run and retry.");
-      }
-    }
-    const next = { ...state, ...patch, updated_at: new Date().toISOString() };
-    next.state_fingerprint = stateFingerprint({ ...next, state_fingerprint: undefined });
-    writeJsonAtomic(filePath, next);
-    return next;
-  } catch (error) {
-    throw error;
-  } finally {
-    if (lock !== undefined) fs.closeSync(lock);
-    if (lock !== undefined && fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
-  }
-}
-
-function listTaskRuns(root, task) {
-  const baseDir = path.join(root, "observability", "orchestration");
-  if (!fs.existsSync(baseDir)) return [];
-  return fs.readdirSync(baseDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => {
-      try {
-        return readRunState(root, entry.name);
-      } catch {
-        return null;
-      }
-    })
-    .filter((state) => state?.task === task);
-}
-
-function requireTaskOrchestrationReady(root, task) {
-  const runs = listTaskRuns(root, task);
-  if (runs.length === 0) return;
-  const unfinished = runs.filter((state) => state.status !== "ready_to_complete");
-  if (unfinished.length > 0) {
-    throw new Error(
-      `Task has unfinished orchestration runs: ${unfinished.map((state) => state.run_id).join(", ")}`
-    );
-  }
-}
-
-function runtimeNow(config) {
-  return typeof config.now === "function" ? new Date(config.now()) : new Date();
-}
-
-function requireRuntimeBudget(root, state, config) {
-  const deadline = Date.parse(state.budget?.deadline_at || "");
-  if (!Number.isFinite(deadline)) {
-    throw new Error("Orchestration runtime budget metadata is missing.");
-  }
-  if (runtimeNow(config).getTime() > deadline) {
-    saveRunState(root, state, {
-      status: "budget_exhausted",
-      budget_exhausted_reason: "runtime"
-    });
-    throw new Error("Orchestration runtime budget is exhausted.");
-  }
-}
-
-function reserveProviderBudget(root, state, count, config) {
-  requireRuntimeBudget(root, state, config);
-  const used = Number(state.budget?.api_calls || 0);
-  const limit = Number(state.budget?.max_api_calls || 0);
-  if (!Number.isInteger(count) || count < 1 || !Number.isFinite(limit) || used + count > limit) {
-    saveRunState(root, state, {
-      status: "budget_exhausted",
-      budget_exhausted_reason: "api_calls"
-    });
-    throw new Error(`Orchestration API call budget exhausted (${used}/${limit}).`);
-  }
-  return saveRunState(root, state, {
-    budget: {
-      ...state.budget,
-      api_calls: used + count
-    }
-  });
 }
 
 function writeRoleRequest(root, state, role, sequence) {

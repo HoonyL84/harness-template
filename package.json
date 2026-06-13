@@ -6,14 +6,17 @@
   "scripts": {
     "harness": "node tools/harness-cli/index.js",
     "test": "node tests/harness-cli/run.js",
+    "coverage": "c8 --check-coverage --lines 65 --statements 65 --functions 70 --branches 70 --reporter=text node tests/harness-cli/run.js",
     "test:soak": "node tools/harness-cli/index.js validate-l5-soak --cycles 10000",
-    "lint": "node --check tools/harness-cli/index.js && node --check tools/harness-cli/config.js && node --check tools/harness-cli/verify-utils.js && node --check tools/harness-cli/cleanup-utils.js && node --check tools/harness-cli/autonomy-utils.js && node --check tools/harness-cli/orchestration-utils.js && node --check tools/harness-cli/orchestration-command.js",
+    "lint": "eslint tools tests eslint.config.js",
     "build": "npm run lint",
     "prepare": "husky"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.0.0",
     "@commitlint/config-conventional": "^19.0.0",
+    "c8": "^11.0.0",
+    "eslint": "^9.39.1",
     "husky": "^9.0.0"
   },
   "overrides": {
