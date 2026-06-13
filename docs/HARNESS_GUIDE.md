@@ -224,6 +224,7 @@ AI_PROVIDER=anthropic bash scripts/run-agent.sh --type architect "설계해줘"
 
 | Role | 용도 |
 |------|------|
+| `orchestrator` | 선택형 멀티에이전트 계획 고정, 상태·승인·통합 게이트 관리 |
 | `planner` | 목표/범위/완료 기준 정리 |
 | `architect` | 설계/트레이드오프/승인 필요 결정 검토 |
 | `implementer` | 최소 범위 코드 구현 |
@@ -276,6 +277,71 @@ npm run harness -- recover
 ```
 
 현재 체크포인트, active 티켓, Git 변경, 마지막 verify 지문을 대조해 안전한 다음 행동을 JSON으로 출력합니다.
+
+### 선택형 멀티에이전트 orchestration
+
+멀티에이전트는 기본 비활성화이며 기존 단일 에이전트 흐름을 바꾸지 않습니다. 프로젝트 설정에서 활성화한 뒤, 역할을 병렬 또는 격리 실행하려는 티켓에서만 명시적으로 시작합니다.
+
+```bash
+# adapter와 병렬 capability 확인
+npm run harness -- orchestrate --capabilities
+
+# 환경 capability에 따라 native, API, sequential fallback 선택
+npm run harness -- orchestrate optional-multi-agent --mode auto --max-workers 2
+
+# 상태 확인, 중단 후 재개, 승인
+npm run harness -- orchestrate --status <run-id>
+npm run harness -- orchestrate --resume <run-id>
+npm run harness -- orchestrate --approve <run-id>
+
+# 대화형 host가 planner/architect artifact를 기록한 뒤 단일 writer 구현
+npm run harness -- orchestrate --record <run-id> --role planner --artifact <file>
+npm run harness -- orchestrate --record <run-id> --role architect --artifact <file>
+npm run harness -- orchestrate --begin-review <run-id>
+
+# reviewer/verifier 기록 후 전체 검증과 마감
+npm run harness -- orchestrate --record <run-id> --role reviewer --artifact <file>
+npm run harness -- orchestrate --record <run-id> --role verifier --artifact <file>
+npm run harness -- verify --full --task <ticket>
+npm run harness -- orchestrate --finish <run-id>
+```
+
+실행 방식:
+
+| Mode | 동작 |
+|------|------|
+| Interactive Native | Codex 같은 host의 native adapter가 하위 에이전트 생성·메시지·대기·취소를 담당합니다. |
+| API Managed | `HARNESS_AGENT_MODE=api`에서 역할별 provider 요청을 실행하고 공통 artifact로 정규화합니다. |
+| Sequential Fallback | 하위 에이전트나 병렬 capability가 없으면 역할 요청을 하나씩 만들고, 호스트가 artifact를 기록한 뒤 다음 역할로 진행합니다. |
+
+Phase 1은 Planner/Architect와 Reviewer/Verifier 같은 읽기 중심 역할만 병렬화하고, workspace를 수정하는 Implementer는 하나로 제한합니다.
+
+Phase 2 multi-writer는 별도 opt-in입니다. 각 worker가 겹치지 않는 `owned_paths`, 동일한 base SHA, `.worktrees/orchestrate/<run-id>/` 아래의 격리 branch/worktree를 가져야 합니다. manifest, lockfile, DB migration, CI, scripts, 인프라, 보안 정책은 병렬 writer에 배정하지 않습니다.
+
+```bash
+npm run harness -- orchestrate --prepare-workers <run-id> --plan <worker-plan.json>
+npm run harness -- orchestrate --record-worker <run-id> --worker <id> --commit <sha>
+npm run harness -- orchestrate --integrate <run-id> --approve-risk
+npm run harness -- orchestrate --begin-review <run-id>
+npm run harness -- orchestrate --promote <run-id> --approve-risk
+```
+
+다음 항목은 자동 통합하지 않고 사용자 승인을 기다립니다.
+
+- DB, dependency, CI/build, scripts, 인프라, 인증/권한/보안 변경
+- 파일 삭제 또는 이름 변경
+- 비용이 발생하는 외부 API 또는 secret 접근
+- worker 결과 통합, commit, push, PR merge
+- stale base, 소유 경로 이탈, 검증 실패, 통합 충돌
+
+승인된 결과도 integration branch에서 다시 검증해야 합니다.
+
+```bash
+npm run harness -- verify --full
+npm run harness -- complete-task <ticket>
+```
+
+worker별 검증이나 `verify --quick`은 최종 완료 조건이 아닙니다. 현재 통합 콘텐츠와 일치하는 `verify --full` 성공 지문이 있어야 `complete-task`가 허용됩니다.
 
 ### Git Hooks (커밋 시 자동 실행)
 | Hook | 검사 항목 |

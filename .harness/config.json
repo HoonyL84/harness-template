@@ -17,6 +17,13 @@
     "retry_max_ms": 30000,
     "max_provider_requests": 12
   },
+  "multi_agent": {
+    "enabled": false,
+    "default_mode": "sequential",
+    "adapter": "auto",
+    "max_workers": 2,
+    "allow_multi_writer": false
+  },
   "auto_fix": {
     "allowed_roots": ["src", "app", "lib", "test", "tests", "__tests__"],
     "forbidden_segments": [".git", ".github", ".harness", ".venv", "build", "coverage", "dist", "docs", "evals", "infra", "memory", "migrations", "node_modules", "observability", "prompts", "scripts", "target", "terraform", "tools", "vendor", "venv"]

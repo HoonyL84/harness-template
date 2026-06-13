@@ -9,13 +9,17 @@ const { spawnSync } = require("child_process");
 const { runAutonomySoak } = require("./autonomy-utils");
 const { createCleanupManifest, findGeneratedPaths, isCleanupManifestValid } = require("./cleanup-utils");
 const { createConfigLoader, isPlainObject } = require("./config");
+const { commandOrchestrate, requireTaskOrchestrationReady } = require("./orchestration-command");
 const { inferQuickMappings, selectQuickCommands, tokenizeCommand } = require("./verify-utils");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 process.chdir(ROOT);
 
 const VALID_TYPES = new Set(["feat", "fix", "refactor", "docs", "chore", "test", "experiment"]);
-const VALID_ROLES = new Set(["planner", "architect", "implementer", "reviewer", "verifier", "recorder", "memory", "release"]);
+const VALID_ROLES = new Set([
+  "orchestrator", "planner", "architect", "implementer", "reviewer",
+  "verifier", "recorder", "memory", "release"
+]);
 const AUTO_FIX_ALLOWED_EXTENSIONS = new Set([
   ".c", ".cc", ".cpp", ".cs", ".css", ".go", ".h", ".hpp", ".html",
   ".java", ".js", ".jsx", ".kt", ".php", ".py", ".rb", ".rs", ".scss",
@@ -554,9 +558,16 @@ async function commandCheck() {
 
   const mode = process.env.HARNESS_AGENT_MODE || "interactive";
   const provider = process.env.AI_PROVIDER || "openai";
+  const multiAgent = loadConfig().multiAgent;
 
   if (["interactive", "api"].includes(mode)) pass(`HARNESS_AGENT_MODE=${mode}`);
   else bad("HARNESS_AGENT_MODE must be interactive or api");
+  if (multiAgent.enabled) warn(`HARNESS_MULTI_AGENT_ENABLED=true (${multiAgent.defaultMode}, opt-in)`);
+  else pass("HARNESS_MULTI_AGENT_ENABLED=false (safe default)");
+  pass(`HARNESS_AGENT_ADAPTER=${multiAgent.adapter}`);
+  pass(`HARNESS_MULTI_AGENT_MAX_WORKERS=${multiAgent.maxWorkers}`);
+  if (multiAgent.allowMultiWriter) warn("HARNESS_MULTI_AGENT_ALLOW_MULTI_WRITER=true (high coordination risk)");
+  else pass("HARNESS_MULTI_AGENT_ALLOW_MULTI_WRITER=false (single writer)");
 
   const autonomyLevel = String(process.env.HARNESS_AUTONOMY_LEVEL || "4.5");
   if (autonomyLevel === "4.5") pass("HARNESS_AUTONOMY_LEVEL=4.5 (safe default)");
@@ -714,6 +725,13 @@ function commandCompleteTask(args) {
   const { positional, options } = parseArgs(args);
   const [name] = positional;
   if (!name) fail("Usage: node tools/harness-cli/index.js complete-task <name> [--force]");
+  if (!options.force) {
+    try {
+      requireTaskOrchestrationReady(ROOT, name);
+    } catch (error) {
+      fail(error.message);
+    }
+  }
 
   const verifyRel = `observability/metrics/${name}.verify.json`;
   const startRel = `observability/metrics/${name}.start.json`;
@@ -1147,6 +1165,11 @@ function commandValidatePrompts() {
   });
   renderPrompt("prompts/templates/l5-planner.md");
   renderPrompt("prompts/templates/l5-implementer.md", { TICKET: "example-ticket" });
+  for (const role of VALID_ROLES) {
+    if (!readText(`prompts/system/roles/${role}.md`).trim()) {
+      fail(`Role prompt is missing or empty: ${role}`);
+    }
+  }
   log("Prompt templates passed.");
 }
 
@@ -2379,6 +2402,13 @@ Usage:
   node tools/harness-cli/index.js scan-drift
   node tools/harness-cli/index.js recover
   node tools/harness-cli/index.js autonomy [--status] [--verify-current] [--approve-risk] [--iterations N]
+  node tools/harness-cli/index.js orchestrate <ticket> [--mode auto|native|api|sequential]
+  node tools/harness-cli/index.js orchestrate --capabilities
+  node tools/harness-cli/index.js orchestrate --status <run-id>
+  node tools/harness-cli/index.js orchestrate --resume <run-id>
+  node tools/harness-cli/index.js orchestrate --begin-review <run-id>
+  node tools/harness-cli/index.js orchestrate --promote <run-id> --approve-risk
+  node tools/harness-cli/index.js orchestrate --finish <run-id>
   node tools/harness-cli/index.js cleanup [--dry-run] [--approve <id>]
   node tools/harness-cli/index.js validate-auto-fix <patch-file>
   node tools/harness-cli/index.js validate-l5-patch <patch-file>
@@ -2416,6 +2446,7 @@ async function main() {
     "scan-drift": { requiresGit: true },
     "recover": { requiresGit: true },
     "autonomy": { requiresGit: true },
+    "orchestrate": { requiresGit: false },
     "cleanup": { requiresGit: true },
     "validate-auto-fix": { requiresGit: false },
     "validate-l5-patch": { requiresGit: false },
@@ -2470,6 +2501,43 @@ async function main() {
       break;
     case "autonomy":
       await commandAutonomy(args);
+      break;
+    case "orchestrate":
+      {
+        const orchestrationArgs = parseArgs(args);
+        if (!orchestrationArgs.options.capabilities) checkGitPreflight();
+      }
+      await commandOrchestrate({
+        root: ROOT,
+        args,
+        config: {
+          ...loadConfig().multiAgent,
+          isFullVerifyCurrent: (task) => {
+            const verifyRel = `observability/metrics/${task}.verify.json`;
+            if (!exists(verifyRel)) return false;
+            const verify = JSON.parse(readText(verifyRel));
+            const full = getFullVerifyRecord(verify);
+            if (full.result !== "pass") return false;
+            try {
+              requireCurrentVerifiedContent(task, full);
+              return true;
+            } catch {
+              return false;
+            }
+          }
+        },
+        env: process.env,
+        log,
+        invokeAgent: async (role, prompt) => {
+          const response = await commandRunAgent([
+            "--type", role === "architect" ? "architect" : "default",
+            "--role", role,
+            "--task", resolveTaskId({ strict: true }),
+            prompt
+          ]);
+          return extractJson(response);
+        }
+      });
       break;
     case "validate-auto-fix":
       commandValidateAutoFix(args);

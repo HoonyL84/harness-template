@@ -24,6 +24,8 @@ const IMMUTABLE_AUTO_FIX_FORBIDDEN_FILES = [".env", ".env.local", "package.json"
 const IMMUTABLE_AUTO_FIX_FORBIDDEN_SEGMENTS = [".git", ".harness", "node_modules", "tools"];
 const IMMUTABLE_L5_PROTECTED_SEGMENTS = [".git", ".harness", "observability", "node_modules"];
 const IMMUTABLE_L5_HIGH_RISK_FILES = [".env", ".env.local", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
+const MULTI_AGENT_MODES = new Set(["auto", "native", "api", "sequential"]);
+const MULTI_AGENT_ADAPTERS = new Set(["auto", "native-host", "provider-api", "sequential-local"]);
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -50,7 +52,7 @@ function validateConfigSchema(config, fail) {
     fail(`Unsupported config_version in .harness/config.json: ${config.config_version}`);
   }
 
-  for (const section of ["verify", "limits", "api", "auto_fix", "l5"]) {
+  for (const section of ["verify", "limits", "api", "auto_fix", "l5", "multi_agent"]) {
     if (config[section] !== undefined && !isPlainObject(config[section])) {
       fail(`${section} must be a JSON object.`);
     }
@@ -90,6 +92,32 @@ function validateConfigSchema(config, fail) {
       }
     }
   }
+
+  if (config.multi_agent?.enabled !== undefined && typeof config.multi_agent.enabled !== "boolean") {
+    fail("multi_agent.enabled must be a boolean.");
+  }
+  if (config.multi_agent?.default_mode !== undefined
+      && !MULTI_AGENT_MODES.has(config.multi_agent.default_mode)) {
+    fail(`multi_agent.default_mode must be one of ${Array.from(MULTI_AGENT_MODES).join(", ")}.`);
+  }
+  if (config.multi_agent?.adapter !== undefined
+      && !MULTI_AGENT_ADAPTERS.has(config.multi_agent.adapter)) {
+    fail(`multi_agent.adapter must be one of ${Array.from(MULTI_AGENT_ADAPTERS).join(", ")}.`);
+  }
+  if (config.multi_agent?.max_workers !== undefined) {
+    const maxWorkers = requirePositiveNumber(
+      config.multi_agent.max_workers,
+      "multi_agent.max_workers",
+      fail
+    );
+    if (!Number.isInteger(maxWorkers) || maxWorkers > 8) {
+      fail("multi_agent.max_workers must be an integer between 1 and 8.");
+    }
+  }
+  if (config.multi_agent?.allow_multi_writer !== undefined
+      && typeof config.multi_agent.allow_multi_writer !== "boolean") {
+    fail("multi_agent.allow_multi_writer must be a boolean.");
+  }
 }
 
 function createConfigLoader({ root, argv = process.argv, env = process.env, fail }) {
@@ -115,6 +143,20 @@ function createConfigLoader({ root, argv = process.argv, env = process.env, fail
       requirePositiveNumber(env[envName] || configValue || fallback, envName, fail, options);
     const normalize = (value) => value.replace(/\\/g, "/").toLowerCase().trim();
     const union = (immutable, configured) => new Set([...immutable, ...configured.map(normalize)]);
+    const booleanSetting = (envName, configValue, fallback) => {
+      const raw = env[envName];
+      if (raw === undefined || raw === "") return configValue ?? fallback;
+      if (raw === "true") return true;
+      if (raw === "false") return false;
+      fail(`${envName} must be true or false.`);
+    };
+    const enumSetting = (envName, configValue, fallback, allowed) => {
+      const value = String(env[envName] || configValue || fallback);
+      if (!allowed.has(value)) {
+        fail(`${envName} must be one of ${Array.from(allowed).join(", ")}.`);
+      }
+      return value;
+    };
 
     cachedConfig = {
       verify: {
@@ -155,8 +197,41 @@ function createConfigLoader({ root, argv = process.argv, env = process.env, fail
           IMMUTABLE_L5_HIGH_RISK_FILES,
           fileConfig.l5?.high_risk_files || DEFAULT_PROTECTED_FILES
         )
+      },
+      multiAgent: {
+        enabled: booleanSetting(
+          "HARNESS_MULTI_AGENT_ENABLED",
+          fileConfig.multi_agent?.enabled,
+          false
+        ),
+        defaultMode: enumSetting(
+          "HARNESS_MULTI_AGENT_MODE",
+          fileConfig.multi_agent?.default_mode,
+          "sequential",
+          MULTI_AGENT_MODES
+        ),
+        adapter: enumSetting(
+          "HARNESS_AGENT_ADAPTER",
+          fileConfig.multi_agent?.adapter,
+          "auto",
+          MULTI_AGENT_ADAPTERS
+        ),
+        maxWorkers: numberSetting(
+          "HARNESS_MULTI_AGENT_MAX_WORKERS",
+          fileConfig.multi_agent?.max_workers,
+          "2"
+        ),
+        allowMultiWriter: booleanSetting(
+          "HARNESS_MULTI_AGENT_ALLOW_MULTI_WRITER",
+          fileConfig.multi_agent?.allow_multi_writer,
+          false
+        )
       }
     };
+    if (!Number.isInteger(cachedConfig.multiAgent.maxWorkers)
+        || cachedConfig.multiAgent.maxWorkers > 8) {
+      fail("HARNESS_MULTI_AGENT_MAX_WORKERS must be an integer between 1 and 8.");
+    }
     return cachedConfig;
   };
 }
