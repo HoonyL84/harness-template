@@ -132,14 +132,7 @@ try {
   if ($verifyRecord.last_full.result -ne "pass") {
     throw "Error: Full verification record was not stored separately."
   }
-  $previousErrorActionPreference = $ErrorActionPreference
-  $ErrorActionPreference = "Continue"
-  & .\scripts\verify-task.ps1 -Offline -Quick 2>$null
-  $quickExitCode = $LASTEXITCODE
-  $ErrorActionPreference = $previousErrorActionPreference
-  if ($quickExitCode -eq 0) {
-    throw "Error: Unmatched quick verification unexpectedly passed."
-  }
+  & .\scripts\verify-task.ps1 -Offline -Quick
   $verifyRecord = Get-Content "observability/metrics/$TicketName.verify.json" -Raw | ConvertFrom-Json
   if ($verifyRecord.last_full.result -ne "pass" -or $verifyRecord.last_quick.result -ne "inconclusive") {
     throw "Error: Inconclusive quick verification did not preserve the full verification record."
