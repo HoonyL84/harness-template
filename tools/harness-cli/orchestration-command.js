@@ -78,16 +78,30 @@ function resolveRepositoryFile(root, value, label) {
 
 function saveRunState(root, state, patch = {}) {
   const filePath = statePath(root, state.run_id);
-  if (fs.existsSync(filePath)) {
-    const current = readState(filePath);
-    if (!state.state_fingerprint || current.state_fingerprint !== state.state_fingerprint) {
-      throw new Error("Orchestration state changed concurrently. Reload the run and retry.");
+  const lockPath = `${filePath}.lock`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  let lock;
+  try {
+    lock = fs.openSync(lockPath, "wx");
+    if (fs.existsSync(filePath)) {
+      const current = readState(filePath);
+      if (!state.state_fingerprint || current.state_fingerprint !== state.state_fingerprint) {
+        throw new Error("Orchestration state changed concurrently. Reload the run and retry.");
+      }
     }
+    const next = { ...state, ...patch, updated_at: new Date().toISOString() };
+    next.state_fingerprint = stateFingerprint({ ...next, state_fingerprint: undefined });
+    writeJsonAtomic(filePath, next);
+    return next;
+  } catch (error) {
+    if (error.code === "EEXIST") {
+      throw new Error("Orchestration state is being updated by another process. Retry shortly.");
+    }
+    throw error;
+  } finally {
+    if (lock !== undefined) fs.closeSync(lock);
+    if (lock !== undefined && fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
   }
-  const next = { ...state, ...patch, updated_at: new Date().toISOString() };
-  next.state_fingerprint = stateFingerprint({ ...next, state_fingerprint: undefined });
-  writeJsonAtomic(filePath, next);
-  return next;
 }
 
 function listTaskRuns(root, task) {
@@ -144,17 +158,40 @@ function writeRoleRequest(root, state, role, sequence) {
   };
 }
 
-function artifactPrompt(root, state, role) {
+function artifactPrompt(root, state, role, buildReviewEvidence) {
   const ticketPath = path.join(root, ".harness", "tasks", "active", `${state.task}.md`);
   const ticket = fs.readFileSync(ticketPath, "utf8");
-  return [
+  const lines = [
     `Act as the ${role} for this Harness task.`,
     "Return JSON only with keys:",
     "role, status, summary, assumptions, findings, proposed_actions, owned_paths, approval_required.",
     "Do not modify files. Identify approval boundaries explicitly.",
     "",
     ticket
-  ].join("\n");
+  ];
+  if (["reviewer", "verifier"].includes(role)) {
+    if (!state.review_target?.head_commit) {
+      throw new Error("Review target metadata is required before invoking review roles.");
+    }
+    const diff = typeof buildReviewEvidence === "function"
+      ? buildReviewEvidence(state)
+      : runGit(root, [
+          "diff", "--binary", `${state.base_commit}..${state.review_target.head_commit}`
+        ]).stdout;
+    if (Buffer.byteLength(diff, "utf8") > 200 * 1024) {
+      throw new Error("Provider review diff exceeds 200KB. Use a tool-enabled native reviewer.");
+    }
+    lines.push(
+      "",
+      "Review target:",
+      JSON.stringify(state.review_target, null, 2),
+      "",
+      `Base commit: ${state.base_commit}`,
+      "Committed diff:",
+      diff || "(no committed diff)"
+    );
+  }
+  return lines.join("\n");
 }
 
 function recordArtifact(root, state, role, artifactInput) {
@@ -340,7 +377,8 @@ function assertSafeWorkerChanges(root, state, worker, commitSha) {
   const changedPaths = entries.flatMap((entry) => entry.paths);
   for (const changedPath of changedPaths) {
     const classification = classifyOwnedPath(changedPath);
-    if (!classification.safe) {
+    if (!classification.safe
+        && !(classification.approvalRequired && state.approved_risk_digest)) {
       throw new Error(`Worker ${worker.id} changed protected or high-risk path: ${changedPath}`);
     }
   }
@@ -643,7 +681,8 @@ async function commandOrchestrate({
         : ["reviewer", "verifier"];
       if (state.adapter === "provider-api" && typeof invokeAgent === "function") {
         const settled = await Promise.allSettled(
-          reviewRoleNames.map((role) => invokeAgent(role, artifactPrompt(root, state, role)))
+          reviewRoleNames.map((role) =>
+            invokeAgent(role, artifactPrompt(root, state, role, config.buildReviewEvidence)))
         );
         state = saveRunState(root, state, { phase: "review", status: "running" });
         for (let index = 0; index < settled.length; index += 1) {
@@ -783,7 +822,8 @@ async function commandOrchestrate({
 
   const roles = ["planner", "architect"];
   if (detected.adapter === "provider-api" && typeof invokeAgent === "function") {
-    const invoke = (role) => invokeAgent(role, artifactPrompt(root, state, role))
+    const invoke = (role) =>
+      invokeAgent(role, artifactPrompt(root, state, role, config.buildReviewEvidence))
       .then((result) => ({ role, result }));
     let results;
     if (mode === "parallel") {

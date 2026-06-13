@@ -221,36 +221,60 @@ test("stale state writers are rejected instead of overwriting newer role results
   );
 });
 
+test("active state lock rejects concurrent writers", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-lock-"));
+  const state = createOrchestrationState({
+    runId: "demo-20260613T000008Z",
+    task: "demo",
+    mode: "parallel",
+    adapter: "native-host",
+    baseCommit: "abc123",
+    parentBranch: "codex/demo"
+  });
+  const stateFile = path.join(
+    root, "observability", "orchestration", state.run_id, "state.json"
+  );
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(`${stateFile}.lock`, "held", "utf8");
+
+  assert.throws(() => saveRunState(root, state), /being updated by another process/);
+});
+
 test("provider review invokes reviewer and verifier through the adapter", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-provider-review-"));
   const runId = "demo-20260613T000007Z";
   fs.mkdirSync(path.join(root, ".harness", "tasks", "active"), { recursive: true });
   fs.writeFileSync(path.join(root, ".harness", "tasks", "active", "demo.md"), "# demo\n");
+  const baseCommit = "abc123";
+  const reviewedHead = "def456";
   saveRunState(root, {
     ...createOrchestrationState({
       runId,
       task: "demo",
       mode: "parallel",
       adapter: "provider-api",
-      baseCommit: "abc123",
+      baseCommit,
       parentBranch: "codex/demo"
     }),
     phase: "implementation",
     status: "awaiting_implementation"
   });
   const invoked = [];
+  const prompts = [];
 
   const state = await commandOrchestrate({
     root,
     args: ["--begin-review", runId],
     config: config({
       getCurrentBranch: () => "codex/demo",
-      getCurrentHead: () => "def456"
+      getCurrentHead: () => reviewedHead,
+      buildReviewEvidence: () => "diff --git a/example.txt b/example.txt\n+reviewed"
     }),
     env: { HARNESS_AGENT_MODE: "api" },
     log: () => {},
-    invokeAgent: async (role) => {
+    invokeAgent: async (role, prompt) => {
       invoked.push(role);
+      prompts.push(prompt);
       return { role, status: "completed" };
     }
   });
@@ -258,5 +282,7 @@ test("provider review invokes reviewer and verifier through the adapter", async 
   assert.deepEqual(invoked.sort(), ["reviewer", "verifier"]);
   assert.equal(state.phase, "verification");
   assert.equal(state.status, "full_verify_required");
-  assert.equal(state.review_target.head_commit, "def456");
+  assert.equal(state.review_target.head_commit, reviewedHead);
+  assert.ok(prompts.every((prompt) => prompt.includes("reviewed")));
+  assert.ok(prompts.every((prompt) => prompt.includes(reviewedHead)));
 });
