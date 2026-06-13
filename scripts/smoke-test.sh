@@ -121,9 +121,12 @@ if ! node -e "const r=require('./observability/metrics/$TICKET_NAME.verify.json'
   echo "Error: Full verification record was not stored separately."
   exit 1
 fi
-bash scripts/verify-task.sh --offline --quick
-if ! node -e "const r=require('./observability/metrics/$TICKET_NAME.verify.json'); if(r.last_full?.result!=='pass'||r.last_quick?.result!=='pass') process.exit(1)"; then
-  echo "Error: Inferred quick verification did not pass while preserving the full verification record."
+if bash scripts/verify-task.sh --offline --quick >/dev/null 2>&1; then
+  echo "Error: Unmatched quick verification unexpectedly passed."
+  exit 1
+fi
+if ! node -e "const r=require('./observability/metrics/$TICKET_NAME.verify.json'); if(r.last_full?.result!=='pass'||r.last_quick?.result!=='inconclusive') process.exit(1)"; then
+  echo "Error: Inconclusive quick verification did not preserve the full verification record."
   exit 1
 fi
 

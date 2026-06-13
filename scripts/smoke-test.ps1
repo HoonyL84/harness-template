@@ -132,10 +132,17 @@ try {
   if ($verifyRecord.last_full.result -ne "pass") {
     throw "Error: Full verification record was not stored separately."
   }
-  & .\scripts\verify-task.ps1 -Offline -Quick
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  & .\scripts\verify-task.ps1 -Offline -Quick 2>$null
+  $quickExitCode = $LASTEXITCODE
+  $ErrorActionPreference = $previousErrorActionPreference
+  if ($quickExitCode -eq 0) {
+    throw "Error: Unmatched quick verification unexpectedly passed."
+  }
   $verifyRecord = Get-Content "observability/metrics/$TicketName.verify.json" -Raw | ConvertFrom-Json
-  if ($verifyRecord.last_full.result -ne "pass" -or $verifyRecord.last_quick.result -ne "pass") {
-    throw "Error: Inferred quick verification did not pass while preserving the full verification record."
+  if ($verifyRecord.last_full.result -ne "pass" -or $verifyRecord.last_quick.result -ne "inconclusive") {
+    throw "Error: Inconclusive quick verification did not preserve the full verification record."
   }
 
   Write-Host "[Smoke Test] 5. Checking stale fingerprint rejection..."
