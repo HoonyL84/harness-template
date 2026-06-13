@@ -161,6 +161,43 @@ function requireTaskOrchestrationReady(root, task) {
   }
 }
 
+function runtimeNow(config) {
+  return typeof config.now === "function" ? new Date(config.now()) : new Date();
+}
+
+function requireRuntimeBudget(root, state, config) {
+  const deadline = Date.parse(state.budget?.deadline_at || "");
+  if (!Number.isFinite(deadline)) {
+    throw new Error("Orchestration runtime budget metadata is missing.");
+  }
+  if (runtimeNow(config).getTime() > deadline) {
+    saveRunState(root, state, {
+      status: "budget_exhausted",
+      budget_exhausted_reason: "runtime"
+    });
+    throw new Error("Orchestration runtime budget is exhausted.");
+  }
+}
+
+function reserveProviderBudget(root, state, count, config) {
+  requireRuntimeBudget(root, state, config);
+  const used = Number(state.budget?.api_calls || 0);
+  const limit = Number(state.budget?.max_api_calls || 0);
+  if (!Number.isInteger(count) || count < 1 || !Number.isFinite(limit) || used + count > limit) {
+    saveRunState(root, state, {
+      status: "budget_exhausted",
+      budget_exhausted_reason: "api_calls"
+    });
+    throw new Error(`Orchestration API call budget exhausted (${used}/${limit}).`);
+  }
+  return saveRunState(root, state, {
+    budget: {
+      ...state.budget,
+      api_calls: used + count
+    }
+  });
+}
+
 function writeRoleRequest(root, state, role, sequence) {
   const relativeArtifact = `artifacts/${role}-${sequence}.json`;
   const request = {
@@ -576,6 +613,10 @@ function printStatus(log, state) {
   log(`Phase    : ${state.phase}`);
   log(`Status   : ${state.status}`);
   log(`Base     : ${state.base_commit}`);
+  if (state.budget) {
+    log(`API calls: ${state.budget.api_calls}/${state.budget.max_api_calls}`);
+    log(`Deadline : ${state.budget.deadline_at}`);
+  }
   if (state.approval_required?.length) {
     log(`Approval : ${state.approval_required.join(", ")}`);
   }
@@ -627,6 +668,7 @@ async function commandOrchestrate({
       log(`Reason         : ${action.reason}`);
       return action;
     }
+    requireRuntimeBudget(root, state, effectiveConfig);
     if (options.record) {
       if (!options.role || !options.artifact) {
         throw new Error("--record requires --role <role> and --artifact <path>.");
@@ -720,6 +762,7 @@ async function commandOrchestrate({
         ? ["reviewer"]
         : ["reviewer", "verifier"];
       if (state.adapter === "provider-api" && typeof invokeAgent === "function") {
+        state = reserveProviderBudget(root, state, reviewRoleNames.length, effectiveConfig);
         const settled = await Promise.allSettled(
           reviewRoleNames.map((role) =>
             invokeAgent(role, artifactPrompt(root, state, role, config.buildReviewEvidence)))
@@ -862,12 +905,19 @@ async function commandOrchestrate({
     mode,
     adapter: detected.adapter,
     baseCommit: baseline.baseCommit,
-    parentBranch: baseline.branch
+    parentBranch: baseline.branch,
+    maxApiCalls: Math.min(
+      Number(effectiveConfig.maxApiCalls || 6),
+      Number(effectiveConfig.maxProviderRequests || Number.POSITIVE_INFINITY)
+    ),
+    maxRuntimeMinutes: Number(effectiveConfig.maxRuntimeMinutes || 30),
+    now: runtimeNow(effectiveConfig)
   });
-  saveRunState(root, state);
+  state = saveRunState(root, state);
 
   const roles = ["planner", "architect"];
   if (detected.adapter === "provider-api" && typeof invokeAgent === "function") {
+    state = reserveProviderBudget(root, state, roles.length, effectiveConfig);
     const invoke = (role) =>
       invokeAgent(role, artifactPrompt(root, state, role, config.buildReviewEvidence))
       .then((result) => ({ role, result }));
@@ -926,5 +976,6 @@ module.exports = {
   recordArtifact,
   recordWorker,
   requireTaskOrchestrationReady,
+  reserveProviderBudget,
   saveRunState
 };

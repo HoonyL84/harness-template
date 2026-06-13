@@ -185,6 +185,14 @@ test("recovery actions stop on drift and resume safe phases", () => {
     nextRecoveryAction({ ...state, status: "approval_required" }).action,
     "approval_required"
   );
+  assert.equal(
+    nextRecoveryAction({
+      ...state,
+      status: "budget_exhausted",
+      budget_exhausted_reason: "runtime"
+    }).action,
+    "budget_exhausted"
+  );
 });
 
 test("multi_agent schema rejects invalid values", () => {

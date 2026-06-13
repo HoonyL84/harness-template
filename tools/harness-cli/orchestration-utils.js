@@ -298,8 +298,11 @@ function createOrchestrationState({
   adapter,
   baseCommit,
   parentBranch,
+  maxApiCalls = 6,
+  maxRuntimeMinutes = 30,
   now = new Date()
 }) {
+  const deadline = new Date(now.getTime() + maxRuntimeMinutes * 60 * 1000);
   return {
     schema_version: ORCHESTRATION_SCHEMA_VERSION,
     run_id: runId,
@@ -315,7 +318,13 @@ function createOrchestrationState({
     roles: [],
     workers: [],
     approval_required: [],
-    conflicts: []
+    conflicts: [],
+    budget: {
+      api_calls: 0,
+      max_api_calls: maxApiCalls,
+      started_at: now.toISOString(),
+      deadline_at: deadline.toISOString()
+    }
   };
 }
 
@@ -354,6 +363,12 @@ function nextRecoveryAction(state, current = {}) {
   }
   if (state.status === "integration_conflict") {
     return { action: "manual_review", reason: "integration conflict requires manual resolution" };
+  }
+  if (state.status === "budget_exhausted") {
+    return {
+      action: "budget_exhausted",
+      reason: state.budget_exhausted_reason || "orchestration budget exhausted"
+    };
   }
   if (state.phase === "planning") return { action: "resume_planning", reason: "planning is incomplete" };
   if (state.phase === "awaiting_host") return { action: "dispatch_host_roles", reason: "host role results are pending" };

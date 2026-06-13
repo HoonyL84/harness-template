@@ -7,8 +7,10 @@ const path = require("node:path");
 const test = require("node:test");
 const {
   commandOrchestrate,
+  readRunState,
   recordArtifact,
   requireTaskOrchestrationReady,
+  reserveProviderBudget,
   saveRunState
 } = require("../../tools/harness-cli/orchestration-command");
 const { createOrchestrationState } = require("../../tools/harness-cli/orchestration-utils");
@@ -20,6 +22,9 @@ function config(overrides = {}) {
     adapter: "auto",
     maxWorkers: 2,
     allowMultiWriter: false,
+    maxApiCalls: 6,
+    maxRuntimeMinutes: 30,
+    maxProviderRequests: 12,
     ...overrides
   };
 }
@@ -376,4 +381,143 @@ test("provider review invokes reviewer and verifier through the adapter", async 
   assert.equal(state.review_target.head_commit, reviewedHead);
   assert.ok(prompts.every((prompt) => prompt.includes("reviewed")));
   assert.ok(prompts.every((prompt) => prompt.includes(reviewedHead)));
+});
+
+test("provider review fails closed before exceeding the shared API budget", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-budget-"));
+  const runId = "demo-20260613T000012Z";
+  fs.mkdirSync(path.join(root, ".harness", "tasks", "active"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".harness", "tasks", "active", "demo.md"), "# demo\n");
+  saveRunState(root, {
+    ...createOrchestrationState({
+      runId,
+      task: "demo",
+      mode: "parallel",
+      adapter: "provider-api",
+      baseCommit: "abc123",
+      parentBranch: "codex/demo",
+      maxApiCalls: 1
+    }),
+    phase: "implementation",
+    status: "awaiting_implementation"
+  });
+  let invoked = 0;
+
+  await assert.rejects(() => commandOrchestrate({
+    root,
+    args: ["--begin-review", runId],
+    config: config({
+      getCurrentBranch: () => "codex/demo",
+      getCurrentHead: () => "def456",
+      getReviewWorktreeStatus: () => ""
+    }),
+    env: { HARNESS_AGENT_MODE: "api" },
+    log: () => {},
+    invokeAgent: async () => {
+      invoked += 1;
+      return {};
+    }
+  }), /API call budget exhausted/);
+
+  assert.equal(invoked, 0);
+  const exhausted = readRunState(root, runId);
+  assert.equal(exhausted.budget.api_calls, 0);
+  assert.equal(exhausted.status, "budget_exhausted");
+  assert.equal(exhausted.budget_exhausted_reason, "api_calls");
+});
+
+test("planning and review reservations share one persistent API budget", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-shared-budget-"));
+  let state = saveRunState(root, createOrchestrationState({
+    runId: "demo-20260613T000015Z",
+    task: "demo",
+    mode: "parallel",
+    adapter: "provider-api",
+    baseCommit: "abc123",
+    parentBranch: "codex/demo",
+    maxApiCalls: 3
+  }));
+
+  state = reserveProviderBudget(root, state, 2, config());
+  assert.equal(state.budget.api_calls, 2);
+  assert.throws(
+    () => reserveProviderBudget(root, state, 2, config()),
+    /API call budget exhausted/
+  );
+  const exhausted = readRunState(root, state.run_id);
+  assert.equal(exhausted.budget.api_calls, 2);
+  assert.equal(exhausted.status, "budget_exhausted");
+});
+
+test("failed provider calls still consume the persistent budget", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-failed-budget-"));
+  const runId = "demo-20260613T000013Z";
+  fs.mkdirSync(path.join(root, ".harness", "tasks", "active"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".harness", "tasks", "active", "demo.md"), "# demo\n");
+  saveRunState(root, {
+    ...createOrchestrationState({
+      runId,
+      task: "demo",
+      mode: "parallel",
+      adapter: "provider-api",
+      baseCommit: "abc123",
+      parentBranch: "codex/demo",
+      maxApiCalls: 2
+    }),
+    phase: "implementation",
+    status: "awaiting_implementation"
+  });
+
+  await commandOrchestrate({
+    root,
+    args: ["--begin-review", runId],
+    config: config({
+      getCurrentBranch: () => "codex/demo",
+      getCurrentHead: () => "def456",
+      getReviewWorktreeStatus: () => "",
+      buildReviewEvidence: () => "diff"
+    }),
+    env: { HARNESS_AGENT_MODE: "api" },
+    log: () => {},
+    invokeAgent: async () => {
+      throw new Error("provider unavailable");
+    }
+  });
+
+  assert.equal(readRunState(root, runId).budget.api_calls, 2);
+});
+
+test("runtime expiry blocks progress but keeps status and recovery available", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-runtime-"));
+  const runId = "demo-20260613T000014Z";
+  saveRunState(root, createOrchestrationState({
+    runId,
+    task: "demo",
+    mode: "sequential",
+    adapter: "sequential-local",
+    baseCommit: "abc123",
+    parentBranch: "codex/demo",
+    maxRuntimeMinutes: 1,
+    now: new Date("2026-06-13T00:00:00.000Z")
+  }));
+  const expiredConfig = config({ now: () => "2026-06-13T00:02:00.000Z" });
+
+  await assert.rejects(() => commandOrchestrate({
+    root,
+    args: ["--approve", runId],
+    config: expiredConfig,
+    env: {},
+    log: () => {}
+  }), /runtime budget is exhausted/);
+
+  const status = await commandOrchestrate({
+    root,
+    args: ["--status", runId],
+    config: expiredConfig,
+    env: {},
+    log: () => {}
+  });
+  assert.equal(status.run_id, runId);
+  assert.equal(status.status, "budget_exhausted");
+  assert.equal(status.budget_exhausted_reason, "runtime");
 });

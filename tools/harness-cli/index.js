@@ -2515,6 +2515,9 @@ async function main() {
         args,
         config: {
           ...loadConfig().multiAgent,
+          maxApiCalls: loadConfig().limits.maxApiCalls,
+          maxRuntimeMinutes: loadConfig().limits.maxRuntimeMinutes,
+          maxProviderRequests: loadConfig().api.maxProviderRequests,
           isFullVerifyCurrent: (task) => {
             const verifyRel = `observability/metrics/${task}.verify.json`;
             if (!exists(verifyRel)) return false;
