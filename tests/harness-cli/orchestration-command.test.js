@@ -240,6 +240,30 @@ test("active state lock rejects concurrent writers", () => {
   assert.throws(() => saveRunState(root, state), /being updated by another process/);
 });
 
+test("stale lock from a dead process is safely reclaimed", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-stale-lock-"));
+  const state = createOrchestrationState({
+    runId: "demo-20260613T000009Z",
+    task: "demo",
+    mode: "parallel",
+    adapter: "native-host",
+    baseCommit: "abc123",
+    parentBranch: "codex/demo"
+  });
+  const stateFile = path.join(
+    root, "observability", "orchestration", state.run_id, "state.json"
+  );
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(`${stateFile}.lock`, JSON.stringify({
+    pid: 2147483647,
+    created_at: "2000-01-01T00:00:00.000Z"
+  }));
+
+  const saved = saveRunState(root, state);
+  assert.equal(saved.status, "running");
+  assert.equal(fs.existsSync(`${stateFile}.lock`), false);
+});
+
 test("provider review invokes reviewer and verifier through the adapter", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-provider-review-"));
   const runId = "demo-20260613T000007Z";
@@ -268,6 +292,7 @@ test("provider review invokes reviewer and verifier through the adapter", async 
     config: config({
       getCurrentBranch: () => "codex/demo",
       getCurrentHead: () => reviewedHead,
+      getReviewWorktreeStatus: () => "",
       buildReviewEvidence: () => "diff --git a/example.txt b/example.txt\n+reviewed"
     }),
     env: { HARNESS_AGENT_MODE: "api" },

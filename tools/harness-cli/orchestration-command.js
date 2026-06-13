@@ -81,8 +81,39 @@ function saveRunState(root, state, patch = {}) {
   const lockPath = `${filePath}.lock`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   let lock;
+  const tryAcquireLock = () => {
+    try {
+      const descriptor = fs.openSync(lockPath, "wx");
+      fs.writeFileSync(descriptor, JSON.stringify({
+        pid: process.pid,
+        created_at: new Date().toISOString()
+      }));
+      return descriptor;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let stale = false;
+      try {
+        const metadata = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+        const ageMs = Date.now() - Date.parse(metadata.created_at);
+        let ownerAlive = true;
+        try {
+          process.kill(Number(metadata.pid), 0);
+        } catch (processError) {
+          ownerAlive = processError.code === "EPERM";
+        }
+        stale = Number.isFinite(ageMs) && ageMs > 10 * 60 * 1000 && !ownerAlive;
+      } catch {
+        stale = false;
+      }
+      if (!stale) {
+        throw new Error("Orchestration state is being updated by another process. Retry shortly.");
+      }
+      fs.unlinkSync(lockPath);
+      return fs.openSync(lockPath, "wx");
+    }
+  };
   try {
-    lock = fs.openSync(lockPath, "wx");
+    lock = tryAcquireLock();
     if (fs.existsSync(filePath)) {
       const current = readState(filePath);
       if (!state.state_fingerprint || current.state_fingerprint !== state.state_fingerprint) {
@@ -94,9 +125,6 @@ function saveRunState(root, state, patch = {}) {
     writeJsonAtomic(filePath, next);
     return next;
   } catch (error) {
-    if (error.code === "EEXIST") {
-      throw new Error("Orchestration state is being updated by another process. Retry shortly.");
-    }
     throw error;
   } finally {
     if (lock !== undefined) fs.closeSync(lock);
@@ -661,6 +689,15 @@ async function commandOrchestrate({
         : runGit(root, ["branch", "--show-current"]).stdout.trim();
       if (state.phase === "implementation" && currentBranch !== state.parent_branch) {
         throw new Error(`Single-writer review must start from parent branch ${state.parent_branch}.`);
+      }
+      const reviewWorktree = state.integration
+        ? path.resolve(root, state.integration.worktree)
+        : root;
+      const dirtyReviewTarget = typeof config.getReviewWorktreeStatus === "function"
+        ? config.getReviewWorktreeStatus(reviewWorktree)
+        : runGit(root, ["status", "--porcelain=v1"], { cwd: reviewWorktree }).stdout.trim();
+      if (dirtyReviewTarget) {
+        throw new Error("Review target must be clean and committed before review starts.");
       }
       const reviewTarget = state.integration
         ? {
