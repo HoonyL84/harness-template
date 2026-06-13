@@ -159,7 +159,8 @@ test("finish requires verification phase and a current full verify result", asyn
     config: config({
       isFullVerifyCurrent: () => false,
       getCurrentBranch: () => "codex/demo",
-      getCurrentHead: () => "abc123"
+      getCurrentHead: () => "abc123",
+      getReviewWorktreeStatus: () => ""
     }),
     env: {},
     log: () => {}
@@ -171,7 +172,8 @@ test("finish requires verification phase and a current full verify result", asyn
     config: config({
       isFullVerifyCurrent: () => true,
       getCurrentBranch: () => "codex/demo",
-      getCurrentHead: () => "abc123"
+      getCurrentHead: () => "abc123",
+      getReviewWorktreeStatus: () => ""
     }),
     env: {},
     log: () => {}
@@ -262,6 +264,70 @@ test("stale lock from a dead process is safely reclaimed", () => {
   const saved = saveRunState(root, state);
   assert.equal(saved.status, "running");
   assert.equal(fs.existsSync(`${stateFile}.lock`), false);
+});
+
+test("reclaimed locks retain owner metadata for future recovery", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-reclaimed-lock-"));
+  const state = createOrchestrationState({
+    runId: "demo-20260613T000010Z",
+    task: "demo",
+    mode: "parallel",
+    adapter: "native-host",
+    baseCommit: "abc123",
+    parentBranch: "codex/demo"
+  });
+  const stateFile = path.join(
+    root, "observability", "orchestration", state.run_id, "state.json"
+  );
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(`${stateFile}.lock`, JSON.stringify({
+    pid: 2147483647,
+    created_at: "2000-01-01T00:00:00.000Z"
+  }));
+
+  const originalRename = fs.renameSync;
+  fs.renameSync = () => {
+    const metadata = JSON.parse(fs.readFileSync(`${stateFile}.lock`, "utf8"));
+    assert.equal(metadata.pid, process.pid);
+    assert.ok(Date.parse(metadata.created_at));
+    throw new Error("simulated crash");
+  };
+  try {
+    assert.throws(() => saveRunState(root, state), /simulated crash/);
+  } finally {
+    fs.renameSync = originalRename;
+  }
+});
+
+test("finish rejects post-review dirty worktree changes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-dirty-finish-"));
+  const runId = "demo-20260613T000011Z";
+  saveRunState(root, {
+    ...createOrchestrationState({
+      runId,
+      task: "demo",
+      mode: "sequential",
+      adapter: "sequential-local",
+      baseCommit: "abc123",
+      parentBranch: "codex/demo"
+    }),
+    phase: "verification",
+    status: "full_verify_required",
+    review_target: { branch: "codex/demo", worktree: ".", head_commit: "abc123" }
+  });
+
+  await assert.rejects(() => commandOrchestrate({
+    root,
+    args: ["--finish", runId],
+    config: config({
+      isFullVerifyCurrent: () => true,
+      getCurrentBranch: () => "codex/demo",
+      getCurrentHead: () => "abc123",
+      getReviewWorktreeStatus: () => " M unreviewed.js"
+    }),
+    env: {},
+    log: () => {}
+  }), /requires a clean reviewed worktree/);
 });
 
 test("provider review invokes reviewer and verifier through the adapter", async () => {

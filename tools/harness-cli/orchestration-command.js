@@ -81,14 +81,17 @@ function saveRunState(root, state, patch = {}) {
   const lockPath = `${filePath}.lock`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   let lock;
+  const createLock = () => {
+    const descriptor = fs.openSync(lockPath, "wx");
+    fs.writeFileSync(descriptor, JSON.stringify({
+      pid: process.pid,
+      created_at: new Date().toISOString()
+    }));
+    return descriptor;
+  };
   const tryAcquireLock = () => {
     try {
-      const descriptor = fs.openSync(lockPath, "wx");
-      fs.writeFileSync(descriptor, JSON.stringify({
-        pid: process.pid,
-        created_at: new Date().toISOString()
-      }));
-      return descriptor;
+      return createLock();
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
       let stale = false;
@@ -109,7 +112,7 @@ function saveRunState(root, state, patch = {}) {
         throw new Error("Orchestration state is being updated by another process. Retry shortly.");
       }
       fs.unlinkSync(lockPath);
-      return fs.openSync(lockPath, "wx");
+      return createLock();
     }
   };
   try {
@@ -818,6 +821,12 @@ async function commandOrchestrate({
           || !state.review_target?.head_commit
           || currentHead !== state.review_target.head_commit) {
         throw new Error("Current branch and HEAD must match the reviewed orchestration target.");
+      }
+      const dirtyFinishTarget = typeof config.getReviewWorktreeStatus === "function"
+        ? config.getReviewWorktreeStatus(root)
+        : runGit(root, ["status", "--porcelain=v1"]).stdout.trim();
+      if (dirtyFinishTarget) {
+        throw new Error("Orchestration finish requires a clean reviewed worktree.");
       }
       if (typeof config.isFullVerifyCurrent !== "function" || !config.isFullVerifyCurrent(state.task)) {
         throw new Error("A current verify --full result is required before finishing orchestration.");
