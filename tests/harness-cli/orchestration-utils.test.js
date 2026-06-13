@@ -118,6 +118,9 @@ test("worker ownership rejects absolute and repository escape paths", () => {
   assert.equal(classifyOwnedPath("../outside.js").safe, false);
   assert.equal(classifyOwnedPath("C:\\outside.js").safe, false);
   assert.equal(classifyOwnedPath(".harness/config.json").safe, false);
+  assert.equal(classifyOwnedPath("**").safe, false);
+  assert.equal(classifyOwnedPath("*/safe.js").safe, false);
+  assert.equal(classifyOwnedPath("src/**").safe, true);
 });
 
 test("atomic state write can be read without leaving a temp file", () => {

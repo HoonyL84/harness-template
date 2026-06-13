@@ -1828,7 +1828,10 @@ function recordVerify(result, reason, contentFingerprint, verifyMode = "full") {
     result,
     verified_at: currentTimestamp(),
     ...(reason ? { reason } : {}),
-    ...(result === "pass" && contentFingerprint ? { content_fingerprint: contentFingerprint } : {})
+    ...(result === "pass" && contentFingerprint ? {
+      content_fingerprint: contentFingerprint,
+      verified_commit: run("git", ["rev-parse", "HEAD"], { capture: true }).stdout.trim()
+    } : {})
   };
   const nextRecord = {
     ...previousRecord,

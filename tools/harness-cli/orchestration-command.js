@@ -6,6 +6,7 @@ const { spawnSync } = require("child_process");
 const crypto = require("crypto");
 const { matchesPattern } = require("./verify-utils");
 const {
+  classifyOwnedPath,
   createOrchestrationState,
   createRunId,
   detectCapabilities,
@@ -76,9 +77,16 @@ function resolveRepositoryFile(root, value, label) {
 }
 
 function saveRunState(root, state, patch = {}) {
+  const filePath = statePath(root, state.run_id);
+  if (fs.existsSync(filePath)) {
+    const current = readState(filePath);
+    if (!state.state_fingerprint || current.state_fingerprint !== state.state_fingerprint) {
+      throw new Error("Orchestration state changed concurrently. Reload the run and retry.");
+    }
+  }
   const next = { ...state, ...patch, updated_at: new Date().toISOString() };
   next.state_fingerprint = stateFingerprint({ ...next, state_fingerprint: undefined });
-  writeJsonAtomic(statePath(root, state.run_id), next);
+  writeJsonAtomic(filePath, next);
   return next;
 }
 
@@ -116,6 +124,7 @@ function writeRoleRequest(root, state, role, sequence) {
     task: state.task,
     role,
     output_artifact: relativeArtifact,
+    review_target: state.review_target || null,
     instructions: [
       `Act as the ${role} for active ticket ${state.task}.`,
       "Read AGENTS.md and the active ticket before responding.",
@@ -251,10 +260,12 @@ function prepareWorkers(root, state, planFile, config) {
     maxWorkers: config.maxWorkers,
     allowMultiWriter: config.allowMultiWriter
   });
-  if (plan.approval_required.length > 0) {
+  const planDigest = crypto.createHash("sha256").update(JSON.stringify(plan)).digest("hex");
+  if (plan.approval_required.length > 0 && state.approved_risk_digest !== planDigest) {
     return saveRunState(root, state, {
       status: "approval_required",
-      approval_required: plan.approval_required.map((id) => `high-risk-path:${id}`)
+      approval_required: plan.approval_required.map((id) => `high-risk-path:${id}`),
+      pending_risk_digest: planDigest
     });
   }
 
@@ -327,6 +338,12 @@ function assertSafeWorkerChanges(root, state, worker, commitSha) {
     throw new Error(`Worker ${worker.id} cannot delete, rename, or copy files automatically: ${unsafe.paths.join(", ")}`);
   }
   const changedPaths = entries.flatMap((entry) => entry.paths);
+  for (const changedPath of changedPaths) {
+    const classification = classifyOwnedPath(changedPath);
+    if (!classification.safe) {
+      throw new Error(`Worker ${worker.id} changed protected or high-risk path: ${changedPath}`);
+    }
+  }
   const outOfScope = changedPaths.filter((file) => !pathIsOwned(file, worker.owned_paths));
   if (outOfScope.length > 0) {
     throw new Error(`Worker ${worker.id} changed paths outside ownership: ${outOfScope.join(", ")}`);
@@ -334,12 +351,44 @@ function assertSafeWorkerChanges(root, state, worker, commitSha) {
   return changedPaths;
 }
 
-function recordWorker(root, state, workerId, commitSha, verifyResult) {
+function repositoryContentFingerprint(root) {
+  const result = runGit(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]);
+  const hash = crypto.createHash("sha256");
+  for (const rel of result.stdout.split("\0").filter(Boolean).sort()) {
+    const absolute = path.join(root, rel);
+    if (!fs.existsSync(absolute)) continue;
+    const stat = fs.lstatSync(absolute);
+    hash.update(`\0${rel}\0`);
+    if (stat.isSymbolicLink()) hash.update(`link:${fs.readlinkSync(absolute)}`);
+    else if (stat.isFile()) hash.update(fs.readFileSync(absolute));
+    else hash.update("non-file");
+  }
+  return hash.digest("hex");
+}
+
+function workerVerifyRecord(root, state, worker, commitSha) {
+  const worktree = path.resolve(root, worker.worktree);
+  const verifyPath = path.join(worktree, "observability", "metrics", `${state.task}.verify.json`);
+  if (!fs.existsSync(verifyPath)) {
+    throw new Error(`Worker ${worker.id} is missing a full verification record.`);
+  }
+  const verify = JSON.parse(fs.readFileSync(verifyPath, "utf8"));
+  const full = verify.last_full || (verify.mode === "full" ? verify : null);
+  if (!full || full.result !== "pass" || full.verified_commit !== commitSha) {
+    throw new Error(`Worker ${worker.id} full verification is not bound to commit ${commitSha}.`);
+  }
+  const currentFingerprint = repositoryContentFingerprint(worktree);
+  if (!full.content_fingerprint || full.content_fingerprint !== currentFingerprint) {
+    throw new Error(`Worker ${worker.id} content changed after full verification.`);
+  }
+  const dirty = runGit(root, ["status", "--porcelain=v1"], { cwd: worktree }).stdout.trim();
+  if (dirty) throw new Error(`Worker ${worker.id} worktree must be clean after verification.`);
+  return full;
+}
+
+function recordWorker(root, state, workerId, commitSha) {
   const worker = state.workers.find((candidate) => candidate.id === workerId);
   if (!worker) throw new Error(`Unknown worker: ${workerId}`);
-  if (verifyResult !== "pass") {
-    throw new Error(`Worker ${workerId} must have verify_result=pass before recording.`);
-  }
   const commitCheck = runGit(root, ["cat-file", "-e", `${commitSha}^{commit}`], { allowFailure: true });
   if (commitCheck.status !== 0) throw new Error(`Worker commit does not exist: ${commitSha}`);
   const ancestorCheck = runGit(root, ["merge-base", "--is-ancestor", state.base_commit, commitSha], {
@@ -353,6 +402,7 @@ function recordWorker(root, state, workerId, commitSha, verifyResult) {
     throw new Error(`Worker commit must match branch ${worker.branch}.`);
   }
   const changedPaths = assertSafeWorkerChanges(root, state, worker, commitSha);
+  const verifyRecord = workerVerifyRecord(root, state, worker, commitSha);
   const diff = runGit(root, ["diff", "--binary", `${state.base_commit}..${commitSha}`]).stdout;
   const diffHash = crypto.createHash("sha256").update(diff).digest("hex");
   const workers = state.workers.map((candidate) => candidate.id === workerId
@@ -362,7 +412,9 @@ function recordWorker(root, state, workerId, commitSha, verifyResult) {
         commit_sha: commitSha,
         diff_hash: diffHash,
         changed_paths: changedPaths,
-        verify_result: verifyResult
+        verify_result: verifyRecord.result,
+        verify_fingerprint: verifyRecord.content_fingerprint,
+        verified_at: verifyRecord.verified_at
       }
     : candidate);
   const allCompleted = workers.every((candidate) => candidate.status === "completed");
@@ -548,6 +600,8 @@ async function commandOrchestrate({
       state = saveRunState(root, state, {
         status: statusByPhase[state.phase] || "manual_review",
         approval_required: [],
+        approved_risk_digest: state.pending_risk_digest || state.approved_risk_digest || null,
+        pending_risk_digest: null,
         approved_at: new Date().toISOString()
       });
       printStatus(log, state);
@@ -564,35 +618,64 @@ async function commandOrchestrate({
       if (!["implementation", "review"].includes(state.phase)) {
         throw new Error("Review can start only after implementation or worker execution.");
       }
-      const currentBranch = runGit(root, ["branch", "--show-current"]).stdout.trim();
+      const currentBranch = typeof config.getCurrentBranch === "function"
+        ? config.getCurrentBranch()
+        : runGit(root, ["branch", "--show-current"]).stdout.trim();
       if (state.phase === "implementation" && currentBranch !== state.parent_branch) {
         throw new Error(`Single-writer review must start from parent branch ${state.parent_branch}.`);
       }
+      const reviewTarget = state.integration
+        ? {
+            branch: state.integration.branch,
+            worktree: state.integration.worktree,
+            head_commit: state.integration.head_commit
+          }
+        : {
+            branch: state.parent_branch,
+            worktree: ".",
+            head_commit: typeof config.getCurrentHead === "function"
+              ? config.getCurrentHead()
+              : runGit(root, ["rev-parse", "HEAD"]).stdout.trim()
+          };
+      state = saveRunState(root, state, { review_target: reviewTarget });
       const reviewRoleNames = state.adapter === "sequential-local"
         ? ["reviewer"]
         : ["reviewer", "verifier"];
-      const roles = reviewRoleNames.map((role, index) =>
-        writeRoleRequest(root, state, role, index + 1));
-      state = saveRunState(root, state, {
-        phase: "review",
-        status: "awaiting_host",
-        roles: [...state.roles.filter((entry) => !["reviewer", "verifier"].includes(entry.role)), ...roles]
-      });
+      if (state.adapter === "provider-api" && typeof invokeAgent === "function") {
+        const settled = await Promise.allSettled(
+          reviewRoleNames.map((role) => invokeAgent(role, artifactPrompt(root, state, role)))
+        );
+        state = saveRunState(root, state, { phase: "review", status: "running" });
+        for (let index = 0; index < settled.length; index += 1) {
+          const role = reviewRoleNames[index];
+          const item = settled[index];
+          state = recordArtifact(root, state, role, item.status === "fulfilled"
+            ? item.value
+            : { role, status: "failed", summary: item.reason?.message || "provider call failed" });
+        }
+      } else {
+        const roles = reviewRoleNames.map((role, index) =>
+          writeRoleRequest(root, state, role, index + 1));
+        state = saveRunState(root, state, {
+          phase: "review",
+          status: "awaiting_host",
+          roles: [...state.roles.filter((entry) => !["reviewer", "verifier"].includes(entry.role)), ...roles]
+        });
+      }
       printStatus(log, state);
       return state;
     }
     if (options["record-worker"]) {
-      if (!options.worker || !options.commit || !options["verify-result"]) {
+      if (!options.worker || !options.commit) {
         throw new Error(
-          "--record-worker requires --worker <id>, --commit <sha>, and --verify-result pass."
+          "--record-worker requires --worker <id> and --commit <sha> after worker verify --full."
         );
       }
       state = recordWorker(
         root,
         state,
         options.worker,
-        options.commit,
-        options["verify-result"]
+        options.commit
       );
       printStatus(log, state);
       return state;
@@ -632,6 +715,11 @@ async function commandOrchestrate({
       state = saveRunState(root, state, {
         phase: "verification",
         status: "full_verify_required",
+        review_target: {
+          branch: state.parent_branch,
+          worktree: ".",
+          head_commit: runGit(root, ["rev-parse", "HEAD"]).stdout.trim()
+        },
         promoted_at: new Date().toISOString()
       });
       printStatus(log, state);
@@ -643,6 +731,17 @@ async function commandOrchestrate({
       }
       if ((state.approval_required || []).length > 0 || (state.conflicts || []).length > 0) {
         throw new Error("Orchestration has unresolved approvals or conflicts.");
+      }
+      const currentBranch = typeof config.getCurrentBranch === "function"
+        ? config.getCurrentBranch()
+        : runGit(root, ["branch", "--show-current"]).stdout.trim();
+      const currentHead = typeof config.getCurrentHead === "function"
+        ? config.getCurrentHead()
+        : runGit(root, ["rev-parse", "HEAD"]).stdout.trim();
+      if (currentBranch !== state.parent_branch
+          || !state.review_target?.head_commit
+          || currentHead !== state.review_target.head_commit) {
+        throw new Error("Current branch and HEAD must match the reviewed orchestration target.");
       }
       if (typeof config.isFullVerifyCurrent !== "function" || !config.isFullVerifyCurrent(state.task)) {
         throw new Error("A current verify --full result is required before finishing orchestration.");

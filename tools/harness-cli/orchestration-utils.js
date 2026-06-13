@@ -158,6 +158,10 @@ function classifyOwnedPath(repoPath) {
       || normalized.includes("/../")) {
     return { safe: false, reason: "path must stay repository-relative" };
   }
+  const firstSegment = normalized.split("/")[0];
+  if (!firstSegment || /[*?[\]{}]/.test(firstSegment)) {
+    return { safe: false, reason: "path must have a concrete repository root before glob segments" };
+  }
   const segments = pathSegments(normalized);
   if (segments.some((segment) => FORBIDDEN_OWNERSHIP_SEGMENTS.has(segment))) {
     return { safe: false, reason: "path contains a protected harness segment" };
@@ -321,7 +325,7 @@ function stateFingerprint(state) {
 
 function writeJsonAtomic(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
   fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   fs.renameSync(tempPath, filePath);
 }

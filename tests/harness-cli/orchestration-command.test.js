@@ -145,13 +145,22 @@ test("finish requires verification phase and a current full verify result", asyn
       parentBranch: "codex/demo"
     }),
     phase: "verification",
-    status: "full_verify_required"
+    status: "full_verify_required",
+    review_target: {
+      branch: "codex/demo",
+      worktree: ".",
+      head_commit: "abc123"
+    }
   });
 
   await assert.rejects(() => commandOrchestrate({
     root,
     args: ["--finish", runId],
-    config: config({ isFullVerifyCurrent: () => false }),
+    config: config({
+      isFullVerifyCurrent: () => false,
+      getCurrentBranch: () => "codex/demo",
+      getCurrentHead: () => "abc123"
+    }),
     env: {},
     log: () => {}
   }), /current verify --full result is required/);
@@ -159,7 +168,11 @@ test("finish requires verification phase and a current full verify result", asyn
   const finished = await commandOrchestrate({
     root,
     args: ["--finish", runId],
-    config: config({ isFullVerifyCurrent: () => true }),
+    config: config({
+      isFullVerifyCurrent: () => true,
+      getCurrentBranch: () => "codex/demo",
+      getCurrentHead: () => "abc123"
+    }),
     env: {},
     log: () => {}
   });
@@ -178,13 +191,72 @@ test("unfinished orchestration blocks task completion readiness", () => {
     baseCommit: "abc123",
     parentBranch: "codex/demo"
   });
-  saveRunState(root, state);
+  const saved = saveRunState(root, state);
 
   assert.throws(
     () => requireTaskOrchestrationReady(root, "demo"),
     /unfinished orchestration runs/
   );
 
-  saveRunState(root, state, { phase: "completed", status: "ready_to_complete" });
+  saveRunState(root, saved, { phase: "completed", status: "ready_to_complete" });
   assert.doesNotThrow(() => requireTaskOrchestrationReady(root, "demo"));
+});
+
+test("stale state writers are rejected instead of overwriting newer role results", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-cas-"));
+  const original = saveRunState(root, createOrchestrationState({
+    runId: "demo-20260613T000006Z",
+    task: "demo",
+    mode: "parallel",
+    adapter: "native-host",
+    baseCommit: "abc123",
+    parentBranch: "codex/demo"
+  }));
+  const stale = { ...original };
+  saveRunState(root, original, { status: "planner_recorded" });
+
+  assert.throws(
+    () => saveRunState(root, stale, { status: "architect_recorded" }),
+    /changed concurrently/
+  );
+});
+
+test("provider review invokes reviewer and verifier through the adapter", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-orchestration-provider-review-"));
+  const runId = "demo-20260613T000007Z";
+  fs.mkdirSync(path.join(root, ".harness", "tasks", "active"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".harness", "tasks", "active", "demo.md"), "# demo\n");
+  saveRunState(root, {
+    ...createOrchestrationState({
+      runId,
+      task: "demo",
+      mode: "parallel",
+      adapter: "provider-api",
+      baseCommit: "abc123",
+      parentBranch: "codex/demo"
+    }),
+    phase: "implementation",
+    status: "awaiting_implementation"
+  });
+  const invoked = [];
+
+  const state = await commandOrchestrate({
+    root,
+    args: ["--begin-review", runId],
+    config: config({
+      getCurrentBranch: () => "codex/demo",
+      getCurrentHead: () => "def456"
+    }),
+    env: { HARNESS_AGENT_MODE: "api" },
+    log: () => {},
+    invokeAgent: async (role) => {
+      invoked.push(role);
+      return { role, status: "completed" };
+    }
+  });
+
+  assert.deepEqual(invoked.sort(), ["reviewer", "verifier"]);
+  assert.equal(state.phase, "verification");
+  assert.equal(state.status, "full_verify_required");
+  assert.equal(state.review_target.head_commit, "def456");
 });

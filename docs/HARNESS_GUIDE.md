@@ -320,6 +320,7 @@ Phase 2 multi-writer는 별도 opt-in입니다. 각 worker가 겹치지 않는 `
 
 ```bash
 npm run harness -- orchestrate --prepare-workers <run-id> --plan <worker-plan.json>
+# worker worktree에서 commit 후 verify --full을 실행한 다음 기록
 npm run harness -- orchestrate --record-worker <run-id> --worker <id> --commit <sha>
 npm run harness -- orchestrate --integrate <run-id> --approve-risk
 npm run harness -- orchestrate --begin-review <run-id>
