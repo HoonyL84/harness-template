@@ -103,6 +103,23 @@ npm.cmd run harness -- check
 
 `check`는 `.env.local`이 없으면 `.env.template`에서 자동 생성합니다. 생성된 `.env.local`에 필요한 API 키와 provider 옵션을 채우면 됩니다.
 
+## 선택형 멀티에이전트
+
+멀티에이전트 orchestration은 기본적으로 비활성화된 실험 기능입니다. 단일 에이전트 작업 흐름은 그대로 유지되며, 역할 분리나 격리된 병렬 작업이 필요한 티켓에서만 명시적으로 사용합니다.
+
+```bash
+npm run harness -- orchestrate --capabilities
+npm run harness -- orchestrate <ticket> --mode auto --max-workers 2
+npm run harness -- orchestrate --status <run-id>
+```
+
+- `auto`: 실행 환경이 지원하면 native 또는 API adapter를 선택하고, 아니면 sequential로 안전하게 전환합니다.
+- `native`: Codex처럼 하위 에이전트를 지원하는 대화형 host에서 사용합니다.
+- `api`: provider API key 기반으로 역할별 실행을 관리합니다.
+- `sequential`: 병렬 실행을 지원하지 않는 CLI에서도 같은 artifact와 승인 흐름을 유지합니다.
+
+상세한 승인, worker 격리, 통합 및 재개 절차는 [HARNESS_GUIDE.md](docs/HARNESS_GUIDE.md#선택형-멀티에이전트-orchestration)를 참고하세요.
+
 ## L4.5 제한적 자동 수정
 
 기본값은 비활성화입니다. `.env.local`에서 `HARNESS_AGENT_MODE=api`, provider API 키,
