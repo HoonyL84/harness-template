@@ -6,39 +6,22 @@ const http = require("http");
 const path = require("path");
 const os = require("os");
 const { spawnSync } = require("child_process");
+const { runAutonomySoak } = require("./autonomy-utils");
+const { createCleanupManifest, findGeneratedPaths, isCleanupManifestValid } = require("./cleanup-utils");
+const { createConfigLoader, isPlainObject } = require("./config");
+const { inferQuickMappings, selectQuickCommands, tokenizeCommand } = require("./verify-utils");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 process.chdir(ROOT);
 
 const VALID_TYPES = new Set(["feat", "fix", "refactor", "docs", "chore", "test", "experiment"]);
 const VALID_ROLES = new Set(["planner", "architect", "implementer", "reviewer", "verifier", "recorder", "memory", "release"]);
-const AUTO_FIX_ALLOWED_ROOTS = new Set(["src", "app", "lib", "test", "tests", "__tests__"]);
 const AUTO_FIX_ALLOWED_EXTENSIONS = new Set([
   ".c", ".cc", ".cpp", ".cs", ".css", ".go", ".h", ".hpp", ".html",
   ".java", ".js", ".jsx", ".kt", ".php", ".py", ".rb", ".rs", ".scss",
   ".svelte", ".ts", ".tsx", ".vue",
 ]);
-const AUTO_FIX_FORBIDDEN_SEGMENTS = new Set([
-  ".git", ".github", ".harness", ".venv", "build", "coverage", "dist", "docs",
-  "evals", "infra", "memory", "migrations", "node_modules", "observability",
-  "prompts", "scripts", "target", "terraform", "tools", "vendor", "venv",
-]);
-const AUTO_FIX_FORBIDDEN_FILES = new Set([
-  ".env", ".env.local", "docker-compose.yml", "docker-compose.yaml", "dockerfile",
-  "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
-  "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
-]);
 const AUTONOMY_STATE_REL = "observability/autonomy/state.json";
-const L5_PROTECTED_SEGMENTS = new Set([".git", ".harness", "observability", "node_modules", ".venv", "venv"]);
-const L5_HIGH_RISK_SEGMENTS = new Set([
-  ".github", "deploy", "deployment", "helm", "infra", "k8s", "kubernetes",
-  "migrations", "scripts", "terraform",
-]);
-const L5_HIGH_RISK_FILES = new Set([
-  ".env", ".env.local", "docker-compose.yml", "docker-compose.yaml", "dockerfile",
-  "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
-  "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
-]);
 let providerRequestCount = 0;
 
 function log(message = "") {
@@ -133,11 +116,11 @@ function resolveTaskId({ strict = false } = {}) {
   if (configured && configured !== "local") return configured;
   const active = listTaskNames("active");
   if (active.length === 1) return active[0];
-  const branchTask = getGitBranch().split("/").pop();
-  if (branchTask && !["main", "master", "unknown", "HEAD"].includes(branchTask)) return branchTask;
   if (strict && active.length > 1) {
     fail(`Multiple active tickets require an explicit task. Use --task <ticket> or set TASK_ID. Active: ${active.join(", ")}`);
   }
+  const branchTask = getGitBranch().split("/").pop();
+  if (branchTask && !["main", "master", "unknown", "HEAD"].includes(branchTask)) return branchTask;
   return configured || "local";
 }
 
@@ -170,8 +153,9 @@ function writeAutonomyState(patch) {
 
 function validateL5Patch(patch) {
   patch = patch.replace(/^\uFEFF/, "");
-  const maxBytes = Number(process.env.HARNESS_L5_MAX_PATCH_KB || "500") * 1000;
-  const maxFiles = Number(process.env.HARNESS_L5_MAX_FILES || "20");
+  const cfg = loadConfig().limits;
+  const maxBytes = cfg.maxPatchKb * 1000;
+  const maxFiles = cfg.maxFiles;
   if (!Number.isFinite(maxBytes) || maxBytes < 1 || Buffer.byteLength(patch, "utf8") > maxBytes) {
     fail(`L5 patch exceeds the ${maxBytes / 1000} KB limit.`);
   }
@@ -205,6 +189,7 @@ function validateL5Patch(patch) {
 }
 
 function classifyL5Paths(paths) {
+  const cfg = loadConfig().l5;
   const highRisk = [];
   for (const filePath of paths) {
     const normalized = path.posix.normalize(filePath);
@@ -214,10 +199,10 @@ function classifyL5Paths(paths) {
     if (normalized.startsWith("../") || (!resolved.startsWith(`${ROOT}${path.sep}`) && resolved !== ROOT)) {
       fail(`L5 patch escapes the repository: ${filePath}`);
     }
-    if (segments.some((segment) => L5_PROTECTED_SEGMENTS.has(segment)) || fileName.startsWith(".env")) {
+    if (segments.some((segment) => cfg.protectedSegments.has(segment)) || fileName.startsWith(".env")) {
       fail(`L5 patch targets a protected harness or secret path: ${filePath}`);
     }
-    if (segments.some((segment) => L5_HIGH_RISK_SEGMENTS.has(segment)) || L5_HIGH_RISK_FILES.has(fileName)) {
+    if (segments.some((segment) => cfg.highRiskSegments.has(segment)) || cfg.highRiskFiles.has(fileName)) {
       highRisk.push(filePath);
     }
   }
@@ -272,6 +257,7 @@ function validateAutoFixPatch(patch) {
     fail("Auto-fix patch contains file headers not declared by diff --git.");
   }
 
+  const cfg = loadConfig().auto_fix;
   for (const filePath of uniquePaths) {
     const normalized = path.posix.normalize(filePath);
     const segments = normalized.split("/");
@@ -282,13 +268,13 @@ function validateAutoFixPatch(patch) {
     if (normalized.startsWith("../") || (!resolved.startsWith(`${ROOT}${path.sep}`) && resolved !== ROOT)) {
       fail(`Auto-fix patch escapes the repository: ${filePath}`);
     }
-    if (!segments.some((segment) => AUTO_FIX_ALLOWED_ROOTS.has(segment.toLowerCase()))) {
+    if (!segments.some((segment) => cfg.allowedRoots.has(segment.toLowerCase()))) {
       fail(`Auto-fix path is outside low-risk source/test roots: ${filePath}`);
     }
-    if (segments.some((segment) => AUTO_FIX_FORBIDDEN_SEGMENTS.has(segment.toLowerCase()))) {
+    if (segments.some((segment) => cfg.forbiddenSegments.has(segment.toLowerCase()))) {
       fail(`Auto-fix path contains a protected segment: ${filePath}`);
     }
-    if (AUTO_FIX_FORBIDDEN_FILES.has(fileName) || fileName.startsWith(".env")) {
+    if (cfg.forbiddenFiles.has(fileName) || fileName.startsWith(".env")) {
       fail(`Auto-fix cannot modify protected files: ${filePath}`);
     }
     if (!AUTO_FIX_ALLOWED_EXTENSIONS.has(extension)) {
@@ -367,6 +353,8 @@ function parseEnvFile(relPath = ".env.local") {
   }
   return parsed;
 }
+
+const loadConfig = createConfigLoader({ root: ROOT, fail });
 
 async function sendSlackNotification(status, message) {
   const webhook = process.env.SLACK_WEBHOOK_URL;
@@ -738,11 +726,12 @@ function commandCompleteTask(args) {
     verify = { ...verify, ...JSON.parse(readText(verifyRel)) };
   }
 
-  if (!options.force && verify.result !== "pass") {
-    fail("Task verification is not marked as pass. Re-run verification or use --force.");
+  const fullVerify = getFullVerifyRecord(verify);
+  if (!options.force && fullVerify.result !== "pass") {
+    fail("Task verification is not marked as pass in full mode. Re-run full verification or use --force.");
   }
   if (!options.force) {
-    requireCurrentVerifiedContent(name, verify);
+    requireCurrentVerifiedContent(name, fullVerify);
   }
 
   let start = { started_at: "unknown", type: "unknown", project: "unknown" };
@@ -790,7 +779,7 @@ function commandCompleteTask(args) {
 
   if (exists(activeRel)) {
     moveFile(activeRel, archiveRel);
-    appendTaskCompletion(archiveRel, verify);
+    appendTaskCompletion(archiveRel, { ...verify, ...fullVerify });
     log("[Harness] EXEC_PLAN archived");
   } else {
     log(`[Harness] EXEC_PLAN not found: ${activeRel}`);
@@ -806,7 +795,7 @@ function commandCompleteTask(args) {
     completed_at: currentTimestamp(),
     rework_count: verify.rework_count || 0,
     last_fail_reason: verify.last_fail_reason || "none",
-    verify_result: verify.result || "none",
+    verify_result: fullVerify.result || "none",
   }, null, 2));
 
   removeIfExists(startRel);
@@ -837,12 +826,13 @@ function archiveVerifiedTicket(name) {
   const activeRel = `.harness/tasks/active/${name}.md`;
   const archiveRel = `.harness/tasks/archive/${name}.md`;
   const verify = exists(verifyRel) ? JSON.parse(readText(verifyRel)) : {};
+  const fullVerify = getFullVerifyRecord(verify);
   const start = exists(startRel) ? JSON.parse(readText(startRel)) : {};
-  if (verify.result !== "pass") fail(`Cannot archive unverified L5 ticket: ${name}`);
-  requireCurrentVerifiedContent(name, verify);
+  if (fullVerify.result !== "pass") fail(`Cannot archive unverified L5 ticket: ${name}. Re-run full verification.`);
+  requireCurrentVerifiedContent(name, fullVerify);
   if (exists(activeRel)) {
     moveFile(activeRel, archiveRel);
-    appendTaskCompletion(archiveRel, verify);
+    appendTaskCompletion(archiveRel, { ...verify, ...fullVerify });
   }
   writeText(doneRel, JSON.stringify({
     task: name,
@@ -852,7 +842,7 @@ function archiveVerifiedTicket(name) {
     completed_at: currentTimestamp(),
     rework_count: verify.rework_count || 0,
     last_fail_reason: verify.last_fail_reason || "none",
-    verify_result: verify.result,
+    verify_result: fullVerify.result,
     completed_by: "l5-autonomy",
   }, null, 2));
   removeIfExists(startRel);
@@ -941,6 +931,181 @@ function commandScanDrift(args) {
   } else {
     log("✅ 이상 없음");
   }
+}
+function sha256File(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function normalizedAbsolutePath(filePath) {
+  const resolved = path.resolve(filePath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function isPathInsideRoot(filePath) {
+  const root = normalizedAbsolutePath(ROOT);
+  const resolved = normalizedAbsolutePath(filePath);
+  return resolved.startsWith(`${root}${path.sep}`) && resolved !== root;
+}
+
+function cleanupCandidateRel(task) {
+  return `observability/metrics/${task}.cleanup-candidates.json`;
+}
+
+function recordCleanupCandidates(task, before, after) {
+  if (!before || !after) return;
+  const generated = findGeneratedPaths(before.untrackedPaths, after.untrackedPaths);
+  const files = [];
+
+  for (const rel of generated) {
+    const fullPath = path.resolve(ROOT, rel);
+    if (!isPathInsideRoot(fullPath) || !fs.existsSync(fullPath)) continue;
+    const stat = fs.lstatSync(fullPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) continue;
+    files.push({ path: normalizeRepoPath(rel), sha256: sha256File(fullPath) });
+  }
+
+  const rel = cleanupCandidateRel(task);
+  if (files.length === 0) {
+    removeIfExists(rel);
+    return;
+  }
+  writeText(rel, JSON.stringify({
+    task,
+    captured_at: currentTimestamp(),
+    files
+  }, null, 2));
+}
+
+function commandCleanup(args) {
+  const { options } = parseArgs(args);
+  const manifestDir = path.join(ROOT, "observability", "metrics");
+  ensureDir("observability/metrics");
+
+  const runCheckIgnore = (filePath) => {
+    const result = run("git", ["check-ignore", "--", filePath], { capture: true });
+    return result.status === 0;
+  };
+
+  if (options["dry-run"] || (!options.approve && !options["dry-run"])) {
+    const task = resolveTaskId({ strict: true });
+    const candidateRel = cleanupCandidateRel(task);
+    if (!exists(candidateRel)) {
+      log("No verification-generated cleanup candidates found.");
+      return;
+    }
+
+    const candidateRecord = JSON.parse(readText(candidateRel));
+    const safeToDelete = [];
+    for (const candidate of candidateRecord.files || []) {
+      const file = normalizeRepoPath(candidate.path || "");
+      const fullPath = path.resolve(ROOT, file);
+      if (!isPathInsideRoot(fullPath) || !fs.existsSync(fullPath)) continue;
+      const stat = fs.lstatSync(fullPath);
+      if (!stat.isFile() || stat.isSymbolicLink()) continue;
+      if (runCheckIgnore(file)) {
+        log(`[Cleanup Skip] Git ignored path: ${file}`);
+        continue;
+      }
+      if (sha256File(fullPath) !== candidate.sha256) {
+        log(`[Cleanup Skip] File changed after verification: ${file}`);
+        continue;
+      }
+      safeToDelete.push({ path: file, sha256: candidate.sha256 });
+    }
+
+    if (safeToDelete.length === 0) {
+      log("No verification-generated files are currently safe to clean.");
+      return;
+    }
+
+    const manifest = createCleanupManifest(task, currentTimestamp(), safeToDelete);
+    const manifestId = manifest.id;
+    const manifestPath = path.join(manifestDir, `cleanup-${manifestId}.json`);
+    writeText(path.relative(ROOT, manifestPath), JSON.stringify(manifest, null, 2));
+    log(`Cleanup Dry-Run complete. Found ${safeToDelete.length} verification-generated files.`);
+    log(`Manifest ID: ${manifestId}`);
+    log(`To approve cleanup, run: node tools/harness-cli/index.js cleanup --approve ${manifestId}`);
+    return;
+  }
+
+  const manifestId = String(options.approve).trim();
+  if (!/^[a-f0-9]{12}$/i.test(manifestId)) fail("Cleanup manifest ID is invalid.");
+  const manifestPath = path.join(manifestDir, `cleanup-${manifestId}.json`);
+  const relManifestPath = path.relative(ROOT, manifestPath);
+  if (!fs.existsSync(manifestPath)) fail(`Cleanup manifest not found or expired: ${manifestId}`);
+
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  } catch (err) {
+    fail(`Failed to parse manifest: ${err.message}`);
+  }
+  if (manifest.id !== manifestId || !isCleanupManifestValid(manifest)) {
+    removeIfExists(relManifestPath);
+    fail(`Cleanup manifest ${manifestId} is invalid or was tampered with.`);
+  }
+
+  const createdAt = Date.parse(manifest.created_at);
+  if (Number.isNaN(createdAt) || Date.now() - createdAt > 10 * 60 * 1000) {
+    removeIfExists(relManifestPath);
+    fail(`Cleanup manifest ${manifestId} has expired (TTL 10m). Please run dry-run again.`);
+  }
+
+  const dirsToClean = new Set();
+  for (const candidate of manifest.files) {
+    if (!isPlainObject(candidate) || typeof candidate.path !== "string" || typeof candidate.sha256 !== "string") {
+      log("[Cleanup Bypass] Invalid manifest entry.");
+      continue;
+    }
+
+    const normalized = path.posix.normalize(candidate.path);
+    const fullPath = path.resolve(ROOT, normalized);
+    if (!isPathInsideRoot(fullPath)) {
+      log(`[Cleanup Bypass] Path escapes repository: ${candidate.path}`);
+      continue;
+    }
+    if (!fs.existsSync(fullPath)) continue;
+
+    const statusResult = run("git", ["status", "--porcelain", "--", normalized], { capture: true });
+    if (statusResult.status !== 0 || !statusResult.stdout.trim().startsWith("??")) {
+      log(`[Cleanup Bypass] File is no longer untracked: ${candidate.path}`);
+      continue;
+    }
+    if (runCheckIgnore(normalized)) {
+      log(`[Cleanup Bypass] File is git-ignored: ${candidate.path}`);
+      continue;
+    }
+
+    const stat = fs.lstatSync(fullPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      log(`[Cleanup Bypass] File type is not eligible: ${candidate.path}`);
+      continue;
+    }
+    const realPath = fs.realpathSync(fullPath);
+    if (!isPathInsideRoot(realPath) || sha256File(fullPath) !== candidate.sha256) {
+      log(`[Cleanup Bypass] File changed or resolves outside repository: ${candidate.path}`);
+      continue;
+    }
+
+    fs.unlinkSync(fullPath);
+    log(`Removed file: ${candidate.path}`);
+    let parent = path.dirname(fullPath);
+    while (isPathInsideRoot(parent)) {
+      dirsToClean.add(parent);
+      parent = path.dirname(parent);
+    }
+  }
+
+  for (const dir of Array.from(dirsToClean).sort((a, b) => b.length - a.length)) {
+    if (fs.existsSync(dir) && fs.readdirSync(dir).length === 0) {
+      fs.rmdirSync(dir);
+      log(`Removed empty directory: ${path.relative(ROOT, dir)}`);
+    }
+  }
+
+  removeIfExists(relManifestPath);
+  if (manifest.task) removeIfExists(cleanupCandidateRel(manifest.task));
+  log(`Cleanup approved and completed for manifest ${manifestId}.`);
 }
 
 function commandValidateAutoFix(args) {
@@ -1137,6 +1302,7 @@ function worktreeSnapshot() {
   return {
     fingerprint: hash.digest("hex"),
     paths: dirtyPaths() || [],
+    untrackedPaths,
   };
 }
 
@@ -1183,6 +1349,19 @@ function requireCurrentVerifiedContent(name, verify) {
   }
 }
 
+function getFullVerifyRecord(verify) {
+  if (isPlainObject(verify?.last_full)) return verify.last_full;
+  if (verify?.mode === "full") {
+    return {
+      result: verify.result,
+      verified_at: verify.last_verify,
+      content_fingerprint: verify.content_fingerprint,
+      reason: verify.last_fail_reason
+    };
+  }
+  return { result: "none" };
+}
+
 function gitHeadSha() {
   const result = run("git", ["rev-parse", "HEAD"], { capture: true });
   return result.status === 0 ? result.stdout.trim() : "unknown";
@@ -1213,8 +1392,9 @@ function assessRecovery({ state, active, dirty, headSha, verify, contentFingerpr
     return { action: "manual_review", ticket, reason: "HEAD changed after the recovery checkpoint" };
   }
 
-  if (verify?.result === "pass") {
-    if (verify.content_fingerprint && verify.content_fingerprint === contentFingerprint) {
+  const fullVerify = getFullVerifyRecord(verify);
+  if (fullVerify.result === "pass") {
+    if (fullVerify.content_fingerprint && fullVerify.content_fingerprint === contentFingerprint) {
       return {
         action: "ready_to_complete",
         ticket,
@@ -1227,11 +1407,11 @@ function assessRecovery({ state, active, dirty, headSha, verify, contentFingerpr
       reason: "repository content changed after the last successful verification",
     };
   }
-  if (verify?.result === "fail") {
+  if (fullVerify.result === "fail") {
     return {
       action: "fix_and_reverify",
       ticket,
-      reason: verify.last_fail_reason || "the last verification failed",
+      reason: fullVerify.reason || "the last full verification failed",
     };
   }
 
@@ -1295,7 +1475,7 @@ function commandRecover() {
     state_status: state.status || "none",
     active,
     dirty_paths: dirty,
-    verify_result: verify.result || "none",
+    verify_result: getFullVerifyRecord(verify).result || "none",
     last_fail_reason: verify.last_fail_reason || null,
     checkpoint: state.recovery_checkpoint || null,
     destructive_recovery_used: false,
@@ -1315,9 +1495,9 @@ function commandValidateRecovery() {
   const cases = [
     [base, "retry_agent"],
     [{ ...base, dirty: [...base.dirty, "src/demo.js"] }, "inspect_and_verify"],
-    [{ ...base, verify: { result: "pass", content_fingerprint: "old" } }, "reverify_required"],
-    [{ ...base, verify: { result: "pass", content_fingerprint: "current" } }, "ready_to_complete"],
-    [{ ...base, verify: { result: "fail", last_fail_reason: "test failed" } }, "fix_and_reverify"],
+    [{ ...base, verify: { last_full: { result: "pass", content_fingerprint: "old" } } }, "reverify_required"],
+    [{ ...base, verify: { last_full: { result: "pass", content_fingerprint: "current" } } }, "ready_to_complete"],
+    [{ ...base, verify: { last_full: { result: "fail", reason: "test failed" } } }, "fix_and_reverify"],
     [{
       ...base,
       state: {
@@ -1334,6 +1514,16 @@ function commandValidateRecovery() {
     if (actual !== expected) fail(`Recovery self-test expected ${expected} but received ${actual}.`);
   }
   log("Recovery diagnostics policy passed.");
+}
+
+function commandValidateL5Soak(args) {
+  const { options } = parseArgs(args);
+  const cycles = Number(options.cycles || "1000");
+  if (!Number.isInteger(cycles) || cycles < 1 || cycles > 100000) {
+    fail("--cycles must be an integer between 1 and 100000.");
+  }
+  const result = runAutonomySoak(cycles);
+  log(`L5 autonomy soak simulation passed: cycles=${result.cycles}, scenarios=${result.scenarios}.`);
 }
 
 async function commandAutonomy(args) {
@@ -1357,9 +1547,10 @@ async function commandAutonomy(args) {
     fail("L5 is disabled. Set HARNESS_AUTONOMY_LEVEL=5 explicitly.");
   }
 
-  const maxIterations = Number(options.iterations || process.env.HARNESS_MAX_ITERATIONS || "3");
-  const maxApiCalls = Number(process.env.HARNESS_MAX_API_CALLS || "6");
-  const maxMinutes = Number(process.env.HARNESS_MAX_RUNTIME_MINUTES || "30");
+  const cfg = loadConfig().limits;
+  const maxIterations = Number(options.iterations || cfg.maxIterations);
+  const maxApiCalls = cfg.maxApiCalls;
+  const maxMinutes = cfg.maxRuntimeMinutes;
   if (![maxIterations, maxApiCalls, maxMinutes].every((value) => Number.isFinite(value) && value > 0)) {
     fail("L5 limits must be positive numbers.");
   }
@@ -1591,16 +1782,17 @@ function packageScripts() {
   return JSON.parse(readText("package.json")).scripts || {};
 }
 
-function recordVerify(result, reason, contentFingerprint) {
+function recordVerify(result, reason, contentFingerprint, verifyMode = "full") {
   const task = resolveTaskId();
   const rel = `observability/metrics/${task}.verify.json`;
   let reworkCount = 0;
   let lastFailReason = "";
+  let previousRecord = {};
   if (exists(rel)) {
     try {
-      const previous = JSON.parse(readText(rel));
-      reworkCount = previous.rework_count || 0;
-      lastFailReason = previous.last_fail_reason || "";
+      previousRecord = JSON.parse(readText(rel));
+      reworkCount = previousRecord.rework_count || 0;
+      lastFailReason = previousRecord.last_fail_reason || "";
     } catch {
       reworkCount = 0;
       lastFailReason = "";
@@ -1608,14 +1800,28 @@ function recordVerify(result, reason, contentFingerprint) {
   }
   if (result === "fail") reworkCount += 1;
   if (reason) lastFailReason = reason;
-  writeText(rel, JSON.stringify({
-    task,
-    last_verify: currentTimestamp(),
+
+  const currentResult = {
     result,
-    ...(lastFailReason ? { last_fail_reason: lastFailReason } : {}),
-    ...(contentFingerprint ? { content_fingerprint: contentFingerprint } : {}),
+    verified_at: currentTimestamp(),
+    ...(reason ? { reason } : {}),
+    ...(result === "pass" && contentFingerprint ? { content_fingerprint: contentFingerprint } : {})
+  };
+  const nextRecord = {
+    ...previousRecord,
+    task,
+    last_verify: currentResult.verified_at,
+    result,
     rework_count: reworkCount,
-  }, null, 2));
+    mode: verifyMode
+  };
+
+  if (lastFailReason) nextRecord.last_fail_reason = lastFailReason;
+  if (verifyMode === "full") nextRecord.last_full = currentResult;
+  else nextRecord.last_quick = currentResult;
+  delete nextRecord.content_fingerprint;
+
+  writeText(rel, JSON.stringify(nextRecord, null, 2));
 }
 
 function summarizeVerifyFailure(failedStep) {
@@ -1630,6 +1836,27 @@ function summarizeVerifyFailure(failedStep) {
   return `${failedStep.label}: ${detail}`.slice(0, 500);
 }
 
+function getDirtyFiles() {
+  const status = run("git", ["status", "--porcelain", "-uall"], { capture: true });
+  if (status.status !== 0 || status.error) return [];
+  return status.stdout.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .map(line => {
+      // Porcelain status lines are: XY PATH -> we extract the path part
+      // If renamed, path is "orig -> new", but we just want the new path or standard relative paths.
+      // Usually status is e.g. "M src/index.js" or "?? src/other.js"
+      const match = line.match(/^(?:[MADRCU?!\s]+)\s+(.+)$/);
+      if (!match) return "";
+      let p = match[1];
+      if (p.includes(" -> ")) {
+        p = p.split(" -> ").pop();
+      }
+      return p.replace(/^["']|["']$/g, "").replace(/\\/g, "/");
+    })
+    .filter(Boolean);
+}
+
 async function commandVerify(args) {
   parseEnvFile();
   const { options } = parseArgs(args);
@@ -1638,6 +1865,9 @@ async function commandVerify(args) {
   const diagnose = options.diagnose || process.env.HARNESS_DIAGNOSE === "true";
   const autoFix = options["auto-fix"] || process.env.HARNESS_AUTO_FIX === "true";
   const offline = options.offline || process.env.HARNESS_OFFLINE === "1" || process.env.HARNESS_OFFLINE === "true";
+  if (options.quick && options.full) fail("Choose either --quick or --full, not both.");
+  const mode = options.quick ? "quick" : "full";
+
   const maxAttempts = autoFix ? 2 : 1;
   let attempt = 0;
   let verifyPassed = false;
@@ -1655,9 +1885,11 @@ async function commandVerify(args) {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const gradleCommand = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
 
+  const cfg = loadConfig();
+
   while (attempt < maxAttempts && !verifyPassed) {
     const worktreeBefore = worktreeSnapshot();
-    say(`[Harness] Verify execution started (Attempt ${attempt + 1}/${maxAttempts})`);
+    say(`[Harness] Verify execution started (Attempt ${attempt + 1}/${maxAttempts}, Mode: ${mode})`);
     if (offline) say("[OFFLINE] AI review skipped");
 
     let failedStep = null;
@@ -1673,43 +1905,105 @@ async function commandVerify(args) {
     };
 
     let success = true;
-    if (exists("build.gradle") || exists("build.gradle.kts")) {
-      success = runStep("Java test", gradleCommand, ["test"]);
-      const buildFiles = (exists("build.gradle") ? readText("build.gradle") : "") + "\n" + (exists("build.gradle.kts") ? readText("build.gradle.kts") : "");
-      if (success && buildFiles.includes("jacoco")) {
-        success = runStep("Java coverage", gradleCommand, ["jacocoTestCoverageVerification"]);
-      }
-      if (success) {
-        success = runStep("Java build", gradleCommand, ["build", "-x", "test"]);
-      }
-    } else if (exists("package.json")) {
+    let substantiveChecks = 0;
+
+    if (mode === "quick") {
+      const dirtyFiles = getDirtyFiles();
+      say(`[Quick Verify] Dirty files: ${dirtyFiles.join(", ") || "none"}`);
+      const quickMappings = cfg.verify.quick || {};
       const scripts = packageScripts();
-      if (scripts.coverage) {
-        success = runStep("Node coverage", npmCommand, ["run", "coverage"]);
-      } else if (scripts.test) {
-        success = runStep("Node test", npmCommand, ["run", "test"]);
-      } else {
-        say("[Node] Skipping tests (no test or coverage script)");
+      const inferredMappings = inferQuickMappings({
+        packageScripts: scripts,
+        hasGradle: exists("build.gradle") || exists("build.gradle.kts")
+      });
+      const commandsToRun = selectQuickCommands(dirtyFiles, quickMappings, inferredMappings);
+      if (Object.keys(quickMappings).length === 0 && Object.keys(inferredMappings).length > 0) {
+        say("[Quick Verify] Using inferred project mappings.");
       }
-
-      if (success && scripts.lint) {
-        success = runStep("Node lint", npmCommand, ["run", "lint"]);
-      } else if (success) {
-        say("[Node] Skipping lint (no lint script)");
+      if (commandsToRun.length === 0) {
+        say("[Quick Verify] No matching test commands found for dirty files. Inconclusive status.");
+        recordVerify("inconclusive", "No matching test commands found for dirty files.", null, "quick");
+        writeText(logRel, lines.join(os.EOL));
+        process.exit(0);
       }
-
-      if (success && scripts.build) {
-        success = runStep("Node build", npmCommand, ["run", "build"]);
-      } else if (success) {
-        say("[Node] Skipping build (no build script)");
+      for (const fullCmdStr of commandsToRun) {
+        say(`[Quick Verify] Executing: ${fullCmdStr}`);
+        if (fullCmdStr === "__HARNESS_GRADLE_TEST__") {
+          success = runStep("Quick Gradle test", gradleCommand, ["test"]);
+          if (!success) break;
+          continue;
+        }
+        const parts = tokenizeCommand(fullCmdStr);
+        const cmd = parts[0];
+        const cmdArgs = parts.slice(1);
+        const resolvedCmd = (cmd === "npm" && process.platform === "win32") ? "npm.cmd" : cmd;
+        success = runStep("Quick command", resolvedCmd, cmdArgs);
+        if (!success) break;
       }
     } else {
-      recordVerify("fail", "unsupported-project");
-      fail("No supported project type detected. Please verify manually.");
+      // Full Verify Mode
+      const fullCmds = cfg.verify.full || [];
+      if (Array.isArray(fullCmds) && fullCmds.length > 0) {
+        for (const fullCmdStr of fullCmds) {
+          const parts = tokenizeCommand(fullCmdStr);
+          const cmd = parts[0];
+          const cmdArgs = parts.slice(1);
+          const resolvedCmd = (cmd === "npm" && process.platform === "win32") ? "npm.cmd" : cmd;
+          success = runStep("Full command", resolvedCmd, cmdArgs);
+          substantiveChecks += 1;
+          if (!success) break;
+        }
+      } else {
+        // Fallback auto-detection if verify.full is empty
+        if (exists("build.gradle") || exists("build.gradle.kts")) {
+          success = runStep("Java test", gradleCommand, ["test"]);
+          substantiveChecks += 1;
+          const buildFiles = (exists("build.gradle") ? readText("build.gradle") : "") + "\n" + (exists("build.gradle.kts") ? readText("build.gradle.kts") : "");
+          if (success && buildFiles.includes("jacoco")) {
+            success = runStep("Java coverage", gradleCommand, ["jacocoTestCoverageVerification"]);
+          }
+          if (success) {
+            success = runStep("Java build", gradleCommand, ["build", "-x", "test"]);
+            substantiveChecks += 1;
+          }
+        } else if (exists("package.json")) {
+          const scripts = packageScripts();
+          if (scripts.coverage) {
+            success = runStep("Node coverage", npmCommand, ["run", "coverage"]);
+            substantiveChecks += 1;
+          } else if (scripts.test) {
+            success = runStep("Node test", npmCommand, ["run", "test"]);
+            substantiveChecks += 1;
+          } else {
+            say("[Node] Skipping tests (no test or coverage script)");
+          }
+
+          if (success && scripts.lint) {
+            success = runStep("Node lint", npmCommand, ["run", "lint"]);
+          } else if (success) {
+            say("[Node] Skipping lint (no lint script)");
+          }
+
+          if (success && scripts.build) {
+            success = runStep("Node build", npmCommand, ["run", "build"]);
+            substantiveChecks += 1;
+          } else if (success) {
+            say("[Node] Skipping build (no build script)");
+          }
+        } else {
+          recordVerify("fail", "unsupported-project", null, "full");
+          fail("No supported project type detected. Please verify manually.");
+        }
+      }
+      if (success && substantiveChecks === 0) {
+        recordVerify("inconclusive", "No test, coverage, build, or configured full verification command was available.", null, "full");
+        fail("Full verification is inconclusive because no test, coverage, build, or configured full command ran.");
+      }
     }
 
     if (worktreeBefore) {
       const worktreeAfter = worktreeSnapshot();
+      recordCleanupCandidates(resolveTaskId(), worktreeBefore, worktreeAfter);
       if (worktreeAfter && worktreeAfter.fingerprint !== worktreeBefore.fingerprint) {
         const detail = describeWorktreeDrift(worktreeBefore, worktreeAfter);
         if (success) {
@@ -1733,10 +2027,10 @@ async function commandVerify(args) {
       verifyPassed = true;
       const contentFingerprint = repositoryContentFingerprint();
       if (!contentFingerprint) {
-        recordVerify("fail", "repository-content-fingerprint-unavailable");
+        recordVerify("fail", "repository-content-fingerprint-unavailable", null, mode);
         fail("Verification passed, but the repository content fingerprint could not be calculated.");
       }
-      recordVerify("pass", "", contentFingerprint);
+      recordVerify("pass", "", contentFingerprint, mode);
       if (appliedPatchRel) {
         say(`[Auto-fix] Verification passed. Patch retained for review: ${appliedPatchRel}`);
         await sendSlackNotification("success", `✅ Low-risk auto-fix passed verification. Review patch: ${appliedPatchRel}`);
@@ -1762,17 +2056,17 @@ async function commandVerify(args) {
       } catch (err) {
         say(`[Auto-fix] CRITICAL: Automatic rollback failed: ${err.message}`);
       }
-      recordVerify("fail", failureReason);
+      recordVerify("fail", failureReason, null, mode);
       writeText(logRel, lines.join(os.EOL));
       await sendSlackNotification("fail", `❌ Auto-fix failed verification and rollback was attempted.\nStep: ${failedStep.label}\nPatch: ${appliedPatchRel}`);
       process.exit(failedStep.status);
     }
 
     if (autoFix) {
-      const mode = process.env.HARNESS_AGENT_MODE || "interactive";
+      const modeEnv = process.env.HARNESS_AGENT_MODE || "interactive";
       if (offline) {
         say("[Auto-fix] Disabled because offline mode is active.");
-      } else if (mode !== "api") {
+      } else if (modeEnv !== "api") {
         say("[Auto-fix] Requires HARNESS_AGENT_MODE=api. Falling back to diagnosis guidance.");
       } else {
         const autoFixPrompt = `A verification step failed.
@@ -1815,8 +2109,8 @@ Safety contract:
     // If we failed and self-diagnose is requested
     if (diagnose && attempt < maxAttempts) {
       attempt++;
-      const mode = process.env.HARNESS_AGENT_MODE || "interactive";
-      if (mode !== "api") {
+      const modeEnv = process.env.HARNESS_AGENT_MODE || "interactive";
+      if (modeEnv !== "api") {
         say(`\n======================================================`);
         say(`🚨 [AGENT_COMMAND: SELF_DIAGNOSE_REQUIRED]`);
         say(`------------------------------------------------------`);
@@ -1833,7 +2127,7 @@ Safety contract:
         say(`3. Use codebase search / file write tools to fix the issue.`);
         say(`4. Once fixed, execute verification again using: npm run harness -- verify`);
         say(`======================================================\n`);
-        recordVerify("fail", failureReason);
+        recordVerify("fail", failureReason, null, mode);
         writeText(logRel, lines.join(os.EOL));
         process.exit(failedStep.status);
       }
@@ -1859,13 +2153,13 @@ Please review the error logs, identify the root cause, and write a detailed reco
       }
 
       // Exit immediately after generating the diagnose guidance in API mode
-      recordVerify("fail", failureReason);
+      recordVerify("fail", failureReason, null, mode);
       writeText(logRel, lines.join(os.EOL));
       await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis completed. Recovery guide generated.`);
       process.exit(failedStep.status);
     } else {
       // Verification failed and no diagnose/exhausted attempts
-      recordVerify("fail", failureReason);
+      recordVerify("fail", failureReason, null, mode);
       writeText(logRel, lines.join(os.EOL));
       await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis is disabled or completed.`);
       process.exit(failedStep.status);
@@ -1922,10 +2216,11 @@ function buildContextBundle(type, taskName) {
 
 async function postJson(url, headers, body) {
   if (typeof fetch !== "function") fail("Node fetch is unavailable. Use Node.js 18+.");
-  const maxRetries = Number(process.env.HARNESS_API_MAX_RETRIES || "3");
-  const baseDelayMs = Number(process.env.HARNESS_API_RETRY_BASE_MS || "1000");
-  const maxDelayMs = Number(process.env.HARNESS_API_RETRY_MAX_MS || "30000");
-  const maxProviderRequests = Number(process.env.HARNESS_MAX_PROVIDER_REQUESTS || "12");
+  const cfg = loadConfig().api;
+  const maxRetries = cfg.maxRetries;
+  const baseDelayMs = cfg.retryBaseMs;
+  const maxDelayMs = cfg.retryMaxMs;
+  const maxProviderRequests = cfg.maxProviderRequests;
   if (![maxRetries, baseDelayMs, maxDelayMs].every((value) => Number.isFinite(value) && value >= 0)
       || !Number.isFinite(maxProviderRequests) || maxProviderRequests < 1) {
     fail("API retry settings must be non-negative, and HARNESS_MAX_PROVIDER_REQUESTS must be at least 1.");
@@ -2078,23 +2373,76 @@ Usage:
   node tools/harness-cli/index.js check
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name>
-  node tools/harness-cli/index.js verify [--offline] [--diagnose] [--auto-fix]
+  node tools/harness-cli/index.js verify [--quick|--full] [--offline] [--diagnose] [--auto-fix]
   node tools/harness-cli/index.js run-agent [--type type] [--role role] "prompt"
   node tools/harness-cli/index.js complete-task <name> [--force]
   node tools/harness-cli/index.js scan-drift
   node tools/harness-cli/index.js recover
   node tools/harness-cli/index.js autonomy [--status] [--verify-current] [--approve-risk] [--iterations N]
+  node tools/harness-cli/index.js cleanup [--dry-run] [--approve <id>]
   node tools/harness-cli/index.js validate-auto-fix <patch-file>
   node tools/harness-cli/index.js validate-l5-patch <patch-file>
   node tools/harness-cli/index.js validate-prompts
   node tools/harness-cli/index.js validate-api-retry
   node tools/harness-cli/index.js validate-recovery
+  node tools/harness-cli/index.js validate-l5-soak [--cycles N]
 `);
+}
+
+function checkGitPreflight() {
+  if (!commandExists("git")) {
+    fail("Git CLI is not installed or not available in the system PATH.");
+  }
+  const version = run("git", ["--version"], { capture: true });
+  if (version.status !== 0 || version.error) {
+    fail(`Git CLI could not be executed: ${version.error?.message || version.stderr || "unknown error"}`);
+  }
+  const isRepo = run("git", ["rev-parse", "--is-inside-work-tree"], { capture: true });
+  if (isRepo.status !== 0 || isRepo.error) {
+    fail("The current directory is not a Git repository. Please initialize git first.");
+  }
 }
 
 async function main() {
   const [command, ...args] = process.argv.slice(2);
+  const commandMetadata = {
+    "check": { requiresGit: false },
+    "check-environment": { requiresGit: false },
+    "create-ticket": { requiresGit: false },
+    "start-ticket": { requiresGit: true },
+    "complete-task": { requiresGit: true },
+    "verify": { requiresGit: true },
+    "run-agent": { requiresGit: true },
+    "scan-drift": { requiresGit: true },
+    "recover": { requiresGit: true },
+    "autonomy": { requiresGit: true },
+    "cleanup": { requiresGit: true },
+    "validate-auto-fix": { requiresGit: false },
+    "validate-l5-patch": { requiresGit: false },
+    "validate-prompts": { requiresGit: false },
+    "validate-api-retry": { requiresGit: false },
+    "validate-recovery": { requiresGit: false },
+    "validate-l5-soak": { requiresGit: false },
+    "help": { requiresGit: false },
+    "--help": { requiresGit: false },
+    "-h": { requiresGit: false },
+    "version": { requiresGit: false },
+    "--version": { requiresGit: false },
+    "-v": { requiresGit: false }
+  };
+
+  const meta = commandMetadata[command || "help"] || { requiresGit: false };
+  const configBypassCommands = new Set(["help", "--help", "-h", "version", "--version", "-v", undefined]);
+  if (!configBypassCommands.has(command)) {
+    loadConfig();
+  }
+  if (meta.requiresGit) {
+    checkGitPreflight();
+  }
   switch (command) {
+    case "cleanup":
+      commandCleanup(args);
+      break;
     case "check":
     case "check-environment":
       await commandCheck(args);
@@ -2138,12 +2486,22 @@ async function main() {
     case "validate-recovery":
       commandValidateRecovery();
       break;
+    case "validate-l5-soak":
+      commandValidateL5Soak(args);
+      break;
     case "help":
     case "--help":
     case "-h":
     case undefined:
       usage();
       break;
+    case "version":
+    case "--version":
+    case "-v": {
+      const pkg = JSON.parse(readText("package.json"));
+      log(pkg.version || "unknown");
+      break;
+    }
     default:
       usage();
       fail(`Unknown command: ${command}`);

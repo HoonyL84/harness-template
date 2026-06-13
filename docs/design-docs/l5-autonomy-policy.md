@@ -53,6 +53,11 @@ API 모드는 clean worktree에서 독립 루프를 실행한다.
 6. 자동 커밋이 꺼져 있으면 검토 체크포인트에서 멈춘다.
 7. 자동 커밋이 켜져 있으면 task branch에서만 커밋하고 다음 티켓으로 진행한다.
 
+L5의 `verified` 및 완료 판정은 `verify --full`의 `last_full` 지문만 인정한다.
+`verify --quick` 결과는 개발 중 참고 정보로만 별도 보존하며 완료 권한을 부여하지 않는다.
+실제 provider 장기 호출을 대체하는 결정론적 예산·재시도·승인 경계 시뮬레이션은
+`npm run test:soak`으로 반복 검증한다. 이 검증은 실제 API 품질 검증을 대체하지 않는다.
+
 ## 승인 경계
 
 다음 변경은 패치를 저장한 뒤 `approval_required` 상태로 멈춘다.

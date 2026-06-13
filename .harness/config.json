@@ -1,0 +1,29 @@
+{
+  "config_version": "1.0",
+  "verify": {
+    "quick": {},
+    "full": []
+  },
+  "limits": {
+    "max_iterations": 3,
+    "max_api_calls": 6,
+    "max_runtime_minutes": 30,
+    "max_patch_kb": 500,
+    "max_files": 20
+  },
+  "api": {
+    "max_retries": 3,
+    "retry_base_ms": 1000,
+    "retry_max_ms": 30000,
+    "max_provider_requests": 12
+  },
+  "auto_fix": {
+    "allowed_roots": ["src", "app", "lib", "test", "tests", "__tests__"],
+    "forbidden_segments": [".git", ".github", ".harness", ".venv", "build", "coverage", "dist", "docs", "evals", "infra", "memory", "migrations", "node_modules", "observability", "prompts", "scripts", "target", "terraform", "tools", "vendor", "venv"]
+  },
+  "l5": {
+    "protected_segments": [".git", ".harness", "observability", "node_modules", ".venv", "venv"],
+    "high_risk_segments": [".github", "deploy", "deployment", "helm", "infra", "k8s", "kubernetes", "migrations", "scripts", "terraform"],
+    "high_risk_files": [".env", ".env.local", "docker-compose.yml", "docker-compose.yaml", "dockerfile", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+  }
+}

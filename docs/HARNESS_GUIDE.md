@@ -124,7 +124,17 @@ npm run harness -- check
 npm run harness -- create-ticket user-auth feat --goal "JWT 기반 사용자 인증을 구현한다"
 npm run harness -- start-ticket user-auth
 # 여기서 구현 작업
+
+# 개발 도중 변경한 파일 기준의 빠른 부분 검증 (성공해도 complete-task는 불가)
+npm run harness -- verify --quick
+
+# 최종 완료를 위한 전체 검증 (기본값은 --full)
 npm run harness -- verify
+
+# 만약 검증 중 생성된 불필요한 부산물(Untracked 파일)을 정리하고 싶다면:
+npm run harness -- cleanup --dry-run
+npm run harness -- cleanup --approve <manifest-id>
+
 git add -A
 git commit -m "feat(auth): JWT 기반 사용자 인증 구현"
 # 원격 저장소가 설정된 경우에만: git push
@@ -136,6 +146,20 @@ git commit -m "chore(harness): user-auth 완료 기록"
 
 `complete-task`는 active 티켓을 archive로 이동하고 완료 메타데이터를 기록하므로,
 명령 실행 후 생긴 변경은 별도 마감 커밋으로 저장합니다.
+`complete-task`와 L5 자율 실행 완료는 반드시 `verify --full`이 성공한 지문 상태에서만 허용됩니다.
+Quick과 Full 결과는 각각 `last_quick`, `last_full`로 기록되며 Quick 실행은 유효한 Full 기록을 덮어쓰지 않습니다.
+Cleanup은 검증 시작 전에 없었다가 검증 중 새로 생성된 untracked 일반 파일만 후보로 기록합니다.
+`verify.quick`이 비어 있으면 Node 프로젝트의 `test`/`lint` 스크립트 또는 Gradle 테스트를 변경 파일 확장자에 맞춰 자동 선택합니다.
+Full 검증에서 테스트·커버리지·빌드 또는 명시적 Full 명령이 하나도 실행되지 않으면 `inconclusive`로 차단됩니다.
+
+하네스 코어 자체 검증:
+
+```bash
+npm test
+npm run test:soak
+```
+
+GitHub Actions는 Ubuntu, macOS, Windows에서 단위 테스트와 각 OS용 스모크 테스트를 반복합니다.
 
 기존 Bash/PowerShell wrapper도 호환용으로 유지됩니다.
 

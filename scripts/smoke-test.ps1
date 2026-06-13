@@ -8,6 +8,8 @@ $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
 
 $TicketName = "smoke-test-ticket"
+$ConfigPath = ".harness/config.json"
+$ConfigBackup = [System.IO.File]::ReadAllBytes((Resolve-Path $ConfigPath))
 
 function Test-L5Checkpoint {
   Write-Host "[Smoke Test] Checking interactive L5 checkpoint..."
@@ -42,6 +44,11 @@ function Cleanup-TestFiles {
   Remove-Item -Path ".harness/risky-l5.patch" -ErrorAction SilentlyContinue
   Remove-Item -Path ".harness/protected-l5.patch" -ErrorAction SilentlyContinue
   Remove-Item -Path "observability/autonomy/state.json" -ErrorAction SilentlyContinue
+  Remove-Item -Path "smoke-fingerprint.tmp" -ErrorAction SilentlyContinue
+  Remove-Item -Path "smoke-generated.tmp" -ErrorAction SilentlyContinue
+  Get-ChildItem "observability/metrics" -Filter "cleanup-*.json" -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+  [System.IO.File]::WriteAllBytes((Join-Path $root $ConfigPath), $ConfigBackup)
 }
 
 # Clean up before run
@@ -121,8 +128,60 @@ try {
   if (-not (Test-Path "observability/metrics/$TicketName.verify.json")) {
     throw "Error: Verify metric JSON file was not created."
   }
+  $verifyRecord = Get-Content "observability/metrics/$TicketName.verify.json" -Raw | ConvertFrom-Json
+  if ($verifyRecord.last_full.result -ne "pass") {
+    throw "Error: Full verification record was not stored separately."
+  }
+  & .\scripts\verify-task.ps1 -Offline -Quick
+  $verifyRecord = Get-Content "observability/metrics/$TicketName.verify.json" -Raw | ConvertFrom-Json
+  if ($verifyRecord.last_full.result -ne "pass" -or $verifyRecord.last_quick.result -ne "pass") {
+    throw "Error: Inferred quick verification did not pass while preserving the full verification record."
+  }
 
-  Write-Host "[Smoke Test] 5. Completing task..."
+  Write-Host "[Smoke Test] 5. Checking stale fingerprint rejection..."
+  Set-Content -Path "smoke-fingerprint.tmp" -Value "changed after full verify" -NoNewline
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  & node "tools/harness-cli/index.js" complete-task $TicketName 2>$null
+  $staleCompleteExitCode = $LASTEXITCODE
+  $ErrorActionPreference = $previousErrorActionPreference
+  if ($staleCompleteExitCode -eq 0) {
+    throw "Error: Completion accepted content changed after full verification."
+  }
+  Remove-Item "smoke-fingerprint.tmp" -Force
+
+  Write-Host "[Smoke Test] 6. Checking quick/full isolation and approved cleanup..."
+  $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+  $config.verify.quick = [PSCustomObject]@{
+    "**/*" = @("node -e `"require('fs').writeFileSync('smoke-generated.tmp','generated')`"")
+  }
+  $configJson = $config | ConvertTo-Json -Depth 10
+  [System.IO.File]::WriteAllText((Join-Path $root $ConfigPath), $configJson, [System.Text.UTF8Encoding]::new($false))
+  & .\scripts\verify-task.ps1 -Offline
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  & .\scripts\verify-task.ps1 -Offline -Quick 2>$null
+  $quickExitCode = $LASTEXITCODE
+  $ErrorActionPreference = $previousErrorActionPreference
+  if ($quickExitCode -eq 0) {
+    throw "Error: Quick verification did not detect its generated worktree artifact."
+  }
+  $verifyRecord = Get-Content "observability/metrics/$TicketName.verify.json" -Raw | ConvertFrom-Json
+  if ($verifyRecord.last_full.result -ne "pass" -or $verifyRecord.last_quick.result -ne "fail") {
+    throw "Error: Quick verification overwrote or failed to preserve the full verification record."
+  }
+  $cleanupOutput = (& node "tools/harness-cli/index.js" cleanup --dry-run 2>&1 | Out-String)
+  Write-Host $cleanupOutput
+  if ($cleanupOutput -notmatch "Manifest ID:\s*([a-f0-9]{12})") {
+    throw "Error: Cleanup dry-run did not produce an integrity-bound manifest."
+  }
+  $manifestId = $Matches[1]
+  & node "tools/harness-cli/index.js" cleanup --approve $manifestId
+  if (Test-Path "smoke-generated.tmp") {
+    throw "Error: Approved cleanup did not remove the verification-generated file."
+  }
+
+  Write-Host "[Smoke Test] 7. Completing task..."
   $completeOutput = (& .\scripts\complete-task.ps1 -TaskName $TicketName 2>&1 | Out-String)
   Write-Host $completeOutput
   $expectedCompleteGuidance = if ($hasOrigin) { "commit and push the archived" } else { "commit the archived" }
@@ -141,7 +200,23 @@ try {
     throw "Error: Done metric JSON file was not created."
   }
 
-  Write-Host "[Smoke Test] 6. Validating L4.5 auto-fix policy..."
+  Write-Host "[Smoke Test] 8. Validating config fail-closed and help bypass..."
+  [System.IO.File]::WriteAllText((Join-Path $root $ConfigPath), "{ invalid json", [System.Text.UTF8Encoding]::new($false))
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  & node "tools/harness-cli/index.js" validate-prompts 2>$null
+  $invalidConfigExitCode = $LASTEXITCODE
+  $ErrorActionPreference = $previousErrorActionPreference
+  if ($invalidConfigExitCode -eq 0) {
+    throw "Error: Invalid config did not fail closed."
+  }
+  & node "tools/harness-cli/index.js" help *> $null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Error: Help did not bypass invalid config."
+  }
+  [System.IO.File]::WriteAllBytes((Join-Path $root $ConfigPath), $ConfigBackup)
+
+  Write-Host "[Smoke Test] 9. Validating L4.5 auto-fix policy..."
   @"
 diff --git a/packages/example/src/example.js b/packages/example/src/example.js
 --- a/packages/example/src/example.js
@@ -180,7 +255,7 @@ new file mode 100644
     throw "Error: New file patch was not rejected."
   }
 
-  Write-Host "[Smoke Test] 7. Validating L5 policy and opt-in gate..."
+  Write-Host "[Smoke Test] 10. Validating L5 policy and opt-in gate..."
   & node "tools/harness-cli/index.js" validate-prompts
   if ($LASTEXITCODE -ne 0) {
     throw "Error: Prompt template validation failed."
