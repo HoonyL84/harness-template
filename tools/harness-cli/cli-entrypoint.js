@@ -27,6 +27,10 @@ const COMMAND_METADATA = Object.freeze({
   "-v": { requiresGit: false }
 });
 const CONFIG_BYPASS_COMMANDS = new Set(["help", "--help", "-h", "version", "--version", "-v", undefined]);
+const RUNTIME_MANAGED_ENV_VARS = new Set([
+  "PATH", "PATHEXT", "PWD", "HOME", "SHELL", "USER",
+  "LANG", "PORT", "NODE_ENV", "NODE_V8_COVERAGE", "TEMP", "TMP"
+]);
 
 function getCommandMetadata(command) {
   return COMMAND_METADATA[command || "help"] || { requiresGit: false };
@@ -36,7 +40,12 @@ function shouldBypassConfig(command) {
   return CONFIG_BYPASS_COMMANDS.has(command);
 }
 
+function isRuntimeManagedEnv(name) {
+  return RUNTIME_MANAGED_ENV_VARS.has(name);
+}
+
 module.exports = {
   getCommandMetadata,
+  isRuntimeManagedEnv,
   shouldBypassConfig
 };

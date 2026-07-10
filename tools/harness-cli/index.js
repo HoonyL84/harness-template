@@ -17,7 +17,7 @@ const {
   selectQuickCommands,
   tokenizeCommand
 } = require("./verify-utils");
-const { getCommandMetadata, shouldBypassConfig } = require("./cli-entrypoint");
+const { getCommandMetadata, isRuntimeManagedEnv, shouldBypassConfig } = require("./cli-entrypoint");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 process.chdir(ROOT);
@@ -935,11 +935,6 @@ function commandScanDrift(args) {
   const files = findFilesInDir(ROOT, /\.(js|ts|java)$/);
   const codeVars = new Set();
   
-  // Exclude system variables we do not trace
-  const systemIgnore = new Set([
-    "PATH", "PATHEXT", "PWD", "HOME", "SHELL", "USER", 
-    "LANG", "PORT", "NODE_ENV", "TEMP", "TMP"
-  ]);
 
   for (const file of files) {
     if (file.includes("node_modules") || file.includes(".worktrees")) continue;
@@ -953,14 +948,14 @@ function commandScanDrift(args) {
     let match;
     while ((match = jsRegex.exec(content)) !== null) {
       const v = match[1];
-      if (!systemIgnore.has(v)) codeVars.add(v);
+      if (!isRuntimeManagedEnv(v)) codeVars.add(v);
     }
 
     // Java: System.getenv("VARIABLE")
     const javaRegex = /System\.getenv\(\s*"([A-Z_0-9]+)"\s*\)/g;
     while ((match = javaRegex.exec(content)) !== null) {
       const v = match[1];
-      if (!systemIgnore.has(v)) codeVars.add(v);
+      if (!isRuntimeManagedEnv(v)) codeVars.add(v);
     }
   }
 
