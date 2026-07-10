@@ -5,12 +5,19 @@ const crypto = require("crypto");
 const http = require("http");
 const path = require("path");
 const os = require("os");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const { runAutonomySoak } = require("./autonomy-utils");
 const { createCleanupManifest, findGeneratedPaths, isCleanupManifestValid } = require("./cleanup-utils");
 const { createConfigLoader, isPlainObject } = require("./config");
 const { commandOrchestrate, requireTaskOrchestrationReady } = require("./orchestration-command");
-const { inferQuickMappings, selectQuickCommands, tokenizeCommand } = require("./verify-utils");
+const {
+  createNodeVerificationSteps,
+  createQuickCacheKey,
+  inferQuickMappings,
+  selectQuickCommands,
+  tokenizeCommand
+} = require("./verify-utils");
+const { getCommandMetadata, isRuntimeManagedEnv, shouldBypassConfig } = require("./cli-entrypoint");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 process.chdir(ROOT);
@@ -327,6 +334,26 @@ function run(command, args, options = {}) {
   }
 
   return { status: result.status ?? 1, error: result.error };
+}
+
+function runAsync(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const needsWindowsCommandShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
+    const child = spawn(command, args, {
+      cwd: ROOT,
+      stdio: options.capture ? "pipe" : "inherit",
+      shell: needsWindowsCommandShell,
+      env: options.env ? { ...process.env, ...options.env } : process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    if (options.capture) {
+      child.stdout.on("data", (chunk) => { stdout += chunk; });
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+    }
+    child.on("error", (error) => resolve({ status: 1, stdout, stderr, error }));
+    child.on("close", (status) => resolve({ status: status ?? 1, stdout, stderr }));
+  });
 }
 
 function commandExists(command) {
@@ -908,11 +935,6 @@ function commandScanDrift(args) {
   const files = findFilesInDir(ROOT, /\.(js|ts|java)$/);
   const codeVars = new Set();
   
-  // Exclude system variables we do not trace
-  const systemIgnore = new Set([
-    "PATH", "PATHEXT", "PWD", "HOME", "SHELL", "USER", 
-    "LANG", "PORT", "NODE_ENV", "TEMP", "TMP"
-  ]);
 
   for (const file of files) {
     if (file.includes("node_modules") || file.includes(".worktrees")) continue;
@@ -926,14 +948,14 @@ function commandScanDrift(args) {
     let match;
     while ((match = jsRegex.exec(content)) !== null) {
       const v = match[1];
-      if (!systemIgnore.has(v)) codeVars.add(v);
+      if (!isRuntimeManagedEnv(v)) codeVars.add(v);
     }
 
     // Java: System.getenv("VARIABLE")
     const javaRegex = /System\.getenv\(\s*"([A-Z_0-9]+)"\s*\)/g;
     while ((match = javaRegex.exec(content)) !== null) {
       const v = match[1];
-      if (!systemIgnore.has(v)) codeVars.add(v);
+      if (!isRuntimeManagedEnv(v)) codeVars.add(v);
     }
   }
 
@@ -1901,6 +1923,7 @@ async function commandVerify(args) {
   let attempt = 0;
   let verifyPassed = false;
   let appliedPatchRel = "";
+  let quickCacheRecord = null;
 
   ensureDir("observability/traces");
   ensureDir("observability/metrics");
@@ -1933,6 +1956,22 @@ async function commandVerify(args) {
       return true;
     };
 
+    const runStepAsync = async (label, command, stepArgs) => {
+      say(`[${label}] ${command} ${stepArgs.join(" ")}`);
+      const result = await runAsync(command, stepArgs, { capture: true });
+      return {
+        ok: result.status === 0,
+        failure: {
+          label,
+          command,
+          stepArgs,
+          status: result.status,
+          stdout: result.stdout,
+          stderr: result.stderr
+        }
+      };
+    };
+
     let success = true;
     let substantiveChecks = 0;
 
@@ -1955,19 +1994,50 @@ async function commandVerify(args) {
         writeText(logRel, lines.join(os.EOL));
         process.exit(0);
       }
-      for (const fullCmdStr of commandsToRun) {
-        say(`[Quick Verify] Executing: ${fullCmdStr}`);
-        if (fullCmdStr === "__HARNESS_GRADLE_TEST__") {
-          success = runStep("Quick Gradle test", gradleCommand, ["test"]);
-          if (!success) break;
-          continue;
+      const quickFingerprint = repositoryContentFingerprint();
+      if (!quickFingerprint) fail("Quick verification cache key could not be calculated.");
+      const quickCacheRel = `observability/metrics/${resolveTaskId()}.quick-cache.json`;
+      const quickCacheKey = createQuickCacheKey({
+        contentFingerprint: quickFingerprint,
+        commands: commandsToRun,
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch
+      });
+      quickCacheRecord = {
+        key: quickCacheKey,
+        content_fingerprint: quickFingerprint,
+        commands: commandsToRun,
+        node_version: process.version,
+        platform: process.platform,
+        arch: process.arch
+      };
+      let cacheHit = false;
+      if (cfg.verify.quickCache && exists(quickCacheRel)) {
+        try {
+          cacheHit = JSON.parse(readText(quickCacheRel)).key === quickCacheKey;
+        } catch {
+          say("[Quick Verify] Ignoring an unreadable cache record.");
         }
-        const parts = tokenizeCommand(fullCmdStr);
-        const cmd = parts[0];
-        const cmdArgs = parts.slice(1);
-        const resolvedCmd = (cmd === "npm" && process.platform === "win32") ? "npm.cmd" : cmd;
-        success = runStep("Quick command", resolvedCmd, cmdArgs);
-        if (!success) break;
+      }
+
+      if (cacheHit) {
+        say("[Quick Verify] Cache hit. Reusing checks for identical content, commands, and runtime.");
+      } else {
+        for (const fullCmdStr of commandsToRun) {
+          say(`[Quick Verify] Executing: ${fullCmdStr}`);
+          if (fullCmdStr === "__HARNESS_GRADLE_TEST__") {
+            success = runStep("Quick Gradle test", gradleCommand, ["test"]);
+            if (!success) break;
+            continue;
+          }
+          const parts = tokenizeCommand(fullCmdStr);
+          const cmd = parts[0];
+          const cmdArgs = parts.slice(1);
+          const resolvedCmd = (cmd === "npm" && process.platform === "win32") ? "npm.cmd" : cmd;
+          success = runStep("Quick command", resolvedCmd, cmdArgs);
+          if (!success) break;
+        }
       }
     } else {
       // Full Verify Mode
@@ -1997,27 +2067,35 @@ async function commandVerify(args) {
           }
         } else if (exists("package.json")) {
           const scripts = packageScripts();
-          if (scripts.coverage) {
-            success = runStep("Node coverage", npmCommand, ["run", "coverage"]);
-            substantiveChecks += 1;
-          } else if (scripts.test) {
-            success = runStep("Node test", npmCommand, ["run", "test"]);
-            substantiveChecks += 1;
-          } else {
-            say("[Node] Skipping tests (no test or coverage script)");
+          const steps = createNodeVerificationSteps(scripts);
+          if (!scripts.coverage && !scripts.test) say("[Node] Skipping tests (no test or coverage script)");
+          if (!scripts.lint) say("[Node] Skipping lint (no lint script)");
+          if (!scripts.build) say("[Node] Skipping build (no build script)");
+          if (scripts.build && !steps.some((step) => step.script === "build")) {
+            say("[Node] Skipping build alias because it duplicates another selected verification script.");
           }
 
-          if (success && scripts.lint) {
-            success = runStep("Node lint", npmCommand, ["run", "lint"]);
-          } else if (success) {
-            say("[Node] Skipping lint (no lint script)");
+          substantiveChecks += steps.filter((step) => step.substantive).length;
+          const parallelSteps = steps.filter((step) => cfg.verify.parallelScripts.has(step.script));
+          const canRunParallel = parallelSteps.length > 1;
+          if (canRunParallel) {
+            say(`[Node] Running independent scripts in parallel: ${parallelSteps.map((step) => step.script).join(", ")}`);
+            const results = await Promise.all(parallelSteps.map((step) =>
+              runStepAsync(step.label, npmCommand, ["run", step.script])
+            ));
+            const failed = results.find((result) => !result.ok);
+            if (failed) {
+              success = false;
+              failedStep = failed.failure;
+            }
           }
 
-          if (success && scripts.build) {
-            success = runStep("Node build", npmCommand, ["run", "build"]);
-            substantiveChecks += 1;
-          } else if (success) {
-            say("[Node] Skipping build (no build script)");
+          const sequentialSteps = canRunParallel
+            ? steps.filter((step) => !cfg.verify.parallelScripts.has(step.script))
+            : steps;
+          for (const step of sequentialSteps) {
+            if (!success) break;
+            success = runStep(step.label, npmCommand, ["run", step.script]);
           }
         } else {
           recordVerify("fail", "unsupported-project", null, "full");
@@ -2060,6 +2138,13 @@ async function commandVerify(args) {
         fail("Verification passed, but the repository content fingerprint could not be calculated.");
       }
       recordVerify("pass", "", contentFingerprint, mode);
+      if (mode === "quick" && cfg.verify.quickCache && quickCacheRecord) {
+        const quickCacheRel = `observability/metrics/${resolveTaskId()}.quick-cache.json`;
+        writeText(quickCacheRel, JSON.stringify({
+          ...quickCacheRecord,
+          verified_at: currentTimestamp()
+        }, null, 2));
+      }
       if (appliedPatchRel) {
         say(`[Auto-fix] Verification passed. Patch retained for review: ${appliedPatchRel}`);
         await sendSlackNotification("success", `✅ Low-risk auto-fix passed verification. Review patch: ${appliedPatchRel}`);
@@ -2445,36 +2530,8 @@ function checkGitPreflight() {
 
 async function main() {
   const [command, ...args] = process.argv.slice(2);
-  const commandMetadata = {
-    "check": { requiresGit: false },
-    "check-environment": { requiresGit: false },
-    "create-ticket": { requiresGit: false },
-    "start-ticket": { requiresGit: true },
-    "complete-task": { requiresGit: true },
-    "verify": { requiresGit: true },
-    "run-agent": { requiresGit: true },
-    "scan-drift": { requiresGit: true },
-    "recover": { requiresGit: true },
-    "autonomy": { requiresGit: true },
-    "orchestrate": { requiresGit: false },
-    "cleanup": { requiresGit: true },
-    "validate-auto-fix": { requiresGit: false },
-    "validate-l5-patch": { requiresGit: false },
-    "validate-prompts": { requiresGit: false },
-    "validate-api-retry": { requiresGit: false },
-    "validate-recovery": { requiresGit: false },
-    "validate-l5-soak": { requiresGit: false },
-    "help": { requiresGit: false },
-    "--help": { requiresGit: false },
-    "-h": { requiresGit: false },
-    "version": { requiresGit: false },
-    "--version": { requiresGit: false },
-    "-v": { requiresGit: false }
-  };
-
-  const meta = commandMetadata[command || "help"] || { requiresGit: false };
-  const configBypassCommands = new Set(["help", "--help", "-h", "version", "--version", "-v", undefined]);
-  if (!configBypassCommands.has(command)) {
+  const meta = getCommandMetadata(command || "help");
+  if (!shouldBypassConfig(command)) {
     loadConfig();
   }
   if (meta.requiresGit) {

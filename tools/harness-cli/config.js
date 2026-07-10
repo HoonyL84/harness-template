@@ -66,6 +66,12 @@ function validateConfigSchema(config, fail) {
     }
   }
   if (config.verify?.full !== undefined) requireStringArray(config.verify.full, "verify.full", fail);
+  if (config.verify?.quick_cache !== undefined && typeof config.verify.quick_cache !== "boolean") {
+    fail("verify.quick_cache must be a boolean.");
+  }
+  if (config.verify?.parallel_scripts !== undefined) {
+    requireStringArray(config.verify.parallel_scripts, "verify.parallel_scripts", fail);
+  }
 
   const numericFields = [
     ["limits.max_iterations", config.limits?.max_iterations],
@@ -158,10 +164,20 @@ function createConfigLoader({ root, argv = process.argv, env = process.env, fail
       return value;
     };
 
+    const parallelScripts = env.HARNESS_VERIFY_PARALLEL_SCRIPTS
+      ? env.HARNESS_VERIFY_PARALLEL_SCRIPTS.split(",").map((item) => item.trim()).filter(Boolean)
+      : (fileConfig.verify?.parallel_scripts || []);
+
     cachedConfig = {
       verify: {
         quick: fileConfig.verify?.quick || {},
-        full: fileConfig.verify?.full || []
+        full: fileConfig.verify?.full || [],
+        quickCache: booleanSetting(
+          "HARNESS_VERIFY_QUICK_CACHE",
+          fileConfig.verify?.quick_cache,
+          true
+        ),
+        parallelScripts: new Set(parallelScripts)
       },
       limits: {
         maxIterations: numberSetting("HARNESS_MAX_ITERATIONS", fileConfig.limits?.max_iterations, "3"),

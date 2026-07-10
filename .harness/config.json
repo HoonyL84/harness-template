@@ -2,7 +2,9 @@
   "config_version": "1.0",
   "verify": {
     "quick": {},
-    "full": []
+    "full": [],
+    "quick_cache": true,
+    "parallel_scripts": []
   },
   "limits": {
     "max_iterations": 3,

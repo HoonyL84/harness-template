@@ -444,3 +444,20 @@ git commit -m "docs(adr): Redis 캐싱 전략 결정 기록"
 
 **Q. 이 하네스가 맞지 않는 프로젝트 타입은?**
 단일 스크립트, 1회성 실험 코드에는 과도합니다. 팀 협업이 있거나 장기 유지보수가 필요한 프로젝트에 적합합니다.
+
+## Verification performance options
+
+Full verification is never cached and remains the only completion gate. Quick verification caches only successful results and reuses them when repository content, selected commands, Node version, OS, and architecture are identical.
+
+```json
+{
+  "verify": {
+    "quick_cache": true,
+    "parallel_scripts": ["coverage", "lint"]
+  }
+}
+```
+
+`parallel_scripts` is empty by default. Add only npm scripts that are independent and safe to run concurrently. The Full verifier also skips a `build` script when it is only an exact alias of another selected script, such as `npm run lint`.
+
+Environment overrides are available as `HARNESS_VERIFY_QUICK_CACHE=true|false` and a comma-separated `HARNESS_VERIFY_PARALLEL_SCRIPTS=coverage,lint`.
