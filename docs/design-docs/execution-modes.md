@@ -83,7 +83,7 @@ npm run harness -- verify
 git add -A
 git commit -m "feat: 작업 설명"
 # 원격 저장소가 설정된 경우에만: git push
-npm run harness -- complete-task my-task --force
+npm run harness -- complete-task my-task
 git add -A
 git commit -m "chore(harness): my-task 완료 기록"
 # 원격 저장소가 설정된 경우에만: git push

@@ -121,7 +121,15 @@ if ! node -e "const r=require('./observability/metrics/$TICKET_NAME.verify.json'
   echo "Error: Full verification record was not stored separately."
   exit 1
 fi
+node <<'NODE'
+const fs = require("fs");
+const path = ".harness/config.json";
+const config = JSON.parse(fs.readFileSync(path, "utf8"));
+config.verify.quick = { "__smoke_unmatched__/**": ["node -e \"process.exit(0)\""] };
+fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+NODE
 bash scripts/verify-task.sh --offline --quick
+cp "$CONFIG_BACKUP" "$CONFIG_PATH"
 if ! node -e "const r=require('./observability/metrics/$TICKET_NAME.verify.json'); if(r.last_full?.result!=='pass'||r.last_quick?.result!=='inconclusive') process.exit(1)"; then
   echo "Error: Inconclusive quick verification did not preserve the full verification record."
   exit 1
