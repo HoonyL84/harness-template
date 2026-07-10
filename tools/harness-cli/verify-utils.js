@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("node:crypto");
+
 function matchesPattern(filePath, pattern) {
   const normalizedFile = filePath.replace(/\\/g, "/").toLowerCase();
   const normalizedPattern = pattern.replace(/\\/g, "/").toLowerCase();
@@ -81,7 +83,41 @@ function selectQuickCommands(dirtyFiles, configuredMappings, inferredMappings) {
   return Array.from(commands);
 }
 
+function createQuickCacheKey({ contentFingerprint, commands, nodeVersion, platform, arch }) {
+  return crypto.createHash("sha256").update(JSON.stringify({
+    contentFingerprint,
+    commands: [...commands].sort(),
+    nodeVersion,
+    platform,
+    arch
+  })).digest("hex");
+}
+
+function createNodeVerificationSteps(packageScripts) {
+  const steps = [];
+  if (packageScripts.coverage) {
+    steps.push({ script: "coverage", label: "Node coverage", substantive: true });
+  } else if (packageScripts.test) {
+    steps.push({ script: "test", label: "Node test", substantive: true });
+  }
+  if (packageScripts.lint) {
+    steps.push({ script: "lint", label: "Node lint", substantive: false });
+  }
+  if (packageScripts.build) {
+    steps.push({ script: "build", label: "Node build", substantive: true });
+  }
+
+  const selected = new Set(steps.map((step) => step.script));
+  return steps.filter((step) => {
+    const delegate = String(packageScripts[step.script] || "")
+      .trim()
+      .match(/^npm(?:\.cmd)?\s+run\s+([A-Za-z0-9:_-]+)$/);
+    return !delegate || delegate[1] === step.script || !selected.has(delegate[1]);
+  });
+}
 module.exports = {
+  createNodeVerificationSteps,
+  createQuickCacheKey,
   inferQuickMappings,
   matchesPattern,
   selectQuickCommands,
