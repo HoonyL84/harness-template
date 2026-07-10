@@ -456,12 +456,6 @@ function getGitBranch() {
   return result.status === 0 ? result.stdout.trim() : "unknown";
 }
 
-function getGitStatus() {
-  const result = run("git", ["status", "--porcelain"], { capture: true });
-  if (result.error) return null;
-  return result.status === 0 ? result.stdout.trim() : "";
-}
-
 function hasGitRemoteOrigin() {
   const configPath = path.join(ROOT, ".git", "config");
   if (fs.existsSync(configPath)) {
@@ -632,9 +626,14 @@ async function commandCheck() {
     if (hasGitRemoteOrigin()) pass("Git remote origin configured");
     else warn("Git remote origin is not configured");
 
-    const status = getGitStatus();
-    if (status === null) warn("Git status could not be executed in this environment. Check working tree before switching machines.");
-    else if (status) warn("Working tree has uncommitted changes. Commit or intentionally carry them before switching machines.");
+    const statusResult = run("git", ["status", "--porcelain"], { capture: true });
+    if (statusResult.status !== 0 || statusResult.error) {
+      const reason = statusResult.error?.message
+        || statusResult.stderr.trim()
+        || statusResult.stdout.trim()
+        || `exit code ${statusResult.status}`;
+      warn(`Git status could not be executed (${reason}). Check working tree before switching machines.`);
+    } else if (statusResult.stdout.trim()) warn("Working tree has uncommitted changes. Commit or intentionally carry them before switching machines.");
     else pass("Working tree clean");
   } else {
     warn("Not inside a Git repository");

@@ -66,22 +66,22 @@
 
 ## 2. 절대 원칙 (3가지만)
 
-1. **master 브랜치 직접 수정 금지** — backlog/active 티켓 단위로만 작업
-2. **커밋 전 검증 필수** — `bash scripts/verify-task.sh` 통과 후에만 커밋
-3. **고위험 결정은 슬랙 승인** — DB 스키마 변경, 인프라 변경은 자동 실행 금지
+1. **main/master 브랜치 직접 수정 금지** — backlog/active 티켓 단위로만 작업
+2. **커밋 전 전체 검증 필수** — `npm run harness -- verify --full` 또는 동등한 호환 wrapper 통과 후에만 커밋
+3. **고위험 결정은 사용자 명시 승인** — DB 스키마 변경, 인프라 변경은 자동 실행 금지
 
 ---
 
-## 3. 작업 루프 (5단계)
+## 3. 작업 루프 (6단계)
 
 ```
 [1] PLANS.md 읽고 큰 목표 파악 → backlog 티켓으로 분해 (Goal-Driven)
 [2] npm run harness -- check → 현재 OS/토큰/Git 상태 점검
-[3] start-ticket.sh 또는 start-task.sh → active EXEC_PLAN 생성
+[3] npm run harness -- start-ticket <ticket> → active EXEC_PLAN 생성
 [4] active 태스크 기준으로 구현 (core-beliefs.md + tech-stack.md 준수)
     └─ 불확실하면 멈추고 질문 / 요청 외 수정 금지 (Karpathy Rules)
-[5] verify-task.sh → 테스트 + 린트 + 빌드 통과
-[6] 구현 커밋(원격이 있으면 푸시) → complete-task.sh → 완료 기록 커밋(원격이 있으면 푸시)
+[5] npm run harness -- verify --full → 테스트 + 린트 + 빌드 통과
+[6] 구현 커밋(원격이 있으면 푸시) → npm run harness -- complete-task <ticket> → 완료 기록 커밋(원격이 있으면 푸시)
 ```
 
 ---

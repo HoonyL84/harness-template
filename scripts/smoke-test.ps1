@@ -132,7 +132,18 @@ try {
   if ($verifyRecord.last_full.result -ne "pass") {
     throw "Error: Full verification record was not stored separately."
   }
-  & .\scripts\verify-task.ps1 -Offline -Quick
+  $quickConfigBackup = [System.IO.File]::ReadAllBytes((Resolve-Path $ConfigPath))
+  $quickConfig = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+  $quickConfig.verify.quick = [PSCustomObject]@{
+    "__smoke_unmatched__/**" = @('node -e "process.exit(0)"')
+  }
+  $quickConfigJson = $quickConfig | ConvertTo-Json -Depth 10
+  [System.IO.File]::WriteAllText((Join-Path $root $ConfigPath), $quickConfigJson, [System.Text.UTF8Encoding]::new($false))
+  try {
+    & .\scripts\verify-task.ps1 -Offline -Quick
+  } finally {
+    [System.IO.File]::WriteAllBytes((Join-Path $root $ConfigPath), $quickConfigBackup)
+  }
   $verifyRecord = Get-Content "observability/metrics/$TicketName.verify.json" -Raw | ConvertFrom-Json
   if ($verifyRecord.last_full.result -ne "pass" -or $verifyRecord.last_quick.result -ne "inconclusive") {
     throw "Error: Inconclusive quick verification did not preserve the full verification record."
