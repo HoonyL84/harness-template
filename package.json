@@ -16,7 +16,7 @@
     "@commitlint/cli": "^19.0.0",
     "@commitlint/config-conventional": "^19.0.0",
     "c8": "^11.0.0",
-    "eslint": "^9.39.1",
+    "eslint": "^10.7.0",
     "husky": "^9.0.0"
   },
   "overrides": {
