@@ -40,10 +40,22 @@ cleanup() {
   rm -f observability/metrics/cleanup-*.json
   cp "$CONFIG_BACKUP" "$CONFIG_PATH"
 }
+
+configure_smoke_verify() {
+  export HARNESS_SMOKE_VERIFY_COMMAND='node tools/harness-cli/index.js validate-prompts'
+  node <<'NODE'
+const fs = require("node:fs");
+const configPath = ".harness/config.json";
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+config.verify.full = [process.env.HARNESS_SMOKE_VERIFY_COMMAND];
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+NODE
+}
 trap 'cleanup; rm -f "$CONFIG_BACKUP"' EXIT
 
 echo "[Smoke Test] Cleaning up old test files..."
 cleanup
+configure_smoke_verify
 
 echo "[Smoke Test] 1. Running check..."
 bash scripts/check-environment.sh
@@ -130,6 +142,7 @@ fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
 NODE
 bash scripts/verify-task.sh --offline --quick
 cp "$CONFIG_BACKUP" "$CONFIG_PATH"
+configure_smoke_verify
 if ! node -e "const r=require('./observability/metrics/$TICKET_NAME.verify.json'); if(r.last_full?.result!=='pass'||r.last_quick?.result!=='inconclusive') process.exit(1)"; then
   echo "Error: Inconclusive quick verification did not preserve the full verification record."
   exit 1

@@ -6,7 +6,7 @@
   "scripts": {
     "harness": "node tools/harness-cli/index.js",
     "test": "node tests/harness-cli/run.js",
-    "coverage": "c8 --check-coverage --lines 65 --statements 65 --functions 70 --branches 70 --reporter=text node tests/harness-cli/run.js",
+    "coverage": "c8 --check-coverage --lines 70 --statements 70 --functions 75 --branches 73 --reporter=text node tests/harness-cli/run.js",
     "test:soak": "node tools/harness-cli/index.js validate-l5-soak --cycles 10000",
     "lint": "eslint tools tests eslint.config.js",
     "build": "npm run lint",

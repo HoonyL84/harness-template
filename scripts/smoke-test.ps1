@@ -51,8 +51,21 @@ function Cleanup-TestFiles {
   [System.IO.File]::WriteAllBytes((Join-Path $root $ConfigPath), $ConfigBackup)
 }
 
+function Set-SmokeVerifyCommand {
+  $env:HARNESS_SMOKE_VERIFY_COMMAND = "node tools/harness-cli/index.js validate-prompts"
+  $smokeConfig = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+  $smokeConfig.verify.full = @($env:HARNESS_SMOKE_VERIFY_COMMAND)
+  $smokeConfigJson = $smokeConfig | ConvertTo-Json -Depth 10
+  [System.IO.File]::WriteAllText(
+    (Join-Path $root $ConfigPath),
+    $smokeConfigJson,
+    [System.Text.UTF8Encoding]::new($false)
+  )
+}
+
 # Clean up before run
 Cleanup-TestFiles
+Set-SmokeVerifyCommand
 
 try {
   Write-Host "[Smoke Test] 1. Running check..."

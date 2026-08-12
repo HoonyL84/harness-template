@@ -149,7 +149,9 @@ git commit -m "chore(harness): user-auth 완료 기록"
 `complete-task`와 L5 자율 실행 완료는 반드시 `verify --full`이 성공한 지문 상태에서만 허용됩니다.
 Quick과 Full 결과는 각각 `last_quick`, `last_full`로 기록되며 Quick 실행은 유효한 Full 기록을 덮어쓰지 않습니다.
 Cleanup은 검증 시작 전에 없었다가 검증 중 새로 생성된 untracked 일반 파일만 후보로 기록합니다.
-`verify.quick`이 비어 있으면 Node 프로젝트의 `test`/`lint` 스크립트 또는 Gradle 테스트를 변경 파일 확장자에 맞춰 자동 선택합니다.
+`verify.quick`이 비어 있으면 Node, Gradle, Maven, Python, Go, Rust, .NET 프로젝트의 테스트를 변경 파일 확장자에 맞춰 자동 선택합니다.
+`verify.full`이 비어 있으면 루트 빌드 파일을 기준으로 위 언어 프로필을 모두 감지하고, 하네스 자체 Node 검증과 제품 검증을 함께 실행합니다. 자동 감지를 사용하려면 각 언어의 표준 테스트 도구가 실행 환경에 설치되어 있어야 합니다.
+프로젝트 고유 설치 절차나 통합 테스트가 필요하면 `verify.full`에 명령을 명시해 자동 감지 대신 사용합니다.
 Full 검증에서 테스트·커버리지·빌드 또는 명시적 Full 명령이 하나도 실행되지 않으면 `inconclusive`로 차단됩니다.
 
 하네스 코어 자체 검증:

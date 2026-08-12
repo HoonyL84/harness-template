@@ -49,8 +49,34 @@ function tokenizeCommand(commandLine, fail = (message) => { throw new Error(mess
   return tokens;
 }
 
-function inferQuickMappings({ packageScripts = {}, hasGradle = false }) {
+function detectVerificationProfiles({ rootFiles = [], packageScripts = {} }) {
+  const files = new Set(rootFiles.map((file) => String(file).replace(/\\/g, "/").toLowerCase()));
+  const profiles = [];
+  if (files.has("build.gradle") || files.has("build.gradle.kts")) profiles.push("gradle");
+  if (files.has("pom.xml")) profiles.push("maven");
+  if (["pyproject.toml", "pytest.ini", "setup.py", "setup.cfg", "requirements.txt", "tox.ini"]
+    .some((file) => files.has(file))) {
+    profiles.push("python");
+  }
+  if (files.has("go.mod")) profiles.push("go");
+  if (files.has("cargo.toml")) profiles.push("rust");
+  if (Array.from(files).some((file) =>
+    [".sln", ".csproj", ".fsproj", ".vbproj"].some((extension) => file.endsWith(extension)))) {
+    profiles.push("dotnet");
+  }
+  if (files.has("package.json") && createNodeVerificationSteps(packageScripts).length > 0) {
+    profiles.push("node");
+  }
+  return profiles;
+}
+
+function inferQuickMappings({ packageScripts = {}, hasGradle = false, profiles = [] }) {
   const mappings = {};
+  const addCommands = (pattern, commands) => {
+    mappings[pattern] = Array.from(new Set([...(mappings[pattern] || []), ...commands]));
+  };
+  const detected = new Set(profiles);
+  if (hasGradle) detected.add("gradle");
   const nodeCommands = [];
   if (packageScripts.test) nodeCommands.push("npm run test");
   if (packageScripts.lint) nodeCommands.push("npm run lint");
@@ -59,12 +85,38 @@ function inferQuickMappings({ packageScripts = {}, hasGradle = false }) {
       "src/**/*.js", "src/**/*.jsx", "src/**/*.ts", "src/**/*.tsx",
       "test/**/*.js", "tests/**/*.js", "__tests__/**/*.js", "tools/harness-cli/**/*.js"
     ]) {
-      mappings[pattern] = nodeCommands;
+      addCommands(pattern, nodeCommands);
     }
   }
-  if (hasGradle) {
-    for (const pattern of ["src/**/*.java", "src/**/*.kt", "src/**/*.kts"]) {
-      mappings[pattern] = ["__HARNESS_GRADLE_TEST__"];
+  if (detected.has("gradle")) {
+    for (const pattern of [
+      "src/**/*.java", "src/**/*.kt", "src/**/*.kts",
+      "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"
+    ]) {
+      addCommands(pattern, ["__HARNESS_GRADLE_TEST__"]);
+    }
+  }
+  if (detected.has("maven")) {
+    for (const pattern of ["src/**/*.java", "src/**/*.kt", "pom.xml"]) {
+      addCommands(pattern, ["__HARNESS_MAVEN_TEST__"]);
+    }
+  }
+  if (detected.has("python")) {
+    for (const pattern of [
+      "**/*.py", "pyproject.toml", "pytest.ini", "setup.py", "setup.cfg", "requirements.txt", "tox.ini"
+    ]) {
+      addCommands(pattern, ["__HARNESS_PYTHON_TEST__"]);
+    }
+  }
+  if (detected.has("go")) {
+    for (const pattern of ["**/*.go", "go.mod", "go.sum"]) addCommands(pattern, ["__HARNESS_GO_TEST__"]);
+  }
+  if (detected.has("rust")) {
+    for (const pattern of ["**/*.rs", "cargo.toml", "cargo.lock"]) addCommands(pattern, ["__HARNESS_RUST_TEST__"]);
+  }
+  if (detected.has("dotnet")) {
+    for (const pattern of ["**/*.cs", "**/*.fs", "**/*.vb", "*.sln", "*.csproj", "*.fsproj", "*.vbproj"]) {
+      addCommands(pattern, ["__HARNESS_DOTNET_TEST__"]);
     }
   }
   return mappings;
@@ -115,9 +167,73 @@ function createNodeVerificationSteps(packageScripts) {
     return !delegate || delegate[1] === step.script || !selected.has(delegate[1]);
   });
 }
+
+function createProfileVerificationSteps({
+  profiles,
+  packageScripts = {},
+  platform = process.platform,
+  hasJacoco = false,
+  hasMavenWrapper = true
+}) {
+  const steps = [];
+  const gradle = platform === "win32" ? "gradlew.bat" : "./gradlew";
+  const maven = hasMavenWrapper
+    ? (platform === "win32" ? "mvnw.cmd" : "./mvnw")
+    : (platform === "win32" ? "mvn.cmd" : "mvn");
+  const python = platform === "win32" ? "python" : "python3";
+
+  for (const profile of profiles) {
+    if (profile === "gradle") {
+      steps.push({ label: "Gradle test", command: gradle, args: ["test"], substantive: true });
+      if (hasJacoco) {
+        steps.push({
+          label: "Gradle coverage",
+          command: gradle,
+          args: ["jacocoTestCoverageVerification"],
+          substantive: false
+        });
+      }
+      steps.push({ label: "Gradle build", command: gradle, args: ["build", "-x", "test"], substantive: true });
+    } else if (profile === "maven") {
+      steps.push({ label: "Maven test", command: maven, args: ["test"], substantive: true });
+      steps.push({ label: "Maven build", command: maven, args: ["package", "-DskipTests"], substantive: true });
+    } else if (profile === "python") {
+      steps.push({ label: "Python test", command: python, args: ["-m", "pytest"], substantive: true });
+    } else if (profile === "go") {
+      steps.push({ label: "Go test", command: "go", args: ["test", "./..."], substantive: true });
+    } else if (profile === "rust") {
+      steps.push({ label: "Rust test", command: "cargo", args: ["test", "--all-targets"], substantive: true });
+    } else if (profile === "dotnet") {
+      steps.push({ label: ".NET test", command: "dotnet", args: ["test"], substantive: true });
+    } else if (profile === "node") {
+      const npm = platform === "win32" ? "npm.cmd" : "npm";
+      for (const step of createNodeVerificationSteps(packageScripts)) {
+        steps.push({ ...step, command: npm, args: ["run", step.script] });
+      }
+    }
+  }
+  return steps;
+}
+
+function createQuickProfileStep(sentinel, options = {}) {
+  const profileBySentinel = {
+    __HARNESS_GRADLE_TEST__: "gradle",
+    __HARNESS_MAVEN_TEST__: "maven",
+    __HARNESS_PYTHON_TEST__: "python",
+    __HARNESS_GO_TEST__: "go",
+    __HARNESS_RUST_TEST__: "rust",
+    __HARNESS_DOTNET_TEST__: "dotnet"
+  };
+  const profile = profileBySentinel[sentinel];
+  if (!profile) return null;
+  return createProfileVerificationSteps({ profiles: [profile], ...options })[0];
+}
 module.exports = {
+  createProfileVerificationSteps,
+  createQuickProfileStep,
   createNodeVerificationSteps,
   createQuickCacheKey,
+  detectVerificationProfiles,
   inferQuickMappings,
   matchesPattern,
   selectQuickCommands,
