@@ -18,8 +18,12 @@ function runCli(args) {
   });
 }
 
-test("CLI help and version entrypoints execute as real processes", { skip: Boolean(process.env.NODE_V8_COVERAGE) }, () => {
+test("CLI help and version entrypoints execute as real processes", { skip: Boolean(process.env.NODE_V8_COVERAGE) }, (context) => {
   const help = runCli(["help"]);
+  if (help.error && ["EACCES", "EPERM"].includes(help.error.code)) {
+    context.skip(`Child process execution is unavailable: ${help.error.code}`);
+    return;
+  }
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /Harness CLI/);
 

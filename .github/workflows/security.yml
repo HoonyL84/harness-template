@@ -42,7 +42,7 @@ jobs:
           cache: 'npm'
       - name: npm audit
         if: ${{ needs.detect-project.outputs.has_node == 'true' }}
-        run: npm audit --audit-level=high || true
+        run: npm audit --audit-level=high
 
       - name: Check for secrets in code
         uses: trufflesecurity/trufflehog@v3.95.5

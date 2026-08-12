@@ -11,13 +11,20 @@ const { createCleanupManifest, findGeneratedPaths, isCleanupManifestValid } = re
 const { createConfigLoader, isPlainObject } = require("./config");
 const { commandOrchestrate, requireTaskOrchestrationReady } = require("./orchestration-command");
 const {
-  createNodeVerificationSteps,
+  createProfileVerificationSteps,
+  createQuickProfileStep,
   createQuickCacheKey,
+  detectVerificationProfiles,
   inferQuickMappings,
   selectQuickCommands,
   tokenizeCommand
 } = require("./verify-utils");
-const { getCommandMetadata, isRuntimeManagedEnv, shouldBypassConfig } = require("./cli-entrypoint");
+const {
+  dispatchCommand,
+  getCommandMetadata,
+  isRuntimeManagedEnv,
+  shouldBypassConfig
+} = require("./cli-entrypoint");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 process.chdir(ROOT);
@@ -1934,9 +1941,6 @@ async function commandVerify(args) {
     log(message);
   };
 
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const gradleCommand = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
-
   const cfg = loadConfig();
 
   while (attempt < maxAttempts && !verifyPassed) {
@@ -1980,9 +1984,11 @@ async function commandVerify(args) {
       say(`[Quick Verify] Dirty files: ${dirtyFiles.join(", ") || "none"}`);
       const quickMappings = cfg.verify.quick || {};
       const scripts = packageScripts();
+      const rootFiles = fs.readdirSync(ROOT);
+      const profiles = detectVerificationProfiles({ rootFiles, packageScripts: scripts });
       const inferredMappings = inferQuickMappings({
         packageScripts: scripts,
-        hasGradle: exists("build.gradle") || exists("build.gradle.kts")
+        profiles
       });
       const commandsToRun = selectQuickCommands(dirtyFiles, quickMappings, inferredMappings);
       if (Object.keys(quickMappings).length === 0 && Object.keys(inferredMappings).length > 0) {
@@ -2026,8 +2032,12 @@ async function commandVerify(args) {
       } else {
         for (const fullCmdStr of commandsToRun) {
           say(`[Quick Verify] Executing: ${fullCmdStr}`);
-          if (fullCmdStr === "__HARNESS_GRADLE_TEST__") {
-            success = runStep("Quick Gradle test", gradleCommand, ["test"]);
+          const profileStep = createQuickProfileStep(fullCmdStr, {
+            platform: process.platform,
+            hasMavenWrapper: exists("mvnw") || exists("mvnw.cmd")
+          });
+          if (profileStep) {
+            success = runStep(`Quick ${profileStep.label}`, profileStep.command, profileStep.args);
             if (!success) break;
             continue;
           }
@@ -2054,52 +2064,45 @@ async function commandVerify(args) {
         }
       } else {
         // Fallback auto-detection if verify.full is empty
-        if (exists("build.gradle") || exists("build.gradle.kts")) {
-          success = runStep("Java test", gradleCommand, ["test"]);
-          substantiveChecks += 1;
-          const buildFiles = (exists("build.gradle") ? readText("build.gradle") : "") + "\n" + (exists("build.gradle.kts") ? readText("build.gradle.kts") : "");
-          if (success && buildFiles.includes("jacoco")) {
-            success = runStep("Java coverage", gradleCommand, ["jacocoTestCoverageVerification"]);
-          }
-          if (success) {
-            success = runStep("Java build", gradleCommand, ["build", "-x", "test"]);
-            substantiveChecks += 1;
-          }
-        } else if (exists("package.json")) {
-          const scripts = packageScripts();
-          const steps = createNodeVerificationSteps(scripts);
-          if (!scripts.coverage && !scripts.test) say("[Node] Skipping tests (no test or coverage script)");
-          if (!scripts.lint) say("[Node] Skipping lint (no lint script)");
-          if (!scripts.build) say("[Node] Skipping build (no build script)");
-          if (scripts.build && !steps.some((step) => step.script === "build")) {
-            say("[Node] Skipping build alias because it duplicates another selected verification script.");
-          }
-
-          substantiveChecks += steps.filter((step) => step.substantive).length;
-          const parallelSteps = steps.filter((step) => cfg.verify.parallelScripts.has(step.script));
-          const canRunParallel = parallelSteps.length > 1;
-          if (canRunParallel) {
-            say(`[Node] Running independent scripts in parallel: ${parallelSteps.map((step) => step.script).join(", ")}`);
-            const results = await Promise.all(parallelSteps.map((step) =>
-              runStepAsync(step.label, npmCommand, ["run", step.script])
-            ));
-            const failed = results.find((result) => !result.ok);
-            if (failed) {
-              success = false;
-              failedStep = failed.failure;
-            }
-          }
-
-          const sequentialSteps = canRunParallel
-            ? steps.filter((step) => !cfg.verify.parallelScripts.has(step.script))
-            : steps;
-          for (const step of sequentialSteps) {
-            if (!success) break;
-            success = runStep(step.label, npmCommand, ["run", step.script]);
-          }
-        } else {
+        const scripts = packageScripts();
+        const rootFiles = fs.readdirSync(ROOT);
+        const profiles = detectVerificationProfiles({ rootFiles, packageScripts: scripts });
+        if (profiles.length === 0) {
           recordVerify("fail", "unsupported-project", null, "full");
-          fail("No supported project type detected. Please verify manually.");
+          fail("No supported project type detected. Configure verify.full explicitly.");
+        }
+        say(`[Full Verify] Detected profiles: ${profiles.join(", ")}`);
+        const buildFiles = (exists("build.gradle") ? readText("build.gradle") : "")
+          + "\n" + (exists("build.gradle.kts") ? readText("build.gradle.kts") : "");
+        const steps = createProfileVerificationSteps({
+          profiles,
+          packageScripts: scripts,
+          platform: process.platform,
+          hasJacoco: buildFiles.includes("jacoco"),
+          hasMavenWrapper: exists("mvnw") || exists("mvnw.cmd")
+        });
+        substantiveChecks += steps.filter((step) => step.substantive).length;
+        const parallelSteps = steps.filter((step) =>
+          step.script && cfg.verify.parallelScripts.has(step.script));
+        const canRunParallel = parallelSteps.length > 1;
+        if (canRunParallel) {
+          say(`[Node] Running independent scripts in parallel: ${parallelSteps.map((step) => step.script).join(", ")}`);
+          const results = await Promise.all(parallelSteps.map((step) =>
+            runStepAsync(step.label, step.command, step.args)
+          ));
+          const failed = results.find((result) => !result.ok);
+          if (failed) {
+            success = false;
+            failedStep = failed.failure;
+          }
+        }
+
+        const sequentialSteps = canRunParallel
+          ? steps.filter((step) => !step.script || !cfg.verify.parallelScripts.has(step.script))
+          : steps;
+        for (const step of sequentialSteps) {
+          if (!success) break;
+          success = runStep(step.label, step.command, step.args);
         }
       }
       if (success && substantiveChecks === 0) {
@@ -2528,8 +2531,48 @@ function checkGitPreflight() {
   }
 }
 
-async function main() {
-  const [command, ...args] = process.argv.slice(2);
+async function commandOrchestrateFromCli(args) {
+  const orchestrationArgs = parseArgs(args);
+  if (!orchestrationArgs.options.capabilities) checkGitPreflight();
+  const config = loadConfig();
+  await commandOrchestrate({
+    root: ROOT,
+    args,
+    config: {
+      ...config.multiAgent,
+      maxApiCalls: config.limits.maxApiCalls,
+      maxRuntimeMinutes: config.limits.maxRuntimeMinutes,
+      maxProviderRequests: config.api.maxProviderRequests,
+      isFullVerifyCurrent: (task) => {
+        const verifyRel = `observability/metrics/${task}.verify.json`;
+        if (!exists(verifyRel)) return false;
+        const verify = JSON.parse(readText(verifyRel));
+        const full = getFullVerifyRecord(verify);
+        if (full.result !== "pass") return false;
+        try {
+          requireCurrentVerifiedContent(task, full);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    },
+    env: process.env,
+    log,
+    invokeAgent: async (role, prompt) => {
+      const response = await commandRunAgent([
+        "--type", role === "architect" ? "architect" : "default",
+        "--role", role,
+        "--task", resolveTaskId({ strict: true }),
+        prompt
+      ]);
+      return extractJson(response);
+    }
+  });
+}
+
+async function main(argv = process.argv.slice(2)) {
+  const [command, ...args] = argv;
   const meta = getCommandMetadata(command || "help");
   if (!shouldBypassConfig(command)) {
     loadConfig();
@@ -2537,116 +2580,43 @@ async function main() {
   if (meta.requiresGit) {
     checkGitPreflight();
   }
-  switch (command) {
-    case "cleanup":
-      commandCleanup(args);
-      break;
-    case "check":
-    case "check-environment":
-      await commandCheck(args);
-      break;
-    case "create-ticket":
-      commandCreateTicket(args);
-      break;
-    case "start-ticket":
-      commandStartTicket(args);
-      break;
-    case "complete-task":
-      commandCompleteTask(args);
-      break;
-    case "verify":
-      await commandVerify(args);
-      break;
-    case "run-agent":
-      await commandRunAgent(args);
-      break;
-    case "scan-drift":
-      commandScanDrift(args);
-      break;
-    case "recover":
-      commandRecover();
-      break;
-    case "autonomy":
-      await commandAutonomy(args);
-      break;
-    case "orchestrate":
-      {
-        const orchestrationArgs = parseArgs(args);
-        if (!orchestrationArgs.options.capabilities) checkGitPreflight();
-      }
-      await commandOrchestrate({
-        root: ROOT,
-        args,
-        config: {
-          ...loadConfig().multiAgent,
-          maxApiCalls: loadConfig().limits.maxApiCalls,
-          maxRuntimeMinutes: loadConfig().limits.maxRuntimeMinutes,
-          maxProviderRequests: loadConfig().api.maxProviderRequests,
-          isFullVerifyCurrent: (task) => {
-            const verifyRel = `observability/metrics/${task}.verify.json`;
-            if (!exists(verifyRel)) return false;
-            const verify = JSON.parse(readText(verifyRel));
-            const full = getFullVerifyRecord(verify);
-            if (full.result !== "pass") return false;
-            try {
-              requireCurrentVerifiedContent(task, full);
-              return true;
-            } catch {
-              return false;
-            }
-          }
-        },
-        env: process.env,
-        log,
-        invokeAgent: async (role, prompt) => {
-          const response = await commandRunAgent([
-            "--type", role === "architect" ? "architect" : "default",
-            "--role", role,
-            "--task", resolveTaskId({ strict: true }),
-            prompt
-          ]);
-          return extractJson(response);
-        }
-      });
-      break;
-    case "validate-auto-fix":
-      commandValidateAutoFix(args);
-      break;
-    case "validate-l5-patch":
-      commandValidateL5Patch(args);
-      break;
-    case "validate-prompts":
-      commandValidatePrompts();
-      break;
-    case "validate-api-retry":
-      await commandValidateApiRetry();
-      break;
-    case "validate-recovery":
-      commandValidateRecovery();
-      break;
-    case "validate-l5-soak":
-      commandValidateL5Soak(args);
-      break;
-    case "help":
-    case "--help":
-    case "-h":
-    case undefined:
-      usage();
-      break;
-    case "version":
-    case "--version":
-    case "-v": {
+  const handlers = {
+    cleanup: commandCleanup,
+    check: commandCheck,
+    "check-environment": commandCheck,
+    "create-ticket": commandCreateTicket,
+    "start-ticket": commandStartTicket,
+    "complete-task": commandCompleteTask,
+    verify: commandVerify,
+    "run-agent": commandRunAgent,
+    "scan-drift": commandScanDrift,
+    recover: commandRecover,
+    autonomy: commandAutonomy,
+    orchestrate: commandOrchestrateFromCli,
+    "validate-auto-fix": commandValidateAutoFix,
+    "validate-l5-patch": commandValidateL5Patch,
+    "validate-prompts": commandValidatePrompts,
+    "validate-api-retry": commandValidateApiRetry,
+    "validate-recovery": commandValidateRecovery,
+    "validate-l5-soak": commandValidateL5Soak,
+    help: usage,
+    version: () => {
       const pkg = JSON.parse(readText("package.json"));
       log(pkg.version || "unknown");
-      break;
     }
-    default:
-      usage();
-      fail(`Unknown command: ${command}`);
+  };
+  const handled = await dispatchCommand(command, args, handlers);
+  if (!handled) {
+    usage();
+    fail(`Unknown command: ${command}`);
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`[FAIL] ${error.message}\n`);
-  process.exit(Number.isInteger(error.code) ? error.code : 1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`[FAIL] ${error.message}\n`);
+    process.exit(Number.isInteger(error.code) ? error.code : 1);
+  });
+}
+
+module.exports = { main };

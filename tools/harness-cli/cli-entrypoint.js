@@ -31,6 +31,12 @@ const RUNTIME_MANAGED_ENV_VARS = new Set([
   "PATH", "PATHEXT", "PWD", "HOME", "SHELL", "USER",
   "LANG", "PORT", "NODE_ENV", "NODE_V8_COVERAGE", "TEMP", "TMP"
 ]);
+const COMMAND_ALIASES = Object.freeze({
+  "--help": "help",
+  "-h": "help",
+  "--version": "version",
+  "-v": "version"
+});
 
 function getCommandMetadata(command) {
   return COMMAND_METADATA[command || "help"] || { requiresGit: false };
@@ -44,7 +50,16 @@ function isRuntimeManagedEnv(name) {
   return RUNTIME_MANAGED_ENV_VARS.has(name);
 }
 
+async function dispatchCommand(command, args, handlers) {
+  const canonical = COMMAND_ALIASES[command] || command || "help";
+  const handler = handlers[canonical];
+  if (!handler) return false;
+  await handler(args);
+  return true;
+}
+
 module.exports = {
+  dispatchCommand,
   getCommandMetadata,
   isRuntimeManagedEnv,
   shouldBypassConfig
