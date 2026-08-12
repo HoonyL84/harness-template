@@ -162,6 +162,9 @@ npm run test:soak
 ```
 
 GitHub Actions는 Ubuntu, macOS, Windows에서 단위 테스트와 각 OS용 스모크 테스트를 반복합니다.
+제품 CI는 루트 빌드 파일을 감지해 Node, Gradle, Maven, Python, Go, Rust, .NET의 표준 테스트를 각각 독립된 job으로 실행합니다.
+Node 프로젝트에 `coverage` 스크립트가 있으면 일반 `test` 대신 해당 스크립트를 실행해 커버리지 임계값을 원격에서도 강제합니다.
+사설 패키지, 별도 서비스 컨테이너, 비표준 테스트 러너가 필요한 프로젝트는 `.github/workflows/ci.yml`의 해당 언어 job을 프로젝트에 맞게 조정합니다.
 
 기존 Bash/PowerShell wrapper도 호환용으로 유지됩니다.
 
