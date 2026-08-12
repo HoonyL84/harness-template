@@ -113,7 +113,7 @@ npm run build
 npm run harness -- verify --full
 ```
 
-`coverage`는 테스트에 로드되는 분리형 CLI 모듈의 최소 lines/statements 65%, functions/branches 70%를
+`coverage`는 테스트에 로드되는 분리형 CLI 모듈의 최소 lines/statements 70%, functions 75%, branches 73%를
 강제합니다. 메인 명령 디스패치(`tools/harness-cli/index.js`)는 OS별 smoke test로 검증하며,
 후속 모듈 분리와 subprocess 계측을 통해 정량 커버리지에 단계적으로 포함합니다.
 
