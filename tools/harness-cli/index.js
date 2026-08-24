@@ -394,33 +394,55 @@ function parseEnvFile(relPath = ".env.local") {
 
 const loadConfig = createConfigLoader({ root: ROOT, fail });
 
-async function sendSlackNotification(status, message) {
-  const webhook = process.env.SLACK_WEBHOOK_URL;
-  if (!webhook || webhook.includes("YOUR/WEBHOOK/URL")) {
-    log("  [Slack] 웹훅 미설정 — 알림 생략");
-    return;
-  }
-  const color = status === "fail" ? "#ff0000" : "#36a64f";
+async function sendNotification(status, message) {
+  const slackWebhook = process.env.SLACK_WEBHOOK_URL;
+  const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+  const tgChatId = process.env.TELEGRAM_CHAT_ID;
   const taskId = resolveTaskId();
-  const payload = {
-    attachments: [{
-      fallback: `Harness: ${message}`,
-      color,
-      title: `[Harness] Task: ${taskId}`,
-      text: message,
-      footer: "Harness Engineering",
-      ts: Math.floor(Date.now() / 1000),
-    }]
-  };
-  try {
-    const res = await fetch(webhook, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) log(`  [Slack] Notification HTTP failed: ${res.status}`);
-  } catch (err) {
-    log(`  [Slack] Notification exception: ${err.message}`);
+
+  let sent = false;
+
+  if (tgToken && tgChatId && !tgToken.includes("your_")) {
+    const tgUrl = `https://api.telegram.org/bot${tgToken}/sendMessage`;
+    const icon = status === "fail" ? "🔴" : "🟢";
+    const tgText = `${icon} *[Harness] Task: ${taskId}*\n\n${message}`;
+    try {
+      const res = await fetch(tgUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: tgChatId, text: tgText, parse_mode: "Markdown" })
+      });
+      if (!res.ok) log(`  [Telegram] Notification failed: ${res.status}`);
+      else sent = true;
+    } catch (err) {
+      log(`  [Telegram] Exception: ${err.message}`);
+    }
+  }
+
+  if (slackWebhook && !slackWebhook.includes("YOUR/WEBHOOK/URL")) {
+    const color = status === "fail" ? "#ff0000" : "#36a64f";
+    const payload = {
+      attachments: [{
+        fallback: `Harness: ${message}`, color,
+        title: `[Harness] Task: ${taskId}`,
+        text: message, footer: "Harness Engineering",
+        ts: Math.floor(Date.now() / 1000),
+      }]
+    };
+    try {
+      const res = await fetch(slackWebhook, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) log(`  [Slack] Notification failed: ${res.status}`);
+      else sent = true;
+    } catch (err) {
+      log(`  [Slack] Exception: ${err.message}`);
+    }
+  }
+
+  if (!sent) {
+    log("  [Notify] 슬랙/텔레그램 웹훅 미설정 — 알림 생략");
   }
 }
 
@@ -1925,8 +1947,10 @@ async function commandVerify(args) {
   const offline = options.offline || process.env.HARNESS_OFFLINE === "1" || process.env.HARNESS_OFFLINE === "true";
   if (options.quick && options.full) fail("Choose either --quick or --full, not both.");
   const mode = options.quick ? "quick" : "full";
+  const cfg = loadConfig();
 
-  const maxAttempts = autoFix ? 2 : 1;
+  // If autoFix is on, use config value (default 2), else 1
+  const maxAttempts = autoFix ? (cfg.verify.maxAttempts || 2) : 1;
   let attempt = 0;
   let verifyPassed = false;
   let appliedPatchRel = "";
@@ -1940,8 +1964,6 @@ async function commandVerify(args) {
     lines.push(message);
     log(message);
   };
-
-  const cfg = loadConfig();
 
   while (attempt < maxAttempts && !verifyPassed) {
     const worktreeBefore = worktreeSnapshot();
@@ -2150,7 +2172,7 @@ async function commandVerify(args) {
       }
       if (appliedPatchRel) {
         say(`[Auto-fix] Verification passed. Patch retained for review: ${appliedPatchRel}`);
-        await sendSlackNotification("success", `✅ Low-risk auto-fix passed verification. Review patch: ${appliedPatchRel}`);
+        await sendNotification("success", `✅ Low-risk auto-fix passed verification. Review patch: ${appliedPatchRel}`);
       }
       say("All checks passed. Safe to commit.");
       writeText(logRel, lines.join(os.EOL));
@@ -2175,7 +2197,7 @@ async function commandVerify(args) {
       }
       recordVerify("fail", failureReason, null, mode);
       writeText(logRel, lines.join(os.EOL));
-      await sendSlackNotification("fail", `❌ Auto-fix failed verification and rollback was attempted.\nStep: ${failedStep.label}\nPatch: ${appliedPatchRel}`);
+      await sendNotification("fail", `❌ Auto-fix failed verification and rollback was attempted.\nStep: ${failedStep.label}\nPatch: ${appliedPatchRel}`);
       process.exit(failedStep.status);
     }
 
@@ -2269,16 +2291,24 @@ Please review the error logs, identify the root cause, and write a detailed reco
         say(`[Diagnose] Self-diagnosis agent call failed: ${err.message}`);
       }
 
-      // Exit immediately after generating the diagnose guidance in API mode
+      // Handle failure by blocking the task
       recordVerify("fail", failureReason, null, mode);
       writeText(logRel, lines.join(os.EOL));
-      await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis completed. Recovery guide generated.`);
-      process.exit(failedStep.status);
-    } else {
-      // Verification failed and no diagnose/exhausted attempts
-      recordVerify("fail", failureReason, null, mode);
-      writeText(logRel, lines.join(os.EOL));
-      await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis is disabled or completed.`);
+
+      const taskId = resolveTaskId();
+      const activeRel = `.harness/tasks/active/${taskId}.md`;
+      const blockedRel = `.harness/tasks/blocked/${taskId}.md`;
+      ensureDir(".harness/tasks/blocked");
+      
+      let blockedMsg = "";
+      if (exists(activeRel)) {
+        moveFile(activeRel, blockedRel);
+        const blockedLog = `\n## 🚨 Blocked History (Auto-generated)\n* **[${new Date().toISOString()}]**: Verification failed and max attempts exhausted.\n* **[Failed Step]**: ${failedStep.label}\n* **[Command]**: \`${failedStep.command} ${failedStep.stepArgs.join(" ")}\`\n* **[Stderr snippet]**:\n\`\`\`text\n${failedStep.stderr.trim().slice(-1000)}\n\`\`\`\n`;
+        writeText(blockedRel, readText(blockedRel) + blockedLog);
+        blockedMsg = `\n⚠️ Ticket [${taskId}] has been moved to the 'blocked' folder. Human intervention required.`;
+      }
+
+      await sendNotification("fail", `❌ Verification step [${failedStep.label}] failed.${blockedMsg}\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis completed or disabled.`);
       process.exit(failedStep.status);
     }
   }
