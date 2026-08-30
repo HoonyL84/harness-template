@@ -228,6 +228,10 @@ function createQuickProfileStep(sentinel, options = {}) {
   if (!profile) return null;
   return createProfileVerificationSteps({ profiles: [profile], ...options })[0];
 }
+
+function shouldBlockVerificationFailure({ autoFixExhausted = false, apiDiagnosisAttempted = false }) {
+  return autoFixExhausted || apiDiagnosisAttempted;
+}
 module.exports = {
   createProfileVerificationSteps,
   createQuickProfileStep,
@@ -237,5 +241,6 @@ module.exports = {
   inferQuickMappings,
   matchesPattern,
   selectQuickCommands,
+  shouldBlockVerificationFailure,
   tokenizeCommand
 };

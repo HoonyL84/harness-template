@@ -4,6 +4,15 @@ const COMMAND_METADATA = Object.freeze({
   "check": { requiresGit: false },
   "check-environment": { requiresGit: false },
   "create-ticket": { requiresGit: false },
+  "bootstrap": { requiresGit: false },
+  "project": { requiresGit: false },
+  "request": { requiresGit: false },
+  "execution": { requiresGit: false },
+  "runner": { requiresGit: false },
+  "release": { requiresGit: false },
+  "evidence": { requiresGit: false },
+  "deployment": { requiresGit: false },
+  "dashboard": { requiresGit: false },
   "start-ticket": { requiresGit: true },
   "complete-task": { requiresGit: true },
   "verify": { requiresGit: true },
@@ -50,11 +59,17 @@ function isRuntimeManagedEnv(name) {
   return RUNTIME_MANAGED_ENV_VARS.has(name);
 }
 
-async function dispatchCommand(command, args, handlers) {
+async function dispatchCommand(command, args, handlers, afterDispatch) {
   const canonical = COMMAND_ALIASES[command] || command || "help";
   const handler = handlers[canonical];
   if (!handler) return false;
-  await handler(args);
+  try {
+    const result = await handler(args);
+    if (afterDispatch) await afterDispatch(canonical, args, result, null);
+  } catch (error) {
+    if (afterDispatch) await afterDispatch(canonical, args, null, error);
+    throw error;
+  }
   return true;
 }
 

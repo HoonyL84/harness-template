@@ -58,19 +58,21 @@ test("verification performance settings honor environment overrides", () => {
   fs.mkdirSync(path.join(root, ".harness"));
   fs.writeFileSync(path.join(root, ".harness", "config.json"), JSON.stringify({
     config_version: "1.0",
-    verify: { quick_cache: true, parallel_scripts: [] }
+    verify: { quick_cache: true, parallel_scripts: [], max_attempts: 2 }
   }));
   const config = createConfigLoader({
     root,
     argv: ["node", "index.js", "verify"],
     env: {
       HARNESS_VERIFY_QUICK_CACHE: "false",
-      HARNESS_VERIFY_PARALLEL_SCRIPTS: "coverage,lint"
+      HARNESS_VERIFY_PARALLEL_SCRIPTS: "coverage,lint",
+      HARNESS_VERIFY_MAX_ATTEMPTS: "4"
     },
     fail: throwingFail
   })();
   assert.equal(config.verify.quickCache, false);
   assert.deepEqual([...config.verify.parallelScripts], ["coverage", "lint"]);
+  assert.equal(config.verify.maxAttempts, 4);
 });
 
 test("config schema rejects unsafe verification performance types", () => {
@@ -82,4 +84,12 @@ test("config schema rejects unsafe verification performance types", () => {
     config_version: "1.0",
     verify: { parallel_scripts: "lint" }
   }, throwingFail), /parallel_scripts must be an array/);
+  assert.throws(() => validateConfigSchema({
+    config_version: "1.0",
+    verify: { max_attempts: 1.5 }
+  }, throwingFail), /max_attempts must be an integer between 1 and 5/);
+  assert.throws(() => validateConfigSchema({
+    config_version: "1.0",
+    verify: { max_attempts: 6 }
+  }, throwingFail), /max_attempts must be an integer between 1 and 5/);
 });

@@ -76,7 +76,8 @@ GitHub에서 **"Use this template"** → 새 레포 생성 → 클론
 npm run harness -- check
 # .env.local이 없으면 자동 생성됩니다.
 # .env.local을 열고 아래 항목 입력:
-# - SLACK_WEBHOOK_URL (작업 알림)
+# - SLACK_WEBHOOK_URL (Slack 작업 알림, 선택)
+# - TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID (Telegram 작업 알림, 선택)
 # - OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY (AI 사용 시)
 ```
 
@@ -122,6 +123,66 @@ npm run harness -- check
 ### Step 5. 첫 티켓 생성 및 시작
 ```bash
 npm run harness -- create-ticket user-auth feat --goal "JWT 기반 사용자 인증을 구현한다"
+
+# Git HEAD가 없는 신규 폴더는 승인된 계획 파일을 최초 기준 커밋으로 생성
+npm run harness -- bootstrap request new-app --path "/absolute/path/to/new-app" --summary "승인된 초기 계획" --message "docs: 초기 계획 수립"
+npm run harness -- bootstrap approve new-app --fingerprint <fingerprint>
+npm run harness -- bootstrap apply new-app --fingerprint <fingerprint>
+
+# 중앙 하네스에 독립 Git 프로젝트를 최초 1회 등록
+npm run harness -- project add ad-server --path "/absolute/path/to/ad-server"
+npm run harness -- project list
+npm run harness -- project check ad-server
+npm run harness -- project context ad-server
+npm run harness -- project context ad-server --bundle
+npm run harness -- project onboard ad-server
+npm run harness -- project profile ad-server
+npm run harness -- project onboard ad-server --approve
+
+# 승인된 프로젝트 프로필에 결속된 요청 계획
+npm run harness -- request create ad-cache-work --project ad-server --goal "광고 캐시 개선"
+npm run harness -- request show ad-cache-work
+# AI가 만든 상세 plan-file을 검토·수정한 뒤 승인 전 DRAFT 교체
+npm run harness -- request revise ad-cache-work --plan-file revised-plan.json
+npm run harness -- request approve ad-cache-work
+npm run harness -- request ready ad-cache-work
+
+# 프로젝트별 branch/worktree 준비
+npm run harness -- execution prepare ad-cache-work
+npm run harness -- execution status ad-cache-work
+
+# API 모드에서 승인 티켓을 중앙 runner가 격리 worktree에서 구현하고 실제 검증한 뒤 콘텐츠 지문에 결속
+npm run harness -- runner run ad-cache-work
+npm run harness -- runner status ad-cache-work
+# 프로세스 중단 뒤 만료된 실행 lease 복구
+npm run harness -- runner reconcile ad-cache-work
+# 대화형 Codex 같은 host가 직접 구현할 때는 아래 명령으로 검증과 지문 기록 수행
+# npm run harness -- execution review-ready ad-cache-work --ticket ad-cache-work-ad-server
+
+# 전체 상태와 BLOCKED/REVIEW_READY 알림 확인
+npm run harness -- dashboard
+
+# 모든 티켓이 REVIEW_READY인 경우에만 승인 요청 가능
+npm run harness -- release request ad-cache-work --approval ad-cache-commit --summary "diff, 테스트, 위험 검토 완료" --operation commit --message "feat: 광고 캐시 개선"
+npm run harness -- release approve ad-cache-commit --fingerprint <fingerprint>
+
+# 승인에 결속된 Git 작업을 정확히 한 번 실행. 승인 이후 내용 변경과 재사용은 차단
+npm run harness -- release apply ad-cache-commit --fingerprint <fingerprint>
+
+# 의존 티켓이 있으면 선행 티켓 commit 뒤 다음 실행 Wave 준비
+npm run harness -- execution advance ad-cache-work
+
+# 경력 증빙은 JSON 파일로 추가하고 VERIFIED + public 항목만 외부 출력
+npm run harness -- evidence add --file evidence.json
+npm run harness -- evidence search --project ad-server --technology Redis --query "캐시"
+npm run harness -- evidence export
+npm run harness -- evidence export --format json
+
+# 실제 배포 결과를 branch/commit/ticket과 함께 append-only 원장에 기록
+npm run harness -- deployment record --file deployment.json
+npm run harness -- deployment list --project ad-server --environment production
+npm run harness -- deployment show prod-2026.08.30
+
 npm run harness -- start-ticket user-auth
 # 여기서 구현 작업
 
@@ -146,7 +207,55 @@ git commit -m "chore(harness): user-auth 완료 기록"
 
 `complete-task`는 active 티켓을 archive로 이동하고 완료 메타데이터를 기록하므로,
 명령 실행 후 생긴 변경은 별도 마감 커밋으로 저장합니다.
+`bootstrap request`는 대상 폴더가 Git 저장소가 아니면 저장소를 초기화하되 커밋하지 않습니다. 사용자가 스냅샷 지문을 승인한 뒤 `bootstrap apply`를 실행해야 최초 커밋, 중앙 프로젝트 등록, DRAFT onboarding profile 생성이 진행됩니다. ignored 파일은 스냅샷에서 제외하고 비밀 파일, 자격증명, symlink/junction, 크기 제한 초과 파일은 fail-closed로 차단합니다. 승인 뒤 파일 내용이 바뀌거나 승인을 재사용하면 거부합니다. 이미 Git HEAD가 있는 프로젝트는 최초 커밋 단계를 자동으로 건너뛰고 등록과 onboarding 초안만 수행합니다.
+티켓별 재시도 정책은 계획에 포함되어 승인 fingerprint에 결속됩니다. 기본값은 최대 2회와 동일 오류 조기 중단이며, AI 또는 사용자가 승인 전 plan-file에서 아래처럼 1~5회 범위로 조정할 수 있습니다.
+
+```json
+{
+  "goal": "광고 캐시 개선",
+  "tickets": [{
+    "ticket_id": "ad-cache-work-ad-server",
+    "project_id": "ad-server",
+    "goal": "광고 캐시 개선",
+    "context_summary": "현재 캐시 경로와 장애 시 fallback을 유지한다.",
+    "acceptance_criteria": ["캐시 hit/miss가 측정된다", "기존 fallback이 회귀하지 않는다"],
+    "implementation_steps": ["현재 호출 경로 확인", "최소 변경 구현", "검증 근거 기록"],
+    "test_plan": {
+      "unit": ["hit/miss 단위 테스트"],
+      "integration": ["Redis 연동 테스트"],
+      "regression": ["전체 테스트"],
+      "manual": []
+    },
+    "retry_policy": { "max_attempts": 3, "stop_on_same_error": true }
+  }]
+}
+```
+
+`request revise <id> --plan-file <json>`은 `DRAFT` 계획만 교체하며 새 fingerprint를 생성합니다. 승인된 계획은 수정할 수 없습니다. Runner의 `--max-attempts`는 승인 정책과 비교해 더 작은 값만 적용하므로 실행 시 상한을 우회해 늘릴 수 없습니다. 시도 횟수는 티켓 상태에 누적되고, 예산 소진 또는 동일 오류 반복 시 `BLOCKED`로 종료됩니다.
 `complete-task`와 L5 자율 실행 완료는 반드시 `verify --full`이 성공한 지문 상태에서만 허용됩니다.
+중앙 runner는 승인된 request와 onboarding profile에 결속된 PREPARED 티켓만 실행합니다. 프로젝트 문서는 `untrusted-project-input`으로 전달되며 중앙 정책, 승인, 도구 권한, 비밀 접근을 변경할 수 없습니다. 실패는 제한 재시도 뒤 `BLOCKED`, 성공은 실제 검증 결과와 콘텐츠 지문을 포함한 `REVIEW_READY`로 기록됩니다.
+`release apply`는 승인 요청에 고정된 Git 작업과 인자만 실행하는 일회성 게이트입니다. commit 뒤 push, push 뒤 merge처럼 단계가 바뀌면 새 `--approval` ID와 새 지문 승인이 필요합니다. `release consume`은 Git을 실행하지 않는 감사 기록 호환 명령이며, 사용자가 하네스 밖에서 직접 실행한 raw Git 명령을 운영체제 수준에서 차단하지는 않습니다.
+요청에 의존 관계가 있으면 최초 `execution prepare`는 독립 티켓만 준비하고 후속 티켓을 `WAITING_DEPENDENCY`로 둡니다. 선행 티켓을 `review-ready`로 검증한 뒤 `release request <request-id> --ticket <ticket-id> ...`로 해당 티켓만 승인·커밋하고 `execution advance <request-id>`를 실행하면, 같은 프로젝트의 후속 티켓은 기록된 선행 commit SHA를 기준으로 시작합니다. 교차 프로젝트 의존성은 관리 릴리스 commit의 존재만 완료 게이트로 확인하고 대상 프로젝트의 승인된 HEAD를 사용합니다. 같은 프로젝트의 fan-in은 자동 merge하지 않으므로 통합 순서와 검증을 담은 별도 티켓으로 명시해야 합니다.
+경력 증빙의 기본 공개 범위는 `private`입니다. 외부 Markdown/JSON 출력에 포함하려면 `status`를 `VERIFIED`, `visibility`를 `public`으로 두고 실제 commit 또는 PR 근거를 연결해야 합니다. VERIFIED 등록 시 프로젝트 레지스트리와 실행 티켓 이력을 대조하고, commit SHA는 등록 저장소의 실제 commit 객체인지 확인합니다.
+관리형 commit 성공 시 해당 티켓의 구현 단계, 검증 요약, 변경 경로와 commit을 연결한 `DRAFT/private` evidence가 중복 없이 자동 생성됩니다. 실제 결과를 검토한 뒤에만 별도로 공개 근거를 등록합니다.
+Runner는 한 티켓 실행 pass에서 동일 프로젝트 컨텍스트를 한 번만 구성하고 재시도에는 직전 실패 증거를 추가합니다. 실행 상태의 `estimated_input_tokens`와 `estimated_output_tokens`는 문자 길이 기반 비교 지표이며 공급자 청구 토큰을 뜻하지 않습니다.
+상태 전이 알림은 `PLAN_READY`, `BLOCKED`, `REVIEW_READY`, `APPROVAL_REQUIRED`, `APPLIED`와 배포 기록에서 자동 발생하며, 실제 전송에 성공한 이벤트만 로컬 중복 방지 원장에 기록됩니다.
+
+배포 원장은 `observability/deployments/ledger.json`에 append-only로 저장되어 Git으로 다른 PC와 공유할 수 있습니다. 하네스가 배포를 실행하는 기능은 아니며, 사용자가 제공한 `source_commit`이 등록 프로젝트의 실제 commit인지 확인한 뒤 환경, branch, ticket, 시각, 결과와 CI URL을 기록합니다. 예시 입력:
+
+```json
+{
+  "deployment_id": "prod-2026.08.30",
+  "project_id": "ad-server",
+  "environment": "production",
+  "status": "SUCCEEDED",
+  "source_branch": "main",
+  "source_commit": "0123456789abcdef",
+  "ticket_ids": ["ad-cache-work-ad-server"],
+  "deployed_at": "2026-08-30T12:00:00Z",
+  "ci_url": "https://github.com/example/actions/runs/123"
+}
+```
 Quick과 Full 결과는 각각 `last_quick`, `last_full`로 기록되며 Quick 실행은 유효한 Full 기록을 덮어쓰지 않습니다.
 Cleanup은 검증 시작 전에 없었다가 검증 중 새로 생성된 untracked 일반 파일만 후보로 기록합니다.
 `verify.quick`이 비어 있으면 Node, Gradle, Maven, Python, Go, Rust, .NET 프로젝트의 테스트를 변경 파일 확장자에 맞춰 자동 선택합니다.
@@ -245,17 +354,19 @@ AI_PROVIDER=anthropic bash scripts/run-agent.sh --type architect "설계해줘"
 
 ### L4.5 제한적 자동 수정
 
-API 모드에서 명시적으로 활성화하면 검증 실패 시 저위험 소스/테스트 패치를 한 번 생성해 적용하고 전체 검증을 다시 실행합니다.
+API 모드에서 명시적으로 활성화하면 검증 실패 시 저위험 소스/테스트 패치를 생성해 적용하고 전체 검증을 다시 실행합니다.
 
 ```bash
 npm run harness -- verify --auto-fix
 ```
 
 - 기본 비활성화: `HARNESS_AUTO_FIX=false`
+- 최대 검증 횟수(1~5): `HARNESS_VERIFY_MAX_ATTEMPTS=2` 또는 `.harness/config.json`의 `verify.max_attempts`
 - 기존 소스/테스트 파일만 수정
 - 최대 5개 파일, 100KB
 - 설정, 의존성, CI, 스크립트, 인프라, migration, 비밀값 차단
 - 재검증 실패 시 자동 원복
+- 설정된 재시도가 모두 소진되면 active 티켓을 `blocked/`로 이동하고 실패 근거를 기록
 - 커밋, 푸시, 병합은 사람의 검토 후 수행
 
 상세 정책: [`docs/design-docs/auto-fix-policy.md`](design-docs/auto-fix-policy.md)

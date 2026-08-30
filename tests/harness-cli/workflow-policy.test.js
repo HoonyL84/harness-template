@@ -42,3 +42,20 @@ test("Node CI enforces the configured coverage threshold", () => {
   assert.match(workflow, /npm run coverage/);
   assert.match(workflow, /npm run test --if-present/);
 });
+
+test("verification failures share one unconditional exit path", () => {
+  const source = read("tools/harness-cli/index.js");
+  const verifyBody = source.slice(
+    source.indexOf("async function commandVerify"),
+    source.indexOf("function inferRole")
+  );
+  const failureExits = verifyBody.match(/process\.exit\(failedStep\.status\)/g) || [];
+  assert.equal(failureExits.length, 1);
+  assert.match(verifyBody, /recordVerify\("fail"[\s\S]+process\.exit\(failedStep\.status\)/);
+});
+
+test("project environment is loaded before configuration is cached", () => {
+  const source = read("tools/harness-cli/index.js");
+  const mainBody = source.slice(source.indexOf("async function main"));
+  assert.ok(mainBody.indexOf("parseEnvFile();") < mainBody.indexOf("loadConfig();"));
+});

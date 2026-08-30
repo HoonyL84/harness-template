@@ -131,3 +131,12 @@ bash scripts/run-agent.sh --role reviewer --type review "현재 diff를 리뷰�
 ```
 
 역할 프롬프트는 `prompts/system/roles/`에 둔다.
+
+## 6. 대화형 PM 및 커맨드 센터 모드 (Command Center Mode)
+
+새 대화나 프로젝트에서 작업 흐름을 시작할 때 다음 원칙을 적용한다:
+
+1. **큰 목표를 먼저 정리:** 사용자가 큰 목표를 제시하면 즉시 하네스 명령을 실행하지 않는다. 먼저 `Dashboard.md` 또는 `docs/project/PLANS.md`에 목표와 TODO 후보를 정리하고 사용자에게 보여준다.
+2. **승인 후 티켓 발급:** 사용자가 TODO 목록을 확인하고 진행을 승인하면 `npm run harness -- create-ticket`으로 항목별 작업 티켓을 만든다.
+3. **상태 브리핑:** 사용자가 현재 진행 상황을 요청하면 `.harness/tasks/`의 `backlog`, `active`, `blocked`, `archive`를 확인해 전체 상태를 요약한다.
+4. **Blocked 에스컬레이션:** `blocked/`에 티켓이 생기면 실패 원인과 필요한 사용자 결정을 알리고, 명시적 승인 없이 고위험 복구를 진행하지 않는다.

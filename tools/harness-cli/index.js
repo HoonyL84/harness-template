@@ -6,9 +6,20 @@ const http = require("http");
 const path = require("path");
 const os = require("os");
 const { spawn, spawnSync } = require("child_process");
+const { createProjectBootstrapCommand } = require("./project-bootstrap");
+const { createProjectCommand } = require("./project-command");
+const { createRequestCommand } = require("./request-command");
+const { createExecutionCommand } = require("./execution-command");
+const { createControlPlaneCommands } = require("./control-plane-command");
+const { createDeploymentCommand } = require("./deployment-ledger");
+const { createStateTransitionNotifier } = require("./transition-notifier");
+const { createAgentRunnerCommand } = require("./agent-runner");
+const { repositoryContentFingerprint: calculateRepositoryContentFingerprint } = require("./content-fingerprint");
 const { runAutonomySoak } = require("./autonomy-utils");
 const { createCleanupManifest, findGeneratedPaths, isCleanupManifestValid } = require("./cleanup-utils");
 const { createConfigLoader, isPlainObject } = require("./config");
+const { sendNotification: deliverNotification } = require("./notification-utils");
+const { blockActiveTask } = require("./task-blocker");
 const { commandOrchestrate, requireTaskOrchestrationReady } = require("./orchestration-command");
 const {
   createProfileVerificationSteps,
@@ -17,6 +28,7 @@ const {
   detectVerificationProfiles,
   inferQuickMappings,
   selectQuickCommands,
+  shouldBlockVerificationFailure,
   tokenizeCommand
 } = require("./verify-utils");
 const {
@@ -324,7 +336,7 @@ function applyGitPatch(patchRel, reverse = false) {
 function run(command, args, options = {}) {
   const needsWindowsCommandShell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
   const result = spawnSync(command, args, {
-    cwd: ROOT,
+    cwd: options.cwd || ROOT,
     stdio: options.capture ? "pipe" : "inherit",
     encoding: "utf8",
     shell: needsWindowsCommandShell,
@@ -394,35 +406,77 @@ function parseEnvFile(relPath = ".env.local") {
 
 const loadConfig = createConfigLoader({ root: ROOT, fail });
 
-async function sendSlackNotification(status, message) {
-  const webhook = process.env.SLACK_WEBHOOK_URL;
-  if (!webhook || webhook.includes("YOUR/WEBHOOK/URL")) {
-    log("  [Slack] 웹훅 미설정 — 알림 생략");
-    return;
-  }
-  const color = status === "fail" ? "#ff0000" : "#36a64f";
-  const taskId = resolveTaskId();
-  const payload = {
-    attachments: [{
-      fallback: `Harness: ${message}`,
-      color,
-      title: `[Harness] Task: ${taskId}`,
-      text: message,
-      footer: "Harness Engineering",
-      ts: Math.floor(Date.now() / 1000),
-    }]
-  };
-  try {
-    const res = await fetch(webhook, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) log(`  [Slack] Notification HTTP failed: ${res.status}`);
-  } catch (err) {
-    log(`  [Slack] Notification exception: ${err.message}`);
-  }
+async function sendNotification(status, message) {
+  return deliverNotification({
+    status,
+    message,
+    taskId: resolveTaskId(),
+    env: process.env,
+    fetchImpl: globalThis.fetch,
+    log
+  });
 }
+
+function runExternalGit(args, cwd) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    error: result.error
+  };
+}
+
+const commandProject = createProjectCommand({
+  root: ROOT,
+  parseArgs,
+  runGit: runExternalGit,
+  log
+});
+
+const commandBootstrap = createProjectBootstrapCommand({
+  root: ROOT,
+  parseArgs,
+  runGit: runExternalGit,
+  log
+});
+
+const commandRequest = createRequestCommand({ root: ROOT, parseArgs, log });
+const commandExecution = createExecutionCommand({
+  root: ROOT,
+  parseArgs,
+  reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
+  runCommand: run,
+  runGit: runExternalGit,
+  tokenizeCommand,
+  log
+});
+const controlPlane = createControlPlaneCommands({
+  root: ROOT,
+  parseArgs,
+  notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
+  reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
+  runGit: runExternalGit,
+  log
+});
+const commandRunner = createAgentRunnerCommand({
+  root: ROOT,
+  parseArgs,
+  invokeAgent: (prompt) => commandRunAgent(["--type", "code", "--role", "implementer", prompt]),
+  notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
+  reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
+  runCommand: run,
+  runGit: runExternalGit,
+  tokenizeCommand,
+  log
+});
+const commandDeployment = createDeploymentCommand({ root: ROOT, parseArgs, runGit: runExternalGit, log });
+const notifyStateTransition = createStateTransitionNotifier({
+  root: ROOT,
+  parseArgs,
+  notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
+  log
+});
 
 function ensureEnvLocal() {
   const localPath = path.join(ROOT, ".env.local");
@@ -588,7 +642,8 @@ async function commandCheck() {
 
   const mode = process.env.HARNESS_AGENT_MODE || "interactive";
   const provider = process.env.AI_PROVIDER || "openai";
-  const multiAgent = loadConfig().multiAgent;
+  const config = loadConfig();
+  const multiAgent = config.multiAgent;
 
   if (["interactive", "api"].includes(mode)) pass(`HARNESS_AGENT_MODE=${mode}`);
   else bad("HARNESS_AGENT_MODE must be interactive or api");
@@ -598,6 +653,7 @@ async function commandCheck() {
   pass(`HARNESS_MULTI_AGENT_MAX_WORKERS=${multiAgent.maxWorkers}`);
   if (multiAgent.allowMultiWriter) warn("HARNESS_MULTI_AGENT_ALLOW_MULTI_WRITER=true (high coordination risk)");
   else pass("HARNESS_MULTI_AGENT_ALLOW_MULTI_WRITER=false (single writer)");
+  pass(`HARNESS_VERIFY_MAX_ATTEMPTS=${config.verify.maxAttempts}`);
 
   const autonomyLevel = String(process.env.HARNESS_AUTONOMY_LEVEL || "4.5");
   if (autonomyLevel === "4.5") pass("HARNESS_AUTONOMY_LEVEL=4.5 (safe default)");
@@ -654,8 +710,8 @@ async function commandCheck() {
     pass("Git repository detected");
     const currentBranch = getGitBranch();
     log(`[INFO] Current branch: ${currentBranch}`);
-    if (autonomyLevel === "5" && process.env.HARNESS_AUTO_COMMIT === "true" && ["main", "master"].includes(currentBranch)) {
-      bad("L5 auto-commit cannot run on main/master");
+    if (process.env.HARNESS_AUTO_COMMIT === "true" || process.env.HARNESS_AUTO_PUSH === "true") {
+      warn("HARNESS_AUTO_COMMIT/HARNESS_AUTO_PUSH are ignored; verified L5 work always stops at the release approval gate");
     }
     if (hasGitRemoteOrigin()) pass("Git remote origin configured");
     else warn("Git remote origin is not configured");
@@ -870,36 +926,6 @@ function appendTaskCompletion(archiveRel, verify) {
 - Rework Count: ${verify.rework_count || 0}
 - Last Failure: ${verify.last_fail_reason || "none"}
 `);
-}
-
-function archiveVerifiedTicket(name) {
-  const verifyRel = `observability/metrics/${name}.verify.json`;
-  const startRel = `observability/metrics/${name}.start.json`;
-  const doneRel = `observability/metrics/${name}.done.json`;
-  const activeRel = `.harness/tasks/active/${name}.md`;
-  const archiveRel = `.harness/tasks/archive/${name}.md`;
-  const verify = exists(verifyRel) ? JSON.parse(readText(verifyRel)) : {};
-  const fullVerify = getFullVerifyRecord(verify);
-  const start = exists(startRel) ? JSON.parse(readText(startRel)) : {};
-  if (fullVerify.result !== "pass") fail(`Cannot archive unverified L5 ticket: ${name}. Re-run full verification.`);
-  requireCurrentVerifiedContent(name, fullVerify);
-  if (exists(activeRel)) {
-    moveFile(activeRel, archiveRel);
-    appendTaskCompletion(archiveRel, { ...verify, ...fullVerify });
-  }
-  writeText(doneRel, JSON.stringify({
-    task: name,
-    type: start.type || "unknown",
-    project: start.project || "unknown",
-    started_at: start.started_at || "unknown",
-    completed_at: currentTimestamp(),
-    rework_count: verify.rework_count || 0,
-    last_fail_reason: verify.last_fail_reason || "none",
-    verify_result: fullVerify.result,
-    completed_by: "l5-autonomy",
-  }, null, 2));
-  removeIfExists(startRel);
-  removeIfExists(verifyRel);
 }
 
 function findFilesInDir(dir, filter, list = []) {
@@ -1370,25 +1396,7 @@ function describeWorktreeDrift(before, after) {
 }
 
 function repositoryContentFingerprint() {
-  const files = run("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { capture: true });
-  if (files.status !== 0 || files.error) return null;
-
-  const hash = crypto.createHash("sha256");
-  const paths = files.stdout.split("\0").filter(Boolean).sort();
-  for (const rel of paths) {
-    const absolute = path.join(ROOT, rel);
-    if (!fs.existsSync(absolute)) continue;
-    const stat = fs.lstatSync(absolute);
-    hash.update(`\0${rel}\0`);
-    if (stat.isSymbolicLink()) {
-      hash.update(`link:${fs.readlinkSync(absolute)}`);
-    } else if (stat.isFile()) {
-      hash.update(fs.readFileSync(absolute));
-    } else {
-      hash.update("non-file");
-    }
-  }
-  return hash.digest("hex");
+  return calculateRepositoryContentFingerprint(ROOT, runExternalGit);
 }
 
 function requireCurrentVerifiedContent(name, verify) {
@@ -1661,16 +1669,9 @@ async function commandAutonomy(args) {
   if (initialDirty.length > 0) {
     fail(`L5 API mode requires a clean worktree. Commit or stash first: ${initialDirty.slice(0, 10).join(", ")}`);
   }
-  if (process.env.HARNESS_AUTO_COMMIT === "true") {
-    const branch = getGitBranch();
-    if (branch === "main" || branch === "master") {
-      fail("L5 auto-commit is blocked on main/master. Switch to a task branch first.");
-    }
-  }
-
   const startedAt = Date.now();
   let apiCalls = 0;
-  let completed = 0;
+  const completed = 0;
   let ticket = ensureCurrentTicket();
 
   if (!ticket) {
@@ -1685,10 +1686,10 @@ async function commandAutonomy(args) {
     ticket = ensureCurrentTicket();
   }
 
-  while (ticket && completed < maxIterations && apiCalls < maxApiCalls) {
+  if (ticket && completed < maxIterations && apiCalls < maxApiCalls) {
     if ((Date.now() - startedAt) / 60_000 >= maxMinutes) {
       writeAutonomyState({ status: "budget_exhausted", current_ticket: ticket, reason: "runtime" });
-      break;
+      return;
     }
 
     process.env.TASK_ID = ticket;
@@ -1773,52 +1774,15 @@ async function commandAutonomy(args) {
       fail(`L5 verification failed and the patch was rolled back: ${ticket}`, verify.status);
     }
 
-    if (process.env.HARNESS_AUTO_COMMIT !== "true") {
-      writeAutonomyState({
-        status: "awaiting_review",
-        current_ticket: ticket,
-        verified_patch: patchRel,
-        changed_files: patchInfo.paths,
-        next_action: `${gitPublishAction()} the verified diff, complete the task, then ${gitPublishAction()} completion metadata`,
-      });
-      log(`[L5 Experimental] ${ticket} passed verification. Auto-commit is disabled, so execution paused for review.`);
-      return;
-    }
-
-    const branch = getGitBranch();
-    const currentPaths = dirtyPaths();
-    if (currentPaths === null || currentPaths.length === 0) {
-      fail("L5 verification passed but no working-tree changes were found to commit.");
-    }
-    const implementationPaths = currentPaths.filter((filePath) => !filePath.replace(/\\/g, "/").startsWith(".harness/tasks/"));
-    const verifiedHighRisk = classifyL5Paths(implementationPaths);
-    if (verifiedHighRisk.length > 0 && !options["approve-risk"]) {
-      writeAutonomyState({
-        status: "approval_required",
-        current_ticket: ticket,
-        pending_patch: patchRel,
-        high_risk_files: verifiedHighRisk,
-        next_action: "review verified changes and rerun autonomy --approve-risk",
-      });
-      return;
-    }
-    archiveVerifiedTicket(ticket);
-    const verifiedPaths = dirtyPaths();
-    if (verifiedPaths === null || verifiedPaths.length === 0) {
-      fail("L5 could not find implementation and ticket metadata changes to commit.");
-    }
-    const addResult = run("git", ["add", "--", ...verifiedPaths], { capture: true });
-    if (addResult.status !== 0) fail(`L5 could not stage files: ${addResult.stderr || addResult.stdout}`);
-    const commitResult = run("git", ["commit", "-m", `feat(l5): ${ticket} 자율 작업 완료`], { capture: true });
-    if (commitResult.status !== 0) fail(`L5 commit failed: ${commitResult.stderr || commitResult.stdout}`);
-    if (process.env.HARNESS_AUTO_PUSH === "true") {
-      const pushResult = run("git", ["push", "-u", "origin", branch], { capture: true });
-      if (pushResult.status !== 0) fail(`L5 push failed: ${pushResult.stderr || pushResult.stdout}`);
-    }
-
-    completed += 1;
-    writeAutonomyState({ status: "ticket_completed", current_ticket: ticket, completed_iterations: completed, api_calls: apiCalls });
-    ticket = ensureCurrentTicket();
+    writeAutonomyState({
+      status: "awaiting_release_approval",
+      current_ticket: ticket,
+      verified_patch: patchRel,
+      changed_files: patchInfo.paths,
+      next_action: "Review the verified diff and explicitly approve any commit or push operation.",
+    });
+    log(`[L5 Experimental] ${ticket} passed verification and paused at the mandatory release approval gate.`);
+    return;
   }
 
   writeAutonomyState({
@@ -1925,8 +1889,9 @@ async function commandVerify(args) {
   const offline = options.offline || process.env.HARNESS_OFFLINE === "1" || process.env.HARNESS_OFFLINE === "true";
   if (options.quick && options.full) fail("Choose either --quick or --full, not both.");
   const mode = options.quick ? "quick" : "full";
+  const cfg = loadConfig();
 
-  const maxAttempts = autoFix ? 2 : 1;
+  const maxAttempts = autoFix ? cfg.verify.maxAttempts : 1;
   let attempt = 0;
   let verifyPassed = false;
   let appliedPatchRel = "";
@@ -1940,8 +1905,6 @@ async function commandVerify(args) {
     lines.push(message);
     log(message);
   };
-
-  const cfg = loadConfig();
 
   while (attempt < maxAttempts && !verifyPassed) {
     const worktreeBefore = worktreeSnapshot();
@@ -2150,7 +2113,7 @@ async function commandVerify(args) {
       }
       if (appliedPatchRel) {
         say(`[Auto-fix] Verification passed. Patch retained for review: ${appliedPatchRel}`);
-        await sendSlackNotification("success", `✅ Low-risk auto-fix passed verification. Review patch: ${appliedPatchRel}`);
+        await sendNotification("success", `✅ Low-risk auto-fix passed verification. Review patch: ${appliedPatchRel}`);
       }
       say("All checks passed. Safe to commit.");
       writeText(logRel, lines.join(os.EOL));
@@ -2166,25 +2129,30 @@ async function commandVerify(args) {
       say(`[Failure stdout]\n${failedStep.stdout.trim().slice(-1000)}`);
     }
 
+    let autoFixExhausted = false;
+    let apiDiagnosisAttempted = false;
+    let failedPatchRel = "";
+
     if (appliedPatchRel) {
+      failedPatchRel = appliedPatchRel;
       try {
         applyGitPatch(appliedPatchRel, true);
         say(`[Auto-fix] Verification still failed. Applied patch was rolled back: ${appliedPatchRel}`);
       } catch (err) {
         say(`[Auto-fix] CRITICAL: Automatic rollback failed: ${err.message}`);
       }
-      recordVerify("fail", failureReason, null, mode);
-      writeText(logRel, lines.join(os.EOL));
-      await sendSlackNotification("fail", `❌ Auto-fix failed verification and rollback was attempted.\nStep: ${failedStep.label}\nPatch: ${appliedPatchRel}`);
-      process.exit(failedStep.status);
+      appliedPatchRel = "";
+      autoFixExhausted = attempt + 1 >= maxAttempts;
     }
 
-    if (autoFix) {
+    if (autoFix && !autoFixExhausted) {
       const modeEnv = process.env.HARNESS_AGENT_MODE || "interactive";
       if (offline) {
         say("[Auto-fix] Disabled because offline mode is active.");
       } else if (modeEnv !== "api") {
         say("[Auto-fix] Requires HARNESS_AGENT_MODE=api. Falling back to diagnosis guidance.");
+      } else if (attempt + 1 >= maxAttempts) {
+        autoFixExhausted = true;
       } else {
         const autoFixPrompt = `A verification step failed.
 Step: ${failedStep.label}
@@ -2219,13 +2187,12 @@ Safety contract:
           continue;
         } catch (err) {
           say(`[Auto-fix] Patch generation or application rejected: ${err.message}`);
+          autoFixExhausted = true;
         }
       }
     }
 
-    // If we failed and self-diagnose is requested
-    if (diagnose && attempt < maxAttempts) {
-      attempt++;
+    if (diagnose) {
       const modeEnv = process.env.HARNESS_AGENT_MODE || "interactive";
       if (modeEnv !== "api") {
         say(`\n======================================================`);
@@ -2244,14 +2211,11 @@ Safety contract:
         say(`3. Use codebase search / file write tools to fix the issue.`);
         say(`4. Once fixed, execute verification again using: npm run harness -- verify`);
         say(`======================================================\n`);
-        recordVerify("fail", failureReason, null, mode);
-        writeText(logRel, lines.join(os.EOL));
-        process.exit(failedStep.status);
-      }
+      } else {
+        apiDiagnosisAttempted = true;
+        say(`[Diagnose] Step "${failedStep.label}" failed. Initiating self-diagnosis...`);
 
-      say(`[Diagnose] Step "${failedStep.label}" failed. Initiating self-diagnosis (Attempt ${attempt}/${maxAttempts})...`);
-
-      const diagnosePrompt = `The verification step "${failedStep.label}" failed during task execution.
+        const diagnosePrompt = `The verification step "${failedStep.label}" failed during task execution.
 Command executed: ${failedStep.command} ${failedStep.stepArgs.join(" ")}
 
 Stderr Output:
@@ -2262,25 +2226,38 @@ ${failedStep.stdout.slice(-1500)}
 
 Please review the error logs, identify the root cause, and write a detailed recovery guide explaining which files to edit, what lines to change, and how to fix the issue.`;
 
-      try {
-        await commandRunAgent(["--type", "review", "--role", "reviewer", diagnosePrompt]);
-        say(`\nℹ️  [Diagnose] Recovery guide generated in agent log above. Please follow the instructions to resolve the error.`);
-      } catch (err) {
-        say(`[Diagnose] Self-diagnosis agent call failed: ${err.message}`);
+        try {
+          await commandRunAgent(["--type", "review", "--role", "reviewer", diagnosePrompt]);
+          say(`\n[Diagnose] Recovery guide generated in agent log above. Please follow the instructions to resolve the error.`);
+        } catch (err) {
+          say(`[Diagnose] Self-diagnosis agent call failed: ${err.message}`);
+        }
       }
-
-      // Exit immediately after generating the diagnose guidance in API mode
-      recordVerify("fail", failureReason, null, mode);
-      writeText(logRel, lines.join(os.EOL));
-      await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis completed. Recovery guide generated.`);
-      process.exit(failedStep.status);
-    } else {
-      // Verification failed and no diagnose/exhausted attempts
-      recordVerify("fail", failureReason, null, mode);
-      writeText(logRel, lines.join(os.EOL));
-      await sendSlackNotification("fail", `❌ Verification step [${failedStep.label}] failed.\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}\nSelf-diagnosis is disabled or completed.`);
-      process.exit(failedStep.status);
     }
+
+    recordVerify("fail", failureReason, null, mode);
+    let blockedMsg = "";
+    if (shouldBlockVerificationFailure({ autoFixExhausted, apiDiagnosisAttempted })) {
+      const taskId = resolveTaskId();
+      const reason = autoFixExhausted
+        ? "Auto-fix attempts exhausted"
+        : "API self-diagnosis completed; human intervention required";
+      try {
+        const blocked = blockActiveTask({ root: ROOT, taskId, failedStep, reason });
+        if (blocked.moved) {
+          blockedMsg = `\nTicket [${taskId}] moved to ${blocked.relativePath}. Human intervention required.`;
+        }
+      } catch (err) {
+        say(`[Blocked] Ticket transition failed safely: ${err.message}`);
+      }
+    }
+
+    writeText(logRel, lines.join(os.EOL));
+    if (!offline) {
+      const patchMsg = failedPatchRel ? `\nRolled back patch: ${failedPatchRel}` : "";
+      await sendNotification("fail", `Verification step [${failedStep.label}] failed.${blockedMsg}${patchMsg}\nCommand: ${failedStep.command} ${failedStep.stepArgs.join(" ")}`);
+    }
+    process.exit(failedStep.status);
   }
 }
 
@@ -2492,6 +2469,19 @@ function usage() {
 
 Usage:
   node tools/harness-cli/index.js check
+  node tools/harness-cli/index.js bootstrap <request|approve|apply|status> <id> [--path <project-root>] [--summary <text>] [--message <commit-message>]
+  node tools/harness-cli/index.js project <add|list|show|check|context|onboard|profile|remove> [id] [--path <git-root>] [--bundle] [--approve] [--json]
+  node tools/harness-cli/index.js request <create|revise|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]
+  node tools/harness-cli/index.js execution <prepare|advance|review-ready|status> <request-id>
+  node tools/harness-cli/index.js runner <run|reconcile|status> <request-id> [--ticket <ticket-id>] [--max-attempts N] [--max-tickets N]
+  node tools/harness-cli/index.js release request <request-id> [--ticket <id>] [--approval <id>] --summary "..." [--operation record|commit|push|merge]
+  node tools/harness-cli/index.js release <approve|apply|consume> <request-id> --fingerprint <sha256>
+  node tools/harness-cli/index.js release status <request-id>
+  node tools/harness-cli/index.js evidence add --file <json>
+  node tools/harness-cli/index.js evidence search [--query <text>] [--project <id>] [--technology <name>] [--from <date>] [--to <date>] [--include-drafts]
+  node tools/harness-cli/index.js evidence export [--format json]
+  node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
+  node tools/harness-cli/index.js dashboard
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name>
   node tools/harness-cli/index.js verify [--quick|--full] [--offline] [--diagnose] [--auto-fix]
@@ -2575,6 +2565,7 @@ async function main(argv = process.argv.slice(2)) {
   const [command, ...args] = argv;
   const meta = getCommandMetadata(command || "help");
   if (!shouldBypassConfig(command)) {
+    parseEnvFile();
     loadConfig();
   }
   if (meta.requiresGit) {
@@ -2585,6 +2576,15 @@ async function main(argv = process.argv.slice(2)) {
     check: commandCheck,
     "check-environment": commandCheck,
     "create-ticket": commandCreateTicket,
+    bootstrap: commandBootstrap,
+    project: commandProject,
+    request: commandRequest,
+    execution: commandExecution,
+    runner: commandRunner,
+    release: controlPlane.release,
+    evidence: controlPlane.evidence,
+    deployment: commandDeployment,
+    dashboard: controlPlane.dashboard,
     "start-ticket": commandStartTicket,
     "complete-task": commandCompleteTask,
     verify: commandVerify,
@@ -2605,7 +2605,7 @@ async function main(argv = process.argv.slice(2)) {
       log(pkg.version || "unknown");
     }
   };
-  const handled = await dispatchCommand(command, args, handlers);
+  const handled = await dispatchCommand(command, args, handlers, notifyStateTransition);
   if (!handled) {
     usage();
     fail(`Unknown command: ${command}`);

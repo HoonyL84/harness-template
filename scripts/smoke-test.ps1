@@ -75,9 +75,6 @@ try {
     Get-ChildItem ".harness/tasks/active" -Filter "*.md" -File |
       Where-Object { $_.Name -ne ".gitkeep" -and $_.BaseName -ne $TicketName }
   ).Count
-  if ($preExistingActiveCount -gt 1) {
-    throw "Error: Smoke test requires at most one pre-existing active ticket."
-  }
   if ($preExistingActiveCount -eq 1) {
     Test-L5Checkpoint
   }
@@ -95,7 +92,7 @@ try {
   }
 
   Write-Host "[Smoke Test] 3. Starting ticket..."
-  if ($preExistingActiveCount -eq 1) {
+  if ($preExistingActiveCount -gt 0) {
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & node "tools/harness-cli/index.js" start-ticket $TicketName 2>$null

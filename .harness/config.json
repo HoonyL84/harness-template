@@ -4,7 +4,8 @@
     "quick": {},
     "full": [],
     "quick_cache": true,
-    "parallel_scripts": []
+    "parallel_scripts": [],
+    "max_attempts": 2
   },
   "limits": {
     "max_iterations": 3,
