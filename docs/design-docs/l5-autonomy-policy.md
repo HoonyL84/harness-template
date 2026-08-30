@@ -11,7 +11,7 @@ L5는 사용자가 명시적으로 활성화하는 bounded autonomy 모드다. �
 - 패치 최대 크기/파일 수: `HARNESS_L5_MAX_PATCH_KB`, `HARNESS_L5_MAX_FILES`
 - 비밀값, `.git`, `.harness`, observability 상태는 자동 패치 금지
 - rename, copy, binary patch는 자동 적용 금지
-- main/master 자동 커밋 금지
+- commit/push 자동 실행 금지: 검증 뒤 항상 승인 게이트에서 중단
 - planner/implementer/system 프롬프트는 `prompts/templates/`에서 로드
 - 429, 일시적 5xx, 네트워크 순단은 설정된 지수 백오프로 재시도
 
@@ -50,8 +50,8 @@ API 모드는 clean worktree에서 독립 루프를 실행한다.
 3. 구현 패치를 생성하고 정책 검사를 수행한다.
 4. 패치를 적용하고 전체 검증을 실행한다.
 5. 검증 실패 시 패치를 원복하고 중단한다.
-6. 자동 커밋이 꺼져 있으면 검토 체크포인트에서 멈춘다.
-7. 자동 커밋이 켜져 있으면 task branch에서만 커밋하고 다음 티켓으로 진행한다.
+6. 검증에 성공하면 `awaiting_release_approval` 체크포인트에서 멈춘다.
+7. commit/push는 대화형 명시 승인 또는 중앙 `release apply` 게이트를 통해 별도로 수행한다.
 
 L5의 `verified` 및 완료 판정은 `verify --full`의 `last_full` 지문만 인정한다.
 `verify --quick` 결과는 개발 중 참고 정보로만 별도 보존하며 완료 권한을 부여하지 않는다.
@@ -135,15 +135,14 @@ npm run harness -- orchestrate --promote <run-id> --approve-risk
 worker별 검증, `verify --quick`, 통합 전 Full 결과는 완료 권한을 부여하지 않으며,
 현재 통합 콘텐츠와 일치하는 `last_full` 성공 지문이 없으면 `complete-task`를 실행할 수 없다.
 
-## 자동 커밋과 푸시
+## 커밋과 푸시
 
 ```env
 HARNESS_AUTO_COMMIT=false
 HARNESS_AUTO_PUSH=false
 ```
 
-둘 다 기본 비활성화다. `HARNESS_AUTO_COMMIT=true`는 main/master에서 거부된다.
-`HARNESS_AUTO_PUSH=true`는 자동 커밋이 성공한 task branch에서만 의미가 있다.
+레거시 환경 변수는 호환을 위해 읽지만 실행 권한을 부여하지 않는다. 값이 `true`여도 L5는 검증 뒤 `awaiting_release_approval`에서 중단하며 commit/push를 수행하지 않는다.
 
 ## 상태 확인
 

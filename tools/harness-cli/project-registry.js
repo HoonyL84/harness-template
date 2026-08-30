@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { updateJsonLocked } = require("./control-plane-state");
 
 const SCHEMA_VERSION = "1.0";
 
@@ -38,10 +39,7 @@ function readRegistry(registryPath) {
 }
 
 function writeRegistry(registryPath, registry) {
-  fs.mkdirSync(path.dirname(registryPath), { recursive: true });
-  const tempPath = `${registryPath}.tmp-${process.pid}`;
-  fs.writeFileSync(tempPath, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tempPath, registryPath);
+  return updateJsonLocked(registryPath, emptyRegistry(), () => registry);
 }
 
 function parseRemotes(output) {

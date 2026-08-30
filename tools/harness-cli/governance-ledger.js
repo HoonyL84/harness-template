@@ -2,10 +2,36 @@
 
 const crypto = require("node:crypto");
 const hash = (value) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const RELEASE_OPERATIONS = new Set(["record", "commit", "push", "merge"]);
 
-function createReleaseApproval(execution, summary) {
-  if (execution.status !== "REVIEW_READY") throw new Error("Execution must be REVIEW_READY before release approval");
-  const payload = { execution_id: execution.execution_id, request_id: execution.request_id, summary: String(summary || "").trim(), tickets: execution.tickets.map(({ ticket_id, project_id, branch, worktree, base_commit, review_fingerprint, verification }) => ({ ticket_id, project_id, branch, worktree, base_commit, review_fingerprint, verification })) };
+function normalizeReleaseSpec(spec = {}) {
+  const operation = String(spec.operation || "record").toLowerCase();
+  if (!RELEASE_OPERATIONS.has(operation)) throw new Error("Release operation must be record, commit, push, or merge");
+  const message = String(spec.message || "").trim();
+  const remote = String(spec.remote || "origin").trim();
+  const target_branch = String(spec.targetBranch || "").trim();
+  if (operation === "commit" && !message) throw new Error("Managed commit requires a release message");
+  if (operation === "push" && !remote) throw new Error("Managed push requires a remote");
+  if (operation === "merge" && (!message || !target_branch)) throw new Error("Managed merge requires a message and target branch");
+  return { operation, message: message || null, remote: operation === "push" ? remote : null, target_branch: operation === "merge" ? target_branch : null };
+}
+
+function createReleaseApproval(execution, summary, spec) {
+  const requestedIds = Array.isArray(spec?.ticketIds) ? [...new Set(spec.ticketIds.map(String))] : [];
+  if (requestedIds.length === 0 && execution.status !== "REVIEW_READY") {
+    throw new Error("Execution must be REVIEW_READY before a full release approval");
+  }
+  const selected = requestedIds.length === 0
+    ? execution.tickets
+    : requestedIds.map((ticketId) => {
+      const ticket = execution.tickets.find((item) => item.ticket_id === ticketId);
+      if (!ticket) throw new Error(`Unknown release ticket: ${ticketId}`);
+      return ticket;
+    });
+  if (selected.some((ticket) => ticket.status !== "REVIEW_READY")) {
+    throw new Error("Every selected release ticket must be REVIEW_READY");
+  }
+  const payload = { approval_id: String(spec?.approvalId || execution.request_id), execution_id: execution.execution_id, request_id: execution.request_id, summary: String(summary || "").trim(), release: normalizeReleaseSpec(spec), tickets: selected.map(({ ticket_id, project_id, branch, worktree, base_commit, review_fingerprint, verification }) => ({ ticket_id, project_id, branch, worktree, base_commit, review_fingerprint, verification })) };
   if (!payload.summary) throw new Error("Release summary is required");
   if (payload.tickets.some((ticket) => !ticket.review_fingerprint)) throw new Error("Every ticket requires a review fingerprint");
   return { ...payload, status: "PENDING", fingerprint: hash(payload), approved_at: null, consumed_at: null };
@@ -13,6 +39,9 @@ function createReleaseApproval(execution, summary) {
 function approveRelease(record, fingerprint, now = new Date().toISOString()) { if (record.status !== "PENDING") throw new Error("Release approval is not pending"); if (record.fingerprint !== fingerprint) throw new Error("Release approval fingerprint mismatch"); return { ...record, status: "APPROVED", approved_at: now }; }
 function requireReleaseApproved(record, fingerprint) { if (record.status !== "APPROVED" || record.consumed_at || record.fingerprint !== fingerprint) throw new Error("Explicit unconsumed release approval is required"); return true; }
 function consumeReleaseApproval(record, fingerprint, now = new Date().toISOString()) { requireReleaseApproved(record, fingerprint); return { ...record, status: "CONSUMED", consumed_at: now }; }
+function beginReleaseApply(record, fingerprint, now = new Date().toISOString()) { requireReleaseApproved(record, fingerprint); if (record.release?.operation === "record") throw new Error("Record-only approval cannot execute Git operations"); return { ...record, status: "APPLYING", consumed_at: now, result: null }; }
+function finishReleaseApply(record, result, now = new Date().toISOString()) { if (record.status !== "APPLYING") throw new Error("Release is not applying"); return { ...record, status: "APPLIED", applied_at: now, result }; }
+function failReleaseApply(record, error, partialResults = [], now = new Date().toISOString()) { if (record.status !== "APPLYING") throw new Error("Release is not applying"); return { ...record, status: "FAILED", failed_at: now, result: { error: String(error || "Unknown managed Git failure"), partial_results: partialResults } }; }
 function addEvidence(ledger, item) {
   if (!item.project_id || !item.ticket_id || !item.title) throw new Error("Evidence requires project, ticket, and title");
   if (!new Set(["DRAFT", "VERIFIED"]).has(item.status)) throw new Error("Evidence status must be DRAFT or VERIFIED");
@@ -20,6 +49,30 @@ function addEvidence(ledger, item) {
   const visibility = item.visibility || "private";
   if (!new Set(["private", "public"]).has(visibility)) throw new Error("Evidence visibility must be private or public");
   return [...ledger, { ...item, visibility, id: hash(item).slice(0, 12), created_at: item.created_at || new Date().toISOString() }];
+}
+
+function upsertManagedCommitDraft(ledger, { project, ticket, commit, requestId, approvalId, now = new Date().toISOString() }) {
+  const id = hash({ project_id: project.id, ticket_id: ticket.ticket_id, commit }).slice(0, 12);
+  if (ledger.some((item) => item.id === id)) return ledger;
+  return [...ledger, {
+    id,
+    project_id: project.id,
+    ticket_id: ticket.ticket_id,
+    request_id: requestId,
+    approval_id: approvalId,
+    title: ticket.goal || ticket.ticket_id,
+    status: "DRAFT",
+    visibility: "private",
+    technologies: [...(project.stacks || [])],
+    problem: ticket.context_summary || ticket.goal || "Not recorded",
+    solution: (ticket.implementation_steps || []).join("; ") || "See managed commit",
+    result: ticket.verification?.summary || "Managed commit recorded; outcome review pending",
+    acceptance_criteria: [...(ticket.acceptance_criteria || [])],
+    changed_paths: [...(ticket.verification?.changed_paths || [])],
+    commit,
+    source: "managed-commit",
+    created_at: now
+  }];
 }
 
 function validateEvidenceReference(item, { projects, executions, runGit }) {
@@ -68,4 +121,4 @@ function publicVerifiedEvidence(ledger) {
 function exportEvidenceMarkdown(ledger) {
   return publicVerifiedEvidence(ledger).map((item) => `## ${item.title}\n- Project: ${item.project_id}\n- Ticket: ${item.ticket_id}\n- Technologies: ${(item.technologies || []).join(", ") || "not recorded"}\n- Result: ${item.result || "Verified"}\n- Evidence: ${item.commit || item.pr}`).join("\n\n");
 }
-module.exports = { addEvidence, approveRelease, consumeReleaseApproval, createReleaseApproval, exportEvidenceMarkdown, publicVerifiedEvidence, requireReleaseApproved, searchEvidence, validateEvidenceReference };
+module.exports = { addEvidence, approveRelease, beginReleaseApply, consumeReleaseApproval, createReleaseApproval, exportEvidenceMarkdown, failReleaseApply, finishReleaseApply, normalizeReleaseSpec, publicVerifiedEvidence, requireReleaseApproved, searchEvidence, upsertManagedCommitDraft, validateEvidenceReference };

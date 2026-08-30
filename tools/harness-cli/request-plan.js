@@ -4,6 +4,8 @@ const crypto = require("node:crypto");
 
 const SCHEMA_VERSION = "1.0";
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DEFAULT_RETRY_POLICY = Object.freeze({ max_attempts: 2, stop_on_same_error: true });
+const TEST_PLAN_SECTIONS = Object.freeze(["unit", "integration", "regression", "manual"]);
 
 function requireId(value, label) {
   const id = String(value || "").trim();
@@ -46,6 +48,40 @@ function validateTicketGraph(tickets) {
   for (const id of ids) visit(id);
 }
 
+function normalizeRetryPolicy(value) {
+  const policy = value === undefined ? DEFAULT_RETRY_POLICY : value;
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
+    throw new Error("Ticket retry_policy must be an object");
+  }
+  const maxAttempts = policy.max_attempts === undefined ? DEFAULT_RETRY_POLICY.max_attempts : Number(policy.max_attempts);
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 5) {
+    throw new Error("Ticket retry_policy.max_attempts must be an integer between 1 and 5");
+  }
+  const stopOnSameError = policy.stop_on_same_error === undefined
+    ? DEFAULT_RETRY_POLICY.stop_on_same_error
+    : policy.stop_on_same_error;
+  if (typeof stopOnSameError !== "boolean") {
+    throw new Error("Ticket retry_policy.stop_on_same_error must be boolean");
+  }
+  return { max_attempts: maxAttempts, stop_on_same_error: stopOnSameError };
+}
+
+function normalizeStringArray(value, label, fallback = []) {
+  if (value === undefined) return [...fallback];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  const normalized = value.map((item) => String(item).trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized : [...fallback];
+}
+
+function normalizeTestPlan(value) {
+  if (value === undefined) return Object.fromEntries(TEST_PLAN_SECTIONS.map((section) => [section, []]));
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Ticket test_plan must be an object");
+  return Object.fromEntries(TEST_PLAN_SECTIONS.map((section) => [
+    section,
+    normalizeStringArray(value[section], `Ticket test_plan.${section}`)
+  ]));
+}
+
 function createRequestPlan({ requestId, goal, projectIds = [], tickets = [], profiles, assumptions = [], exclusions = [], now = new Date().toISOString() }) {
   const id = requireId(requestId, "Request id");
   const normalizedGoal = String(goal || "").trim();
@@ -68,7 +104,12 @@ function createRequestPlan({ requestId, goal, projectIds = [], tickets = [], pro
       goal: ticketGoal,
       scope: Array.isArray(ticket.scope) ? ticket.scope.map(String) : [ticketGoal],
       exclusions: Array.isArray(ticket.exclusions) ? ticket.exclusions.map(String) : [],
+      context_summary: String(ticket.context_summary || "").trim(),
+      acceptance_criteria: normalizeStringArray(ticket.acceptance_criteria, "Ticket acceptance_criteria", [ticketGoal]),
+      implementation_steps: normalizeStringArray(ticket.implementation_steps, "Ticket implementation_steps", [ticketGoal]),
+      test_plan: normalizeTestPlan(ticket.test_plan),
       depends_on: Array.isArray(ticket.depends_on) ? ticket.depends_on.map((value) => requireId(value, "Dependency id")) : [],
+      retry_policy: normalizeRetryPolicy(ticket.retry_policy),
       verification: Array.isArray(ticket.verification) && ticket.verification.length > 0
         ? ticket.verification.map(String)
         : [...profile.verify_commands],
@@ -133,6 +174,8 @@ function requireRequestReady(plan, profiles) {
 module.exports = {
   approveRequestPlan,
   createRequestPlan,
+  normalizeTestPlan,
+  normalizeRetryPolicy,
   planFingerprint,
   requireRequestReady,
   validateTicketGraph,

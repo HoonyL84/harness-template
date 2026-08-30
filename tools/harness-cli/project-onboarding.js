@@ -2,7 +2,7 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
-const path = require("node:path");
+const { updateJsonLocked } = require("./control-plane-state");
 
 const SCHEMA_VERSION = "1.0";
 
@@ -75,10 +75,7 @@ function readOnboardingProfile(profilePath) {
 }
 
 function writeOnboardingProfile(profilePath, profile) {
-  fs.mkdirSync(path.dirname(profilePath), { recursive: true });
-  const tempPath = `${profilePath}.tmp-${process.pid}`;
-  fs.writeFileSync(tempPath, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tempPath, profilePath);
+  return updateJsonLocked(profilePath, null, () => profile);
 }
 
 function approveOnboardingProfile(existing, current, now = new Date().toISOString()) {

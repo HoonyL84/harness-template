@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { updateJsonLocked } = require("./control-plane-state");
 const { readOnboardingProfile } = require("./project-onboarding");
 const {
   approveRequestPlan,
@@ -10,13 +11,6 @@ const {
   validateRequestPlan
 } = require("./request-plan");
 const { readRegistry, validateProjectId } = require("./project-registry");
-
-function atomicWrite(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp-${process.pid}`;
-  fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tempPath, filePath);
-}
 
 function readPlan(filePath) {
   if (!fs.existsSync(filePath)) throw new Error(`Unknown request plan: ${path.basename(filePath, ".json")}`);
@@ -41,9 +35,10 @@ function createRequestCommand({ root, parseArgs, log }) {
     const [action, rawId] = positional;
     const id = validateProjectId(rawId);
 
-    if (action === "create") {
+    if (new Set(["create", "revise"]).has(action)) {
       const registry = readRegistry(registryPath);
       let input = {};
+      if (action === "revise" && !options["plan-file"]) throw new Error("request revise requires --plan-file <json>");
       if (options["plan-file"]) {
         input = JSON.parse(fs.readFileSync(path.resolve(options["plan-file"]), "utf8"));
       }
@@ -62,8 +57,13 @@ function createRequestCommand({ root, parseArgs, log }) {
         exclusions: input.exclusions || [],
         profiles: loadProfiles(projectIds)
       });
-      atomicWrite(requestPath(id), plan);
-      log(`[PLAN_READY] ${id}: ${plan.tickets.length} ticket(s), fingerprint ${plan.content_fingerprint.slice(0, 12)}`);
+      updateJsonLocked(requestPath(id), null, (existing) => {
+        if (action === "create" && existing) throw new Error(`Request plan already exists: ${id}`);
+        if (action === "revise" && !existing) throw new Error(`Unknown request plan: ${id}`);
+        if (action === "revise" && existing.status !== "DRAFT") throw new Error("Only a DRAFT request plan can be revised");
+        return plan;
+      });
+      log(`[PLAN_READY] ${id}: ${plan.tickets.length} ticket(s), fingerprint ${plan.content_fingerprint.slice(0, 12)}${action === "revise" ? " (revised)" : ""}`);
       return plan;
     }
 
@@ -74,8 +74,10 @@ function createRequestCommand({ root, parseArgs, log }) {
     }
 
     if (action === "approve") {
-      const plan = approveRequestPlan(readPlan(requestPath(id)));
-      atomicWrite(requestPath(id), plan);
+      const plan = updateJsonLocked(requestPath(id), null, (current) => {
+        if (!current) throw new Error(`Unknown request plan: ${id}`);
+        return approveRequestPlan(validateRequestPlan(current));
+      });
       log(`[APPROVED] Request plan ${id} (${plan.content_fingerprint.slice(0, 12)})`);
       return plan;
     }
@@ -88,7 +90,7 @@ function createRequestCommand({ root, parseArgs, log }) {
       return plan;
     }
 
-    throw new Error("Usage: request <create|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]");
+    throw new Error("Usage: request <create|revise|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]");
   };
 }
 

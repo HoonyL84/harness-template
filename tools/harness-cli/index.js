@@ -6,10 +6,14 @@ const http = require("http");
 const path = require("path");
 const os = require("os");
 const { spawn, spawnSync } = require("child_process");
+const { createProjectBootstrapCommand } = require("./project-bootstrap");
 const { createProjectCommand } = require("./project-command");
 const { createRequestCommand } = require("./request-command");
 const { createExecutionCommand } = require("./execution-command");
 const { createControlPlaneCommands } = require("./control-plane-command");
+const { createDeploymentCommand } = require("./deployment-ledger");
+const { createStateTransitionNotifier } = require("./transition-notifier");
+const { createAgentRunnerCommand } = require("./agent-runner");
 const { repositoryContentFingerprint: calculateRepositoryContentFingerprint } = require("./content-fingerprint");
 const { runAutonomySoak } = require("./autonomy-utils");
 const { createCleanupManifest, findGeneratedPaths, isCleanupManifestValid } = require("./cleanup-utils");
@@ -430,6 +434,13 @@ const commandProject = createProjectCommand({
   log
 });
 
+const commandBootstrap = createProjectBootstrapCommand({
+  root: ROOT,
+  parseArgs,
+  runGit: runExternalGit,
+  log
+});
+
 const commandRequest = createRequestCommand({ root: ROOT, parseArgs, log });
 const commandExecution = createExecutionCommand({
   root: ROOT,
@@ -446,6 +457,24 @@ const controlPlane = createControlPlaneCommands({
   notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
   reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
   runGit: runExternalGit,
+  log
+});
+const commandRunner = createAgentRunnerCommand({
+  root: ROOT,
+  parseArgs,
+  invokeAgent: (prompt) => commandRunAgent(["--type", "code", "--role", "implementer", prompt]),
+  notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
+  reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
+  runCommand: run,
+  runGit: runExternalGit,
+  tokenizeCommand,
+  log
+});
+const commandDeployment = createDeploymentCommand({ root: ROOT, parseArgs, runGit: runExternalGit, log });
+const notifyStateTransition = createStateTransitionNotifier({
+  root: ROOT,
+  parseArgs,
+  notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
   log
 });
 
@@ -681,8 +710,8 @@ async function commandCheck() {
     pass("Git repository detected");
     const currentBranch = getGitBranch();
     log(`[INFO] Current branch: ${currentBranch}`);
-    if (autonomyLevel === "5" && process.env.HARNESS_AUTO_COMMIT === "true" && ["main", "master"].includes(currentBranch)) {
-      bad("L5 auto-commit cannot run on main/master");
+    if (process.env.HARNESS_AUTO_COMMIT === "true" || process.env.HARNESS_AUTO_PUSH === "true") {
+      warn("HARNESS_AUTO_COMMIT/HARNESS_AUTO_PUSH are ignored; verified L5 work always stops at the release approval gate");
     }
     if (hasGitRemoteOrigin()) pass("Git remote origin configured");
     else warn("Git remote origin is not configured");
@@ -897,36 +926,6 @@ function appendTaskCompletion(archiveRel, verify) {
 - Rework Count: ${verify.rework_count || 0}
 - Last Failure: ${verify.last_fail_reason || "none"}
 `);
-}
-
-function archiveVerifiedTicket(name) {
-  const verifyRel = `observability/metrics/${name}.verify.json`;
-  const startRel = `observability/metrics/${name}.start.json`;
-  const doneRel = `observability/metrics/${name}.done.json`;
-  const activeRel = `.harness/tasks/active/${name}.md`;
-  const archiveRel = `.harness/tasks/archive/${name}.md`;
-  const verify = exists(verifyRel) ? JSON.parse(readText(verifyRel)) : {};
-  const fullVerify = getFullVerifyRecord(verify);
-  const start = exists(startRel) ? JSON.parse(readText(startRel)) : {};
-  if (fullVerify.result !== "pass") fail(`Cannot archive unverified L5 ticket: ${name}. Re-run full verification.`);
-  requireCurrentVerifiedContent(name, fullVerify);
-  if (exists(activeRel)) {
-    moveFile(activeRel, archiveRel);
-    appendTaskCompletion(archiveRel, { ...verify, ...fullVerify });
-  }
-  writeText(doneRel, JSON.stringify({
-    task: name,
-    type: start.type || "unknown",
-    project: start.project || "unknown",
-    started_at: start.started_at || "unknown",
-    completed_at: currentTimestamp(),
-    rework_count: verify.rework_count || 0,
-    last_fail_reason: verify.last_fail_reason || "none",
-    verify_result: fullVerify.result,
-    completed_by: "l5-autonomy",
-  }, null, 2));
-  removeIfExists(startRel);
-  removeIfExists(verifyRel);
 }
 
 function findFilesInDir(dir, filter, list = []) {
@@ -1670,16 +1669,9 @@ async function commandAutonomy(args) {
   if (initialDirty.length > 0) {
     fail(`L5 API mode requires a clean worktree. Commit or stash first: ${initialDirty.slice(0, 10).join(", ")}`);
   }
-  if (process.env.HARNESS_AUTO_COMMIT === "true") {
-    const branch = getGitBranch();
-    if (branch === "main" || branch === "master") {
-      fail("L5 auto-commit is blocked on main/master. Switch to a task branch first.");
-    }
-  }
-
   const startedAt = Date.now();
   let apiCalls = 0;
-  let completed = 0;
+  const completed = 0;
   let ticket = ensureCurrentTicket();
 
   if (!ticket) {
@@ -1694,10 +1686,10 @@ async function commandAutonomy(args) {
     ticket = ensureCurrentTicket();
   }
 
-  while (ticket && completed < maxIterations && apiCalls < maxApiCalls) {
+  if (ticket && completed < maxIterations && apiCalls < maxApiCalls) {
     if ((Date.now() - startedAt) / 60_000 >= maxMinutes) {
       writeAutonomyState({ status: "budget_exhausted", current_ticket: ticket, reason: "runtime" });
-      break;
+      return;
     }
 
     process.env.TASK_ID = ticket;
@@ -1782,52 +1774,15 @@ async function commandAutonomy(args) {
       fail(`L5 verification failed and the patch was rolled back: ${ticket}`, verify.status);
     }
 
-    if (process.env.HARNESS_AUTO_COMMIT !== "true") {
-      writeAutonomyState({
-        status: "awaiting_review",
-        current_ticket: ticket,
-        verified_patch: patchRel,
-        changed_files: patchInfo.paths,
-        next_action: `${gitPublishAction()} the verified diff, complete the task, then ${gitPublishAction()} completion metadata`,
-      });
-      log(`[L5 Experimental] ${ticket} passed verification. Auto-commit is disabled, so execution paused for review.`);
-      return;
-    }
-
-    const branch = getGitBranch();
-    const currentPaths = dirtyPaths();
-    if (currentPaths === null || currentPaths.length === 0) {
-      fail("L5 verification passed but no working-tree changes were found to commit.");
-    }
-    const implementationPaths = currentPaths.filter((filePath) => !filePath.replace(/\\/g, "/").startsWith(".harness/tasks/"));
-    const verifiedHighRisk = classifyL5Paths(implementationPaths);
-    if (verifiedHighRisk.length > 0 && !options["approve-risk"]) {
-      writeAutonomyState({
-        status: "approval_required",
-        current_ticket: ticket,
-        pending_patch: patchRel,
-        high_risk_files: verifiedHighRisk,
-        next_action: "review verified changes and rerun autonomy --approve-risk",
-      });
-      return;
-    }
-    archiveVerifiedTicket(ticket);
-    const verifiedPaths = dirtyPaths();
-    if (verifiedPaths === null || verifiedPaths.length === 0) {
-      fail("L5 could not find implementation and ticket metadata changes to commit.");
-    }
-    const addResult = run("git", ["add", "--", ...verifiedPaths], { capture: true });
-    if (addResult.status !== 0) fail(`L5 could not stage files: ${addResult.stderr || addResult.stdout}`);
-    const commitResult = run("git", ["commit", "-m", `feat(l5): ${ticket} 자율 작업 완료`], { capture: true });
-    if (commitResult.status !== 0) fail(`L5 commit failed: ${commitResult.stderr || commitResult.stdout}`);
-    if (process.env.HARNESS_AUTO_PUSH === "true") {
-      const pushResult = run("git", ["push", "-u", "origin", branch], { capture: true });
-      if (pushResult.status !== 0) fail(`L5 push failed: ${pushResult.stderr || pushResult.stdout}`);
-    }
-
-    completed += 1;
-    writeAutonomyState({ status: "ticket_completed", current_ticket: ticket, completed_iterations: completed, api_calls: apiCalls });
-    ticket = ensureCurrentTicket();
+    writeAutonomyState({
+      status: "awaiting_release_approval",
+      current_ticket: ticket,
+      verified_patch: patchRel,
+      changed_files: patchInfo.paths,
+      next_action: "Review the verified diff and explicitly approve any commit or push operation.",
+    });
+    log(`[L5 Experimental] ${ticket} passed verification and paused at the mandatory release approval gate.`);
+    return;
   }
 
   writeAutonomyState({
@@ -2514,15 +2469,18 @@ function usage() {
 
 Usage:
   node tools/harness-cli/index.js check
+  node tools/harness-cli/index.js bootstrap <request|approve|apply|status> <id> [--path <project-root>] [--summary <text>] [--message <commit-message>]
   node tools/harness-cli/index.js project <add|list|show|check|context|onboard|profile|remove> [id] [--path <git-root>] [--bundle] [--approve] [--json]
-  node tools/harness-cli/index.js request <create|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]
-  node tools/harness-cli/index.js execution <prepare|review-ready|status> <request-id>
-  node tools/harness-cli/index.js release request <request-id> --summary "..."
-  node tools/harness-cli/index.js release <approve|consume> <request-id> --fingerprint <sha256>
+  node tools/harness-cli/index.js request <create|revise|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]
+  node tools/harness-cli/index.js execution <prepare|advance|review-ready|status> <request-id>
+  node tools/harness-cli/index.js runner <run|reconcile|status> <request-id> [--ticket <ticket-id>] [--max-attempts N] [--max-tickets N]
+  node tools/harness-cli/index.js release request <request-id> [--ticket <id>] [--approval <id>] --summary "..." [--operation record|commit|push|merge]
+  node tools/harness-cli/index.js release <approve|apply|consume> <request-id> --fingerprint <sha256>
   node tools/harness-cli/index.js release status <request-id>
   node tools/harness-cli/index.js evidence add --file <json>
   node tools/harness-cli/index.js evidence search [--query <text>] [--project <id>] [--technology <name>] [--from <date>] [--to <date>] [--include-drafts]
   node tools/harness-cli/index.js evidence export [--format json]
+  node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
   node tools/harness-cli/index.js dashboard
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name>
@@ -2618,11 +2576,14 @@ async function main(argv = process.argv.slice(2)) {
     check: commandCheck,
     "check-environment": commandCheck,
     "create-ticket": commandCreateTicket,
+    bootstrap: commandBootstrap,
     project: commandProject,
     request: commandRequest,
     execution: commandExecution,
+    runner: commandRunner,
     release: controlPlane.release,
     evidence: controlPlane.evidence,
+    deployment: commandDeployment,
     dashboard: controlPlane.dashboard,
     "start-ticket": commandStartTicket,
     "complete-task": commandCompleteTask,
@@ -2644,7 +2605,7 @@ async function main(argv = process.argv.slice(2)) {
       log(pkg.version || "unknown");
     }
   };
-  const handled = await dispatchCommand(command, args, handlers);
+  const handled = await dispatchCommand(command, args, handlers, notifyStateTransition);
   if (!handled) {
     usage();
     fail(`Unknown command: ${command}`);

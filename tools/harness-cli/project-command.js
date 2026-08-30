@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("node:path");
+const { updateJsonLocked } = require("./control-plane-state");
 const { buildProjectContextBundle, contextWarnings, discoverProjectContext } = require("./project-context");
 const {
   approveOnboardingProfile,
@@ -9,12 +10,12 @@ const {
   writeOnboardingProfile
 } = require("./project-onboarding");
 const {
+  emptyRegistry,
   inspectGitProject,
   readRegistry,
   removeProject,
   upsertProject,
-  validateProjectId,
-  writeRegistry
+  validateProjectId
 } = require("./project-registry");
 
 function createProjectCommand({ root, parseArgs, runGit, log }) {
@@ -32,8 +33,12 @@ function createProjectCommand({ root, parseArgs, runGit, log }) {
     if (action === "add") {
       const id = validateProjectId(rawId);
       if (!options.path || options.path === true) throw new Error("Usage: project add <id> --path <git-root>");
-      const project = upsertProject(registry, id, inspectGitProject(options.path, runGit));
-      writeRegistry(registryPath, registry);
+      const diagnosis = inspectGitProject(options.path, runGit);
+      let project;
+      updateJsonLocked(registryPath, emptyRegistry(), (current) => {
+        project = upsertProject(current, id, diagnosis);
+        return current;
+      });
       print(options.json ? project : `[REGISTERED] ${id} -> ${project.path}\n  stack: ${project.stacks.join(", ") || "unknown"}\n  branch: ${project.branch}\n  dirty: ${project.dirty ? `yes (${project.changed_paths} paths)` : "no"}`, options.json);
       return project;
     }
@@ -112,8 +117,7 @@ function createProjectCommand({ root, parseArgs, runGit, log }) {
       const current = createOnboardingProfile(project, diagnosis, files, contextWarnings(files));
       const targetPath = profilePath(id);
       if (options.approve) {
-        const approved = approveOnboardingProfile(readOnboardingProfile(targetPath), current);
-        writeOnboardingProfile(targetPath, approved);
+        const approved = updateJsonLocked(targetPath, null, (existing) => approveOnboardingProfile(existing, current));
         print(options.json ? approved : `[APPROVED] ${id} onboarding profile ${approved.content_fingerprint.slice(0, 12)}`, options.json);
         return approved;
       }
@@ -132,8 +136,11 @@ function createProjectCommand({ root, parseArgs, runGit, log }) {
     }
 
     if (action === "remove") {
-      const removed = removeProject(registry, rawId);
-      writeRegistry(registryPath, registry);
+      let removed;
+      updateJsonLocked(registryPath, emptyRegistry(), (current) => {
+        removed = removeProject(current, rawId);
+        return current;
+      });
       log(`[REMOVED] ${removed.id} (project files were not changed)`);
       return removed;
     }

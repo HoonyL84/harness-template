@@ -13,12 +13,23 @@ test("CLI entrypoint declares Git boundaries for mutating commands", () => {
   assert.equal(getCommandMetadata("verify").requiresGit, true);
   assert.equal(getCommandMetadata("complete-task").requiresGit, true);
   assert.equal(getCommandMetadata("check").requiresGit, false);
+  assert.equal(getCommandMetadata("bootstrap").requiresGit, false);
   assert.equal(getCommandMetadata("project").requiresGit, false);
   assert.equal(getCommandMetadata("request").requiresGit, false);
   assert.equal(getCommandMetadata("execution").requiresGit, false);
+  assert.equal(getCommandMetadata("runner").requiresGit, false);
   assert.equal(getCommandMetadata("release").requiresGit, false);
   assert.equal(getCommandMetadata("evidence").requiresGit, false);
+  assert.equal(getCommandMetadata("deployment").requiresGit, false);
   assert.equal(getCommandMetadata("unknown").requiresGit, false);
+});
+
+test("CLI dispatcher exposes command results to an optional transition hook", async () => {
+  const events = [];
+  const handlers = { request: () => ({ status: "DRAFT" }) };
+  assert.equal(await dispatchCommand("request", ["create"], handlers, async (...args) => events.push(args)), true);
+  assert.equal(events[0][0], "request");
+  assert.equal(events[0][2].status, "DRAFT");
 });
 
 test("help and version bypass broken project config", () => {

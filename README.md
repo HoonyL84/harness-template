@@ -25,6 +25,11 @@
 ```bash
 npm run harness -- check
 npm run harness -- create-ticket my-task feat --goal "작업 목표"
+# Git HEAD가 없는 신규 폴더: 계획 파일 스냅샷을 승인한 뒤 최초 커밋과 등록을 한 번에 수행
+npm run harness -- bootstrap request new-app --path "/absolute/path/to/new-app" --summary "승인된 초기 계획" --message "docs: 초기 계획 수립"
+npm run harness -- bootstrap approve new-app --fingerprint <fingerprint>
+npm run harness -- bootstrap apply new-app --fingerprint <fingerprint>
+# 기존 Git 저장소는 request 시 최초 커밋을 건너뛰고 바로 등록·onboarding 초안을 생성
 npm run harness -- project add ad-server --path "C:\\path\\to\\ad-server"
 npm run harness -- project list
 npm run harness -- project context ad-server --bundle
@@ -32,16 +37,25 @@ npm run harness -- project onboard ad-server
 # 프로필 검토 후
 npm run harness -- project onboard ad-server --approve
 npm run harness -- request create ad-cache-work --project ad-server --goal "광고 캐시 개선"
+# AI가 만든 plan-file의 티켓별 retry_policy를 검토·수정한 뒤 DRAFT를 교체할 수 있음
+npm run harness -- request revise ad-cache-work --plan-file revised-plan.json
 npm run harness -- request approve ad-cache-work
 npm run harness -- request ready ad-cache-work
 npm run harness -- execution prepare ad-cache-work
-# 격리 worktree에서 구현을 마친 뒤, 계획에 결속된 검증 명령을 실제 실행하고 콘텐츠 지문을 기록
-npm run harness -- execution review-ready ad-cache-work --ticket ad-cache-work-ad-server
+# API 모드에서는 승인된 티켓을 격리 worktree에서 구현·검증
+npm run harness -- runner run ad-cache-work
+# 대화형 Codex 같은 host는 승인 계획을 직접 구현한 뒤 아래 명령으로 실제 검증과 콘텐츠 지문 기록
+# npm run harness -- execution review-ready ad-cache-work --ticket ad-cache-work-ad-server
 npm run harness -- dashboard
-npm run harness -- release request ad-cache-work --summary "diff와 테스트 검토 완료"
+npm run harness -- release request ad-cache-work --approval ad-cache-commit --summary "diff와 테스트 검토 완료" --operation commit --message "feat: 광고 캐시 개선"
 # 출력된 fingerprint를 사용자가 확인하고 명시적으로 승인한 뒤에만 실행
-npm run harness -- release approve ad-cache-work --fingerprint <fingerprint>
-npm run harness -- release consume ad-cache-work --fingerprint <fingerprint>
+npm run harness -- release approve ad-cache-commit --fingerprint <fingerprint>
+npm run harness -- release apply ad-cache-commit --fingerprint <fingerprint>
+# 의존 티켓은 선행 티켓을 티켓 단위로 commit한 뒤 해당 SHA에서 다음 worktree를 준비
+npm run harness -- execution advance ad-cache-work
+# 실제 배포 뒤 branch/commit/ticket/환경 이력을 append-only 원장에 기록
+npm run harness -- deployment record --file deployment.json
+npm run harness -- deployment list --project ad-server
 npm run harness -- start-ticket my-task
 npm run harness -- verify
 npm run harness -- complete-task my-task
@@ -49,7 +63,17 @@ git add -A
 git commit -m "chore(harness): my-task 완료 기록"
 ```
 
-`release consume`은 하네스가 관리하는 commit/push/merge 흐름에서 사용하는 일회성 승인 토큰입니다. 승인 뒤 worktree 내용이 바뀌면 거부되며 재사용할 수 없습니다. 사용자가 하네스 밖에서 직접 실행한 raw Git 명령까지 운영체제 수준에서 차단하는 기능은 아닙니다.
+`release apply`는 승인 요청에 고정된 commit/push/merge만 실행하는 일회성 게이트입니다. 후속 push나 merge는 서로 다른 `--approval` ID로 새 승인을 받아야 하며, 승인 뒤 worktree 내용이 바뀌면 거부됩니다. `release consume`은 Git을 실행하지 않는 감사 기록용 호환 명령입니다. 사용자가 하네스 밖에서 직접 실행한 raw Git 명령까지 운영체제 수준에서 차단하는 기능은 아닙니다.
+
+`bootstrap`은 아직 Git HEAD가 없는 신규 폴더에서만 승인된 계획 스냅샷을 최초 커밋으로 만듭니다. ignored 파일과 비밀·자격증명·symlink·대용량 파일은 제외 또는 차단되며, 승인 이후 파일이 바뀌면 적용을 거부합니다. 이미 HEAD가 있는 프로젝트는 최초 커밋 없이 기존 프로젝트 등록 흐름으로 자동 전환됩니다.
+
+같은 프로젝트의 선형 의존 티켓은 `release request --ticket <ticket-id>`로 선행 티켓만 승인·커밋한 뒤 `execution advance`를 실행하면 그 commit SHA에서 후속 worktree가 만들어집니다. 같은 프로젝트의 여러 선행 branch를 합치는 fan-in은 암묵적으로 merge하지 않으며 별도의 명시적 통합 티켓이 필요합니다.
+
+각 티켓은 기본적으로 `retry_policy: { "max_attempts": 2, "stop_on_same_error": true }`를 가집니다. AI가 작업 성격에 따라 1~5회 범위의 값을 plan-file에 제안할 수 있고, 사용자는 계획 승인 전에 `request revise`로 수정할 수 있습니다. Runner의 `--max-attempts`는 승인된 티켓 상한을 낮추는 실행 cap이며 상향하지 못합니다. 누적 시도 횟수가 상한에 도달하거나 같은 오류가 반복되면 토큰을 더 사용하지 않고 `BLOCKED`로 중단합니다.
+
+상세 plan-file은 티켓별 `context_summary`, `acceptance_criteria`, `implementation_steps`, `test_plan`과 `retry_policy`를 함께 담습니다. 이 내용은 계획 fingerprint에 결속되어 승인 뒤 임의 변경할 수 없습니다. Runner는 한 실행 pass에서 프로젝트 컨텍스트를 한 번만 조립하고, 재시도에는 직전 실패 증거만 추가하며 추정 입출력 토큰을 상태에 기록합니다. 이는 실제 공급자 청구량이 아니라 비교용 추정치입니다.
+
+관리형 commit이 성공하면 경력 근거는 자동으로 `DRAFT/private` 초안만 생성됩니다. 검토 없이 공개 또는 `VERIFIED`로 승격되지 않습니다. `PLAN_READY`, `BLOCKED`, `REVIEW_READY`, 릴리스 승인 대기·적용, 배포 기록은 Telegram/Slack 설정이 있을 때 중복 방지 후 자동 알림됩니다.
 
 기본적으로 active 티켓은 하나만 허용합니다. 병렬 작업은 `start-ticket <name> --allow-parallel`로 명시하고,
 검증할 때 `npm run harness -- verify --task <name>`처럼 대상 티켓을 지정하세요.
@@ -191,7 +215,7 @@ npm run harness -- autonomy --status
 - 프롬프트: `prompts/templates/`에서 수정 가능
 - API 일시 오류: `Retry-After`와 지수 백오프로 제한 재시도
 - 복구: 하네스 패치만 역적용하며 자동 `reset --hard`/`clean -fd` 금지
-- 자동 커밋/푸시: 별도 opt-in이며 main/master 자동 커밋은 항상 차단
+- 커밋/푸시: 검증 뒤 항상 승인 게이트에서 중단하며 자동 실행하지 않음
 
 상세 설정은 [L5 자율 실행 정책](docs/design-docs/l5-autonomy-policy.md)을 참고하세요.
 

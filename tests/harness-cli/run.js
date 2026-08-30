@@ -1,12 +1,17 @@
 "use strict";
 
 require("./autonomy-utils.test");
+require("./agent-runner.test");
 require("./cleanup-utils.test");
 require("./cli-entrypoint.test");
 require("./cli-process.test");
 require("./config.test");
 require("./content-fingerprint.test");
 require("./control-plane-e2e.test");
+require("./control-plane-state.test");
+require("./project-bootstrap.test");
+require("./dependency-wave.test");
+require("./deployment-ledger.test");
 require("./governance-ledger.test");
 require("./notification-utils.test");
 require("./project-command.test");
@@ -14,8 +19,10 @@ require("./project-context.test");
 require("./project-execution.test");
 require("./project-onboarding.test");
 require("./project-registry.test");
+require("./request-command.test");
 require("./request-plan.test");
 require("./task-blocker.test");
+require("./transition-notifier.test");
 require("./orchestration-command.test");
 require("./orchestration-git-e2e.test");
 require("./orchestration-state.test");
