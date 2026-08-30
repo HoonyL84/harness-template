@@ -76,7 +76,8 @@ GitHub에서 **"Use this template"** → 새 레포 생성 → 클론
 npm run harness -- check
 # .env.local이 없으면 자동 생성됩니다.
 # .env.local을 열고 아래 항목 입력:
-# - SLACK_WEBHOOK_URL (작업 알림)
+# - SLACK_WEBHOOK_URL (Slack 작업 알림, 선택)
+# - TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID (Telegram 작업 알림, 선택)
 # - OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY (AI 사용 시)
 ```
 
@@ -122,6 +123,46 @@ npm run harness -- check
 ### Step 5. 첫 티켓 생성 및 시작
 ```bash
 npm run harness -- create-ticket user-auth feat --goal "JWT 기반 사용자 인증을 구현한다"
+
+# 중앙 하네스에 독립 Git 프로젝트를 최초 1회 등록
+npm run harness -- project add ad-server --path "/absolute/path/to/ad-server"
+npm run harness -- project list
+npm run harness -- project check ad-server
+npm run harness -- project context ad-server
+npm run harness -- project context ad-server --bundle
+npm run harness -- project onboard ad-server
+npm run harness -- project profile ad-server
+npm run harness -- project onboard ad-server --approve
+
+# 승인된 프로젝트 프로필에 결속된 요청 계획
+npm run harness -- request create ad-cache-work --project ad-server --goal "광고 캐시 개선"
+npm run harness -- request show ad-cache-work
+npm run harness -- request approve ad-cache-work
+npm run harness -- request ready ad-cache-work
+
+# 프로젝트별 branch/worktree 준비
+npm run harness -- execution prepare ad-cache-work
+npm run harness -- execution status ad-cache-work
+
+# 각 격리 worktree에서 구현과 프로필 검증 명령을 실행한 뒤 결과를 콘텐츠 지문에 결속
+npm run harness -- execution review-ready ad-cache-work --ticket ad-cache-work-ad-server --verification "npm test 및 npm run build 통과"
+
+# 전체 상태와 BLOCKED/REVIEW_READY 알림 확인
+npm run harness -- dashboard
+
+# 모든 티켓이 REVIEW_READY인 경우에만 승인 요청 가능
+npm run harness -- release request ad-cache-work --summary "diff, 테스트, 위험 검토 완료"
+npm run harness -- release approve ad-cache-work --fingerprint <fingerprint>
+
+# commit/push/merge 직전에 일회성 승인 소비. 승인 이후 내용 변경과 재사용은 차단
+npm run harness -- release consume ad-cache-work --fingerprint <fingerprint>
+
+# 경력 증빙은 JSON 파일로 추가하고 VERIFIED + public 항목만 외부 출력
+npm run harness -- evidence add --file evidence.json
+npm run harness -- evidence search --project ad-server --technology Redis --query "캐시"
+npm run harness -- evidence export
+npm run harness -- evidence export --format json
+
 npm run harness -- start-ticket user-auth
 # 여기서 구현 작업
 
@@ -147,6 +188,9 @@ git commit -m "chore(harness): user-auth 완료 기록"
 `complete-task`는 active 티켓을 archive로 이동하고 완료 메타데이터를 기록하므로,
 명령 실행 후 생긴 변경은 별도 마감 커밋으로 저장합니다.
 `complete-task`와 L5 자율 실행 완료는 반드시 `verify --full`이 성공한 지문 상태에서만 허용됩니다.
+중앙 멀티 프로젝트 흐름의 `execution review-ready`는 테스트를 대신 실행하지 않습니다. 에이전트가 승인된 프로젝트 프로필의 검증 명령을 실제로 실행한 후 그 결과 요약과 현재 worktree 콘텐츠 지문을 저장하는 게이트입니다. 이후 파일이 변경되면 release 요청 또는 승인 소비가 차단됩니다.
+`release consume`은 하네스가 관리하는 Git 작업의 일회성 감사 게이트이며, 사용자가 하네스 밖에서 직접 실행한 raw Git 명령을 운영체제 수준에서 차단하지는 않습니다.
+경력 증빙의 기본 공개 범위는 `private`입니다. 외부 Markdown/JSON 출력에 포함하려면 `status`를 `VERIFIED`, `visibility`를 `public`으로 두고 실제 commit 또는 PR 근거를 연결해야 합니다. VERIFIED 등록 시 프로젝트 레지스트리와 실행 티켓 이력을 대조하고, commit SHA는 등록 저장소의 실제 commit 객체인지 확인합니다.
 Quick과 Full 결과는 각각 `last_quick`, `last_full`로 기록되며 Quick 실행은 유효한 Full 기록을 덮어쓰지 않습니다.
 Cleanup은 검증 시작 전에 없었다가 검증 중 새로 생성된 untracked 일반 파일만 후보로 기록합니다.
 `verify.quick`이 비어 있으면 Node, Gradle, Maven, Python, Go, Rust, .NET 프로젝트의 테스트를 변경 파일 확장자에 맞춰 자동 선택합니다.
@@ -245,17 +289,19 @@ AI_PROVIDER=anthropic bash scripts/run-agent.sh --type architect "설계해줘"
 
 ### L4.5 제한적 자동 수정
 
-API 모드에서 명시적으로 활성화하면 검증 실패 시 저위험 소스/테스트 패치를 한 번 생성해 적용하고 전체 검증을 다시 실행합니다.
+API 모드에서 명시적으로 활성화하면 검증 실패 시 저위험 소스/테스트 패치를 생성해 적용하고 전체 검증을 다시 실행합니다.
 
 ```bash
 npm run harness -- verify --auto-fix
 ```
 
 - 기본 비활성화: `HARNESS_AUTO_FIX=false`
+- 최대 검증 횟수(1~5): `HARNESS_VERIFY_MAX_ATTEMPTS=2` 또는 `.harness/config.json`의 `verify.max_attempts`
 - 기존 소스/테스트 파일만 수정
 - 최대 5개 파일, 100KB
 - 설정, 의존성, CI, 스크립트, 인프라, migration, 비밀값 차단
 - 재검증 실패 시 자동 원복
+- 설정된 재시도가 모두 소진되면 active 티켓을 `blocked/`로 이동하고 실패 근거를 기록
 - 커밋, 푸시, 병합은 사람의 검토 후 수행
 
 상세 정책: [`docs/design-docs/auto-fix-policy.md`](design-docs/auto-fix-policy.md)

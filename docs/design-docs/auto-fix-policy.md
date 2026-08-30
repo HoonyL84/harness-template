@@ -1,7 +1,7 @@
 # L4.5 Auto-fix Policy
 
 이 문서는 검증 실패를 AI가 제한적으로 복구하는 L4.5 실행 경계를 정의한다.
-목표는 무인 자율 개발이 아니라, 반복 가능한 저위험 오류를 한 번 안전하게 수정하고 인간 검토로 넘기는 것이다.
+목표는 무인 자율 개발이 아니라, 반복 가능한 저위험 오류를 제한된 횟수 안에서 안전하게 수정하고 인간 검토로 넘기는 것이다.
 
 ## 활성화
 
@@ -10,6 +10,7 @@
 - `HARNESS_AGENT_MODE=api`
 - 사용할 provider의 API 키 설정
 - `HARNESS_AUTO_FIX=true` 또는 `verify --auto-fix`
+- `HARNESS_VERIFY_MAX_ATTEMPTS` 또는 `verify.max_attempts`로 최대 검증 횟수 설정(1~5, 기본값 2)
 - 오프라인 모드가 아님
 
 ```bash
@@ -24,7 +25,7 @@ npm.cmd run harness -- verify --auto-fix
 
 ## 허용 범위
 
-- 검증 실패당 AI 패치 생성 1회
+- 설정된 검증 횟수 안에서만 AI 패치 생성
 - 패치 최대 5개 파일, UTF-8 기준 100KB
 - 기존 소스 또는 테스트 파일만 수정
 - `src`, `app`, `lib`, `test`, `tests`, `__tests__` 경로를 포함한 파일
@@ -47,9 +48,10 @@ npm.cmd run harness -- verify --auto-fix
 3. unified diff 형식의 패치 하나를 받는다.
 4. 경로, 파일 종류, 크기, 변경 수를 정책으로 검사한다.
 5. `git apply --check` 후 패치를 적용한다.
-6. 전체 검증을 한 번 다시 실행한다.
+6. 전체 검증을 다시 실행한다.
 7. 성공하면 변경을 유지하고 사람이 diff를 검토한다.
-8. 실패하면 `git apply --check -R` 후 패치를 원복하고 실패를 기록한다.
+8. 실패하면 `git apply --check -R` 후 패치를 원복하고 남은 횟수 안에서만 재시도한다.
+9. 재시도를 모두 소진하면 active 티켓을 `blocked/`로 이동하고 실패 근거를 기록한다.
 
 원복까지 실패하면 `CRITICAL` 로그를 남기고 즉시 종료한다. 이 경우 작업 트리를 직접 확인해야 한다.
 

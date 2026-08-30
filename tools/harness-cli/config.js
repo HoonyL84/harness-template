@@ -72,6 +72,12 @@ function validateConfigSchema(config, fail) {
   if (config.verify?.parallel_scripts !== undefined) {
     requireStringArray(config.verify.parallel_scripts, "verify.parallel_scripts", fail);
   }
+  if (config.verify?.max_attempts !== undefined) {
+    const maxAttempts = requirePositiveNumber(config.verify.max_attempts, "verify.max_attempts", fail);
+    if (!Number.isInteger(maxAttempts) || maxAttempts > 5) {
+      fail("verify.max_attempts must be an integer between 1 and 5.");
+    }
+  }
 
   const numericFields = [
     ["limits.max_iterations", config.limits?.max_iterations],
@@ -147,6 +153,13 @@ function createConfigLoader({ root, argv = process.argv, env = process.env, fail
 
     const numberSetting = (envName, configValue, fallback, options) =>
       requirePositiveNumber(env[envName] || configValue || fallback, envName, fail, options);
+    const positiveIntegerSetting = (envName, configValue, fallback, max) => {
+      const value = numberSetting(envName, configValue, fallback);
+      if (!Number.isInteger(value) || value > max) {
+        fail(`${envName} must be an integer between 1 and ${max}.`);
+      }
+      return value;
+    };
     const normalize = (value) => value.replace(/\\/g, "/").toLowerCase().trim();
     const union = (immutable, configured) => new Set([...immutable, ...configured.map(normalize)]);
     const booleanSetting = (envName, configValue, fallback) => {
@@ -177,7 +190,13 @@ function createConfigLoader({ root, argv = process.argv, env = process.env, fail
           fileConfig.verify?.quick_cache,
           true
         ),
-        parallelScripts: new Set(parallelScripts)
+        parallelScripts: new Set(parallelScripts),
+        maxAttempts: positiveIntegerSetting(
+          "HARNESS_VERIFY_MAX_ATTEMPTS",
+          fileConfig.verify?.max_attempts,
+          "2",
+          5
+        )
       },
       limits: {
         maxIterations: numberSetting("HARNESS_MAX_ITERATIONS", fileConfig.limits?.max_iterations, "3"),

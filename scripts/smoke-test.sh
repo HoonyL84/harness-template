@@ -64,10 +64,6 @@ PRE_EXISTING_ACTIVE_COUNT="$(
   find ".harness/tasks/active" -maxdepth 1 -type f -name '*.md' \
     ! -name '.gitkeep' ! -name "$TICKET_NAME.md" | wc -l | tr -d ' '
 )"
-if [ "$PRE_EXISTING_ACTIVE_COUNT" -gt 1 ]; then
-  echo "Error: Smoke test requires at most one pre-existing active ticket."
-  exit 1
-fi
 if [ "$PRE_EXISTING_ACTIVE_COUNT" -eq 1 ]; then
   check_l5_checkpoint
 fi
@@ -86,7 +82,7 @@ if [ ! -f ".harness/tasks/backlog/$TICKET_NAME.md" ]; then
 fi
 
 echo "[Smoke Test] 3. Starting ticket..."
-if [ "$PRE_EXISTING_ACTIVE_COUNT" -eq 1 ]; then
+if [ "$PRE_EXISTING_ACTIVE_COUNT" -gt 0 ]; then
   if bash scripts/start-ticket.sh "$TICKET_NAME" >/dev/null 2>&1; then
     echo "Error: Parallel ticket started without explicit opt-in."
     exit 1

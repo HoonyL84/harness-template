@@ -25,12 +25,31 @@
 ```bash
 npm run harness -- check
 npm run harness -- create-ticket my-task feat --goal "작업 목표"
+npm run harness -- project add ad-server --path "C:\\path\\to\\ad-server"
+npm run harness -- project list
+npm run harness -- project context ad-server --bundle
+npm run harness -- project onboard ad-server
+# 프로필 검토 후
+npm run harness -- project onboard ad-server --approve
+npm run harness -- request create ad-cache-work --project ad-server --goal "광고 캐시 개선"
+npm run harness -- request approve ad-cache-work
+npm run harness -- request ready ad-cache-work
+npm run harness -- execution prepare ad-cache-work
+# 격리 worktree에서 구현을 마친 뒤, 계획에 결속된 검증 명령을 실제 실행하고 콘텐츠 지문을 기록
+npm run harness -- execution review-ready ad-cache-work --ticket ad-cache-work-ad-server
+npm run harness -- dashboard
+npm run harness -- release request ad-cache-work --summary "diff와 테스트 검토 완료"
+# 출력된 fingerprint를 사용자가 확인하고 명시적으로 승인한 뒤에만 실행
+npm run harness -- release approve ad-cache-work --fingerprint <fingerprint>
+npm run harness -- release consume ad-cache-work --fingerprint <fingerprint>
 npm run harness -- start-ticket my-task
 npm run harness -- verify
 npm run harness -- complete-task my-task
 git add -A
 git commit -m "chore(harness): my-task 완료 기록"
 ```
+
+`release consume`은 하네스가 관리하는 commit/push/merge 흐름에서 사용하는 일회성 승인 토큰입니다. 승인 뒤 worktree 내용이 바뀌면 거부되며 재사용할 수 없습니다. 사용자가 하네스 밖에서 직접 실행한 raw Git 명령까지 운영체제 수준에서 차단하는 기능은 아닙니다.
 
 기본적으로 active 티켓은 하나만 허용합니다. 병렬 작업은 `start-ticket <name> --allow-parallel`로 명시하고,
 검증할 때 `npm run harness -- verify --task <name>`처럼 대상 티켓을 지정하세요.
@@ -137,7 +156,7 @@ npm run harness -- orchestrate --status <run-id>
 ## L4.5 제한적 자동 수정
 
 기본값은 비활성화입니다. `.env.local`에서 `HARNESS_AGENT_MODE=api`, provider API 키,
-`HARNESS_AUTO_FIX=true`를 설정하거나 명령에 `--auto-fix`를 전달하면 검증 실패를 한 번 복구합니다.
+`HARNESS_AUTO_FIX=true`를 설정하거나 명령에 `--auto-fix`를 전달하면 검증 실패를 제한적으로 복구합니다.
 
 ```bash
 npm run harness -- verify --auto-fix
@@ -145,6 +164,8 @@ npm run harness -- verify --auto-fix
 
 자동 수정은 기존 소스/테스트 파일 최대 5개와 100KB 패치로 제한됩니다. 설정, 의존성, CI,
 스크립트, 인프라, migration, 비밀값은 수정하지 않으며 재검증 실패 시 패치를 원복합니다.
+`HARNESS_VERIFY_MAX_ATTEMPTS` 또는 `.harness/config.json`의 `verify.max_attempts`로 최대 검증 횟수를 정하며,
+재시도를 모두 소진하면 active 티켓을 `blocked/`로 이동하고 실패 근거를 남깁니다.
 커밋과 푸시는 자동으로 수행하지 않습니다. 상세 기준은
 [L4.5 자동 수정 정책](docs/design-docs/auto-fix-policy.md)을 참고하세요.
 

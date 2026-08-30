@@ -11,6 +11,7 @@ const {
   inferQuickMappings,
   matchesPattern,
   selectQuickCommands,
+  shouldBlockVerificationFailure,
   tokenizeCommand
 } = require("../../tools/harness-cli/verify-utils");
 
@@ -137,4 +138,10 @@ test("quick cache key changes with content, command, or runtime", () => {
     createQuickCacheKey(base),
     createQuickCacheKey({ ...base, contentFingerprint: "content-b" })
   );
+});
+
+test("only exhausted automation or an API diagnosis blocks an active ticket", () => {
+  assert.equal(shouldBlockVerificationFailure({}), false);
+  assert.equal(shouldBlockVerificationFailure({ autoFixExhausted: true }), true);
+  assert.equal(shouldBlockVerificationFailure({ apiDiagnosisAttempted: true }), true);
 });
