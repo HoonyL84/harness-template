@@ -8,7 +8,8 @@ const { updateJsonLocked } = require("./control-plane-state");
 const SCHEMA_VERSION = "1.0";
 
 function comparablePath(value) {
-  const normalized = path.normalize(path.resolve(value));
+  const resolved = path.resolve(value);
+  const normalized = path.normalize(fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
