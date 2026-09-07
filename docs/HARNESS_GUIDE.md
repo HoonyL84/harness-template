@@ -470,10 +470,10 @@ worker별 검증이나 `verify --quick`은 최종 완료 조건이 아닙니다.
 | 워크플로우 | 실행 시점 | 내용 |
 |------------|-----------|------|
 | `ci.yml` | push / PR | 테스트 + 빌드 (Java/Node 자동 감지) |
-| `security.yml` | push / PR / 주간 | 취약점 스캔 + 시크릿 탐지 |
+| `security.yml` | push / PR / 주간 | 실행 의존성 취약점 차단 + 개발 의존성 경고 + 시크릿 탐지 |
 
 ### Dependabot (자동 PR 생성)
-매주 월요일, npm과 GitHub Actions 의존성 업데이트 PR 자동 생성.
+매주 월요일, npm과 GitHub Actions 의존성 업데이트 PR 자동 생성. `security.yml`은 실행 의존성의 high 이상 취약점만 실패로 처리하고, 개발 도구 의존성의 취약점은 로그 경고와 Dependabot PR로 추적한다.
 
 ---
 
