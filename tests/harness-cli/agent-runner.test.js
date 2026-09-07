@@ -165,3 +165,42 @@ test("runner prompt carries approved implementation and test detail plus compact
   assert.match(prompt, /TEST_PLAN: unit: unit case/);
   assert.match(prompt, /RETRY_FEEDBACK/);
 });
+
+test("runner blocks secret aliases and high-risk patches before Git application", async () => {
+  for (const file of [".ENV.local", "src/.EnV", ".git/config", "C:/secret", "src/../secret", "src/file:stream"]) {
+    assert.throws(() => validateRunnerPatch(`diff --git a/${file} b/${file}\n`), /protected path|escapes/);
+  }
+  for (const file of [".github/workflows/deploy.yml", "migrations/drop.sql", "package.json", "scripts/deploy.js"]) {
+    assert.throws(() => validateRunnerPatch(`diff --git a/${file} b/${file}\n`), /explicit review/);
+  }
+  assert.throws(() => validateRunnerPatch("diff --git a/src/a b/src/a\n--- a/.ENV.local\n+++ b/.ENV.local\n"), /protected path/);
+  assert.deepEqual(validateRunnerPatch("diff --git a/src/a.js b/src/a.js\n"), ["src/a.js"]);
+  const { root } = fixture();
+  let gitCalls = 0;
+  let attempts = 0;
+  const command = createAgentRunnerCommand({ root, parseArgs,
+    invokeAgent: async () => { attempts++; return "diff --git a/migrations/drop.sql b/migrations/drop.sql\n--- a/migrations/drop.sql\n+++ b/migrations/drop.sql\n@@ -1 +1 @@\n-old\n+new\n"; },
+    notify: async () => {}, reviewFingerprint: () => "baseline", runCommand: () => ({ status: 0 }),
+    runGit: () => { gitCalls++; return { status: 0 }; }, tokenizeCommand: value => value.split(" "), log: () => {} });
+  const result = await command(["run", "work"]);
+  assert.equal(result.status, "BLOCKED");
+  assert.match(result.tickets[0].error, /explicit review/);
+  assert.equal(gitCalls, 0);
+  assert.equal(attempts, 1);
+});
+
+test("runner rejects verification drift and stops when rollback cannot restore baseline", async () => {
+  const { root } = fixture();
+  let content = "baseline";
+  const command = createAgentRunnerCommand({ root, parseArgs,
+    invokeAgent: async () => "diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1 +1 @@\n-old\n+new\n",
+    notify: async () => {}, reviewFingerprint: () => content,
+    runCommand: () => { content = "unexpected change"; return { status: 0 }; },
+    runGit: args => { if (!args.includes("--check") && !args.includes("-R")) content = "implemented"; return { status: 0 }; },
+    tokenizeCommand: value => value.split(" "), log: () => {} });
+  const result = await command(["run", "work"]);
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.tickets[0].verification, undefined);
+  assert.match(result.tickets[0].error, /changed during verification/);
+  assert.match(result.tickets[0].error, /rollback failed/);
+});

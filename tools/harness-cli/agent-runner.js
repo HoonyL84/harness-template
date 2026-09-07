@@ -9,6 +9,8 @@ const { buildProjectContextBundle } = require("./project-context");
 const { readOnboardingProfile } = require("./project-onboarding");
 const { readRegistry, validateProjectId } = require("./project-registry");
 const { readPlan } = require("./request-command");
+const { createConfigLoader } = require("./config");
+const { reconcileVerificationLeases } = require("./verification-lease");
 
 const DEFAULT_LEASE_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_ATTEMPTS = 2;
@@ -34,21 +36,35 @@ function extractUnifiedDiff(text) {
 }
 
 function validateRunnerPatch(patch, limits = {}) {
+  const policy = limits.policy || createConfigLoader({ root: process.cwd(), fail: (message) => { throw new Error(message); } })().l5;
   const maxBytes = Number(limits.maxBytes ?? 500 * 1024);
   const maxFiles = Number(limits.maxFiles ?? 20);
   if (Buffer.byteLength(patch, "utf8") > maxBytes) throw new Error("Runner patch exceeds the byte limit");
   if (/^(?:new file mode|old mode|new mode) 120000$/m.test(patch)) throw new Error("Runner patch cannot create or modify symbolic links");
   if (/^GIT binary patch$/m.test(patch)) throw new Error("Runner patch cannot contain binary changes");
+  if (/^(?:deleted file mode|rename from|rename to|copy from|copy to|old mode|new mode) /m.test(patch)) {
+    throw Object.assign(new Error("Runner patch requires explicit review for deletion, rename, copy or mode changes"), { code: "APPROVAL_REQUIRED" });
+  }
   const entries = [...patch.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)].map((match) => [match[1].trim(), match[2].trim()]);
   const paths = entries.map((entry) => entry[1]);
   if (paths.length === 0) throw new Error("Runner patch has no file entries");
   if (new Set(paths).size > maxFiles) throw new Error("Runner patch exceeds the file limit");
-  for (const filePath of entries.flat()) {
+  const headerPaths = [...patch.matchAll(/^(?:---|\+\+\+) (.+)$/gm)]
+    .map((match) => match[1]).filter((value) => value !== "/dev/null")
+    .map((value) => {
+      if (!/^[ab]\//.test(value)) throw new Error("Runner patch has an unsupported file header");
+      return value.slice(2);
+    });
+  for (const filePath of [...entries.flat(), ...headerPaths]) {
     const normalized = filePath.replace(/\\/g, "/");
     const segments = normalized.toLowerCase().split("/");
-    if (path.posix.isAbsolute(normalized) || segments.includes("..")) throw new Error(`Runner patch path escapes the project: ${filePath}`);
-    if (segments.some((segment) => FORBIDDEN_PATCH_SEGMENTS.has(segment)) || path.posix.basename(normalized).startsWith(".env")) {
+    if (path.posix.isAbsolute(normalized) || normalized.includes(":") || segments.includes("..") || /["\t]/.test(normalized) || segments.some((segment) => /[. ]$/.test(segment))) throw new Error(`Runner patch path escapes the project: ${filePath}`);
+    const fileName = segments.at(-1);
+    if (segments.some((segment) => FORBIDDEN_PATCH_SEGMENTS.has(segment) || policy.protectedSegments.has(segment)) || fileName.startsWith(".env")) {
       throw new Error(`Runner patch targets a protected path: ${filePath}`);
+    }
+    if (segments.some((segment) => policy.highRiskSegments.has(segment)) || policy.highRiskFiles.has(fileName)) {
+      throw Object.assign(new Error(`Runner patch requires explicit review for high-risk path: ${filePath}`), { code: "APPROVAL_REQUIRED" });
     }
   }
   return [...new Set(paths)];
@@ -98,7 +114,7 @@ function runChecked(runGit, args, cwd) {
 }
 
 function reconcileExpiredLeases(state, nowMs) {
-  let changed = false;
+  let changed = reconcileVerificationLeases(state, nowMs);
   for (const ticket of state.tickets) {
     if (ticket.status !== "RUNNING") continue;
     const expiresAt = Date.parse(ticket.runner?.lease_expires_at || "");
@@ -113,6 +129,7 @@ function reconcileExpiredLeases(state, nowMs) {
 }
 
 function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, reviewFingerprint, runCommand, runGit, tokenizeCommand, log, now = () => Date.now() }) {
+  const loadConfig = createConfigLoader({ root, fail: (message) => { throw new Error(message); } });
   const local = path.join(root, ".harness", "local");
   const executionPath = (id) => path.join(local, "executions", `${validateProjectId(id)}.json`);
 
@@ -243,13 +260,15 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
           const response = await invokeAgent(prompt, claimedTicket);
           estimatedOutputTokens += estimateTokens(response);
           const patch = extractUnifiedDiff(response);
-          const changedPaths = validateRunnerPatch(patch);
           patchPath = path.join(local, "runner", id, `${claimedTicket.ticket_id}-${leaseId}-${attempt}.patch`);
           fs.mkdirSync(path.dirname(patchPath), { recursive: true });
           fs.writeFileSync(patchPath, patch, { mode: 0o600 });
+          const changedPaths = validateRunnerPatch(patch, { policy: loadConfig().l5 });
           runChecked(runGit, ["apply", "--check", patchPath], claimedTicket.worktree);
           runChecked(runGit, ["apply", patchPath], claimedTicket.worktree);
           applied = true;
+          const beforeVerification = reviewFingerprint(claimedTicket.worktree);
+          if (!beforeVerification) throw new Error("Could not fingerprint worktree before verification");
           const verification = claimedTicket.verification_commands.map((commandLine) => {
             const parts = tokenizeCommand(commandLine);
             const executable = parts[0] === "npm" && process.platform === "win32" ? "npm.cmd" : parts[0];
@@ -258,6 +277,7 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
             return { command: commandLine, status: result.status, stdout: String(result.stdout || "").slice(-4000), stderr: String(result.stderr || "").slice(-4000) };
           });
           const fingerprint = reviewFingerprint(claimedTicket.worktree);
+          if (!fingerprint || fingerprint !== beforeVerification) throw new Error("Worktree changed during verification; reverify required");
           if (!fingerprint) throw new Error("Could not fingerprint runner worktree");
           updateJsonLocked(filePath, null, (state) => {
             const ticket = state.tickets.find((item) => item.ticket_id === claimedTicket.ticket_id);
@@ -275,6 +295,10 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
           }
         } catch (error) {
           lastError = error;
+          if (error.code === "APPROVAL_REQUIRED") {
+            lastError = new Error(`${error.message}; review saved patch: ${patchPath}`);
+            break;
+          }
           if (applied && patchPath) {
             try {
               runChecked(runGit, ["apply", "--check", "-R", patchPath], claimedTicket.worktree);

@@ -9,6 +9,7 @@ const { assertExecutionMatchesPlan, assertProjectSnapshot, buildExecutionState, 
 const { inspectGitProject, readRegistry, validateProjectId } = require("./project-registry");
 const { readPlan } = require("./request-command");
 const { requireRequestReady } = require("./request-plan");
+const { createVerificationOwner } = require("./verification-lease");
 
 function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand, runGit, tokenizeCommand, log }) {
   const local = path.join(root, ".harness", "local");
@@ -100,13 +101,17 @@ function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand
         }
         ticket.status = "VERIFYING";
         ticket.verification_lease = leaseId;
+        ticket.verification_owner = createVerificationOwner();
         state.status = "IN_PROGRESS";
         state.updated_at = new Date().toISOString();
         return state;
       });
       const claimedTicket = claimed.tickets.find((item) => item.ticket_id === options.ticket);
       let results;
+      let fingerprint;
       try {
+        const before = reviewFingerprint(claimedTicket.worktree);
+        if (!before) throw new Error(`Could not fingerprint worktree: ${claimedTicket.worktree}`);
         results = claimedTicket.verification_commands.map((commandLine) => {
           const parts = tokenizeCommand(commandLine);
           const command = parts[0] === "npm" && process.platform === "win32" ? "npm.cmd" : parts[0];
@@ -122,36 +127,30 @@ function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand
           }
           return record;
         });
+        fingerprint = reviewFingerprint(claimedTicket.worktree);
+        if (!fingerprint || fingerprint !== before) throw new Error("Worktree changed during verification; reverify required");
       } catch (error) {
         updateJsonLocked(file, null, (state) => {
           const ticket = state.tickets.find((item) => item.ticket_id === options.ticket);
           if (ticket?.verification_lease === leaseId) {
             ticket.status = "PREPARED";
             delete ticket.verification_lease;
+            delete ticket.verification_owner;
+            delete ticket.verification;
+            ticket.error = error.message;
             finalizeExecutionState(state);
           }
           return state;
         });
         throw error;
       }
-      const fingerprint = reviewFingerprint(claimedTicket.worktree);
-      if (!fingerprint) {
-        updateJsonLocked(file, null, (current) => {
-          const ticket = current.tickets.find((item) => item.ticket_id === options.ticket);
-          if (ticket?.verification_lease === leaseId) {
-            ticket.status = "PREPARED";
-            delete ticket.verification_lease;
-            finalizeExecutionState(current);
-          }
-          return current;
-        });
-        throw new Error(`Could not fingerprint worktree: ${claimedTicket.worktree}`);
-      }
       const state = updateJsonLocked(file, null, (current) => {
         const ticket = current.tickets.find((item) => item.ticket_id === options.ticket);
         if (ticket?.verification_lease !== leaseId) throw new Error(`Verification lease changed for ticket: ${options.ticket}`);
         ticket.status = "REVIEW_READY";
         delete ticket.verification_lease;
+        delete ticket.verification_owner;
+        ticket.error = null;
         ticket.verification = {
           summary: `${results.length} verification command(s) passed`,
           results,

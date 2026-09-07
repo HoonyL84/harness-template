@@ -8,6 +8,8 @@ const test = require("node:test");
 const { createExecutionCommand } = require("../../tools/harness-cli/execution-command");
 const { assertExecutionMatchesPlan, assertProjectSnapshot, buildExecutionState, dependencyReadiness, finalizeExecutionState } = require("../../tools/harness-cli/project-execution");
 const { approveRequestPlan, createRequestPlan } = require("../../tools/harness-cli/request-plan");
+const { createVerificationOwner, reconcileVerificationLeases } = require("../../tools/harness-cli/verification-lease");
+const { reconcileExpiredLeases } = require("../../tools/harness-cli/agent-runner");
 
 function parseArgs(args) {
   const positional = [];
@@ -119,4 +121,38 @@ test("execution stays prepared when a real verification command fails", () => {
   const command = createExecutionCommand({ root, parseArgs, reviewFingerprint: () => "unused", runCommand: () => ({ status: 1, stdout: "", stderr: "failed" }), runGit: () => ({ status: 0 }), tokenizeCommand: (value) => value.split(" "), log: () => {} });
   assert.throws(() => command(["review-ready", "demo", "--ticket", prepared.ticket_id]), /Verification failed/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".harness", "local", "executions", "demo.json"))).tickets[0].status, "PREPARED");
+});
+
+test("execution rejects changes during verification and can be reverified", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verify-drift-"));
+  const prepared = preparedExecution(root);
+  let content = "before";
+  let mutate = true;
+  const command = createExecutionCommand({ root, parseArgs, reviewFingerprint: () => content,
+    runCommand: () => { if (mutate) content = "after"; return { status: 0 }; },
+    runGit: () => ({ status: 0 }), tokenizeCommand: (value) => value.split(" "), log: () => {} });
+  const args = ["review-ready", "demo", "--ticket", prepared.ticket_id];
+  assert.throws(() => command(args), /changed during verification/);
+  const failed = JSON.parse(fs.readFileSync(path.join(root, ".harness", "local", "executions", "demo.json"))).tickets[0];
+  assert.equal(failed.status, "PREPARED");
+  assert.equal(failed.verification, undefined);
+  assert.equal(failed.verification_owner, undefined);
+  mutate = false;
+  assert.equal(command(args).tickets[0].verification.content_fingerprint, "after");
+});
+
+test("verification recovery preserves live owners and requires a fresh verification", () => {
+  const owner = createVerificationOwner(0);
+  const ticket = { status: "VERIFYING", verification_lease: "old", verification_owner: owner, verification: { content_fingerprint: "stale" } };
+  const state = { tickets: [ticket] };
+  assert.equal(reconcileVerificationLeases(state, 1, () => false), false);
+  assert.equal(reconcileVerificationLeases(state, 3600000, () => true), false);
+  assert.equal(reconcileVerificationLeases(state, 3600000, () => false), true);
+  assert.equal(ticket.status, "PREPARED");
+  assert.equal(ticket.verification, undefined);
+  assert.equal(ticket.verification_lease, undefined);
+  const live = { tickets: [{ status: "VERIFYING", verification_owner: owner }] };
+  assert.equal(reconcileExpiredLeases(live, Date.now()), false);
+  const unknown = { tickets: [{ status: "VERIFYING" }, { status: "VERIFYING", verification_owner: { ...owner, host: "other-host" } }] };
+  assert.equal(reconcileVerificationLeases(unknown, Date.now(), () => false), false);
 });
