@@ -154,10 +154,17 @@ npm run harness -- execution status ad-cache-work
 # API 모드에서 승인 티켓을 중앙 runner가 격리 worktree에서 구현하고 실제 검증한 뒤 콘텐츠 지문에 결속
 npm run harness -- runner run ad-cache-work
 npm run harness -- runner status ad-cache-work
-# 프로세스 중단 뒤 만료된 실행 lease 복구
+# 프로세스 중단 뒤 만료된 실행/검증 lease 복구
 npm run harness -- runner reconcile ad-cache-work
 # 대화형 Codex 같은 host가 직접 구현할 때는 아래 명령으로 검증과 지문 기록 수행
 # npm run harness -- execution review-ready ad-cache-work --ticket ad-cache-work-ad-server
+
+# Runner는 L5 설정의 보호/고위험 경로를 검사한다. 고위험 패치는 저장 후 BLOCKED로
+# 중단하므로 오류에 나온 패치를 사람이 검토하고 승인된 대화형 작업으로 처리한다.
+# Runner와 review-ready는 검증 전후 지문이 달라지면 완료를 거부한다.
+# 검증은 추적 파일을 수정하지 않아야 하며, 생성물은 프로젝트 .gitignore로 관리한다.
+# VERIFYING 복구는 30분 만료 후 동일 호스트의 소유 프로세스 종료를 확인해야 한다.
+# 소유자 정보가 없는 기존 lease나 다른 호스트의 lease는 자동 복구하지 않고 직접 점검한다.
 
 # 전체 상태와 BLOCKED/REVIEW_READY 알림 확인
 npm run harness -- dashboard
@@ -470,10 +477,10 @@ worker별 검증이나 `verify --quick`은 최종 완료 조건이 아닙니다.
 | 워크플로우 | 실행 시점 | 내용 |
 |------------|-----------|------|
 | `ci.yml` | push / PR | 테스트 + 빌드 (Java/Node 자동 감지) |
-| `security.yml` | push / PR / 주간 | 취약점 스캔 + 시크릿 탐지 |
+| `security.yml` | push / PR / 주간 | 실행 의존성 취약점 차단 + 개발 의존성 경고 + 시크릿 탐지 |
 
 ### Dependabot (자동 PR 생성)
-매주 월요일, npm과 GitHub Actions 의존성 업데이트 PR 자동 생성.
+매주 월요일, npm과 GitHub Actions 의존성 업데이트 PR 자동 생성. `security.yml`은 실행 의존성의 high 이상 취약점만 실패로 처리하고, 개발 도구 의존성의 취약점은 로그 경고와 Dependabot PR로 추적한다.
 
 ---
 

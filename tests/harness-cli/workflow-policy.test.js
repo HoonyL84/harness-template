@@ -11,10 +11,10 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), "utf8");
 }
 
-test("dependency audit remains a blocking security gate", () => {
+test("runtime audit blocks while development dependency audit remains visible", () => {
   const workflow = read(".github/workflows/security.yml");
-  assert.match(workflow, /run:\s*npm audit --audit-level=high/);
-  assert.doesNotMatch(workflow, /npm audit --audit-level=high\s*\|\|\s*true/);
+  assert.match(workflow, /Block runtime dependency vulnerabilities[\s\S]*?npm audit --omit=dev --audit-level=high/);
+  assert.match(workflow, /Report development dependency vulnerabilities[\s\S]*?continue-on-error:\s*true[\s\S]*?npm audit --audit-level=high/);
 });
 
 test("cross-platform smoke tests isolate harness verification from product tests", () => {
