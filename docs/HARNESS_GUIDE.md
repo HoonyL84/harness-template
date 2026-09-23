@@ -215,7 +215,9 @@ git commit -m "chore(harness): user-auth 완료 기록"
 `complete-task`는 active 티켓을 archive로 이동하고 완료 메타데이터를 기록하므로,
 명령 실행 후 생긴 변경은 별도 마감 커밋으로 저장합니다.
 `bootstrap request`는 대상 폴더가 Git 저장소가 아니면 저장소를 초기화하되 커밋하지 않습니다. 사용자가 스냅샷 지문을 승인한 뒤 `bootstrap apply`를 실행해야 최초 커밋, 중앙 프로젝트 등록, DRAFT onboarding profile 생성이 진행됩니다. ignored 파일은 스냅샷에서 제외하고 비밀 파일, 자격증명, symlink/junction, 크기 제한 초과 파일은 fail-closed로 차단합니다. 승인 뒤 파일 내용이 바뀌거나 승인을 재사용하면 거부합니다. 이미 Git HEAD가 있는 프로젝트는 최초 커밋 단계를 자동으로 건너뛰고 등록과 onboarding 초안만 수행합니다.
-티켓별 재시도 정책은 계획에 포함되어 승인 fingerprint에 결속됩니다. 기본값은 최대 2회와 동일 오류 조기 중단이며, AI 또는 사용자가 승인 전 plan-file에서 아래처럼 1~5회 범위로 조정할 수 있습니다.
+티켓 실행 정책은 승인 fingerprint에 결속됩니다. 새 계획의 기본값은 최대 3회(최초 1회 + 재시도 2회)와 동일 오류 조기 중단이며, 티켓마다 횟수를 입력할 필요는 없습니다. 기존에 승인한 명시적 한도는 그대로 유지합니다. 고급 plan-file의 1~5회 설정과 CLI 하향 제한은 호환 목적으로 지원합니다. 별도의 `verify --auto-fix` 한도와는 다릅니다.
+
+중요도는 P0/P1/P2/P3(기본 P2)이며 의존성이 충족된 티켓 사이에서만 적용합니다. DRAFT에서 `request priority <request-id> --ticket <ticket-id> --value P1`로 바꿀 수 있습니다. Jira 읽기 연동과 승인 흐름은 [개인 운영 가이드](HARNESS_PERSONAL_OPERATIONS_GUIDE.md)를 참고하세요.
 
 ```json
 {

@@ -13,7 +13,7 @@ function transitionEvent(command, args, result, parseArgs, error = null) {
     return { key: `${command}:${action}:${subject}:FAILED:${detail}`, status: "fail", task: subject, message: `${command} ${action || "command"} FAILED for ${subject}: ${detail}` };
   }
   if (!result) return null;
-  if (command === "request" && new Set(["create", "revise"]).has(action)) {
+  if (command === "request" && new Set(["create", "revise", "priority", "import-jira"]).has(action)) {
     return { key: `request:${result.request_id}:PLAN_READY:${result.content_fingerprint}`, status: "success", task: result.request_id, message: `${result.request_id} PLAN_READY: review ${result.tickets.length} ticket(s) and approve the fingerprint-bound plan.` };
   }
   if (command === "execution" && new Set(["prepare", "advance", "review-ready"]).has(action)) {
@@ -22,7 +22,7 @@ function transitionEvent(command, args, result, parseArgs, error = null) {
     if (action === "review-ready") return { key: `execution:${result.execution_id}:REVIEW_READY:${result.updated_at}`, status: "success", task: result.request_id, message: `${result.request_id} REVIEW_READY: review the diff and verification evidence before requesting release approval.` };
   }
   if (command === "runner" && action === "run") {
-    const blocked = result.tickets?.filter((ticket) => ticket.status === "BLOCKED" && (ticket.runner?.exhausted_at || String(ticket.error || "").startsWith("Could not fingerprint"))) || [];
+    const blocked = result.tickets?.filter((ticket) => !ticket.outcome_notification && ticket.status === "BLOCKED" && (ticket.runner?.exhausted_at || String(ticket.error || "").startsWith("Could not fingerprint"))) || [];
     if (blocked.length > 0) return { key: `runner:${result.execution_id}:BLOCKED:${result.updated_at}`, status: "fail", task: result.request_id, message: `${result.request_id} BLOCKED: ${blocked.map((ticket) => `${ticket.ticket_id}=${ticket.error}`).join("; ")}` };
   }
   if (command === "release" && action === "request") return { key: `release:${result.approval_id}:APPROVAL_REQUIRED:${result.fingerprint}`, status: "success", task: result.request_id, message: `${result.approval_id} APPROVAL_REQUIRED: ${result.summary}\nFingerprint: ${result.fingerprint}` };

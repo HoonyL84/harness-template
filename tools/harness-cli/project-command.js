@@ -86,7 +86,10 @@ function createProjectCommand({ root, parseArgs, runGit, log }) {
       const maxBytes = options["max-bytes"] === undefined ? undefined : Number(options["max-bytes"]);
       if (options.bundle) {
         const profile = readOnboardingProfile(profilePath(id));
-        const bundle = buildProjectContextBundle(project, { maxBytes, profile });
+        const currentGit = diagnose(project);
+        const bundle = buildProjectContextBundle(project, { maxBytes, profile, historyRoot: root, currentGit });
+        bundle.current_git = { head: currentGit.head, branch: currentGit.branch, dirty: currentGit.dirty,
+          differs_from_registration: currentGit.head !== project.head || currentGit.worktree_fingerprint !== project.worktree_fingerprint };
         print(options.json ? bundle : bundle.content, options.json);
         return bundle;
       }

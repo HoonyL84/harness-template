@@ -13,6 +13,22 @@ function profile(id, fingerprint = `${id}-fingerprint`) {
   return { project_id: id, status: "APPROVED", content_fingerprint: fingerprint, verify_commands: ["npm test"] };
 }
 
+test("priority and default three-attempt budget are bound to approval", () => {
+  const profiles = { demo: profile("demo") };
+  const input = { requestId: "priority", goal: "safe", profiles,
+    tickets: [{ ticket_id: "first", project_id: "demo", goal: "safe", priority: "P1" }] };
+  const plan = createRequestPlan(input);
+  assert.equal(plan.tickets[0].priority, "P1");
+  assert.equal(plan.tickets[0].retry_policy.max_attempts, 3);
+  const approved = approveRequestPlan(plan);
+  const altered = globalThis.structuredClone(approved);
+  altered.tickets[0].priority = "P0";
+  assert.throws(() => validateRequestPlan(altered), /fingerprint/);
+  for (const priority of [null, "urgent", "p1", 1]) {
+    assert.throws(() => createRequestPlan({ ...input, tickets: [{ ...input.tickets[0], priority }] }), /priority/);
+  }
+});
+
 test("request plans bind project tickets to approved profiles and require approval", () => {
   const profiles = { "ad-server": profile("ad-server"), payments: profile("payments") };
   const plan = createRequestPlan({
@@ -39,7 +55,7 @@ test("request plan validation rejects tampering, duplicate tickets, and unapprov
   const profiles = { demo: profile("demo") };
   const plan = createRequestPlan({ requestId: "demo-work", goal: "Do work", projectIds: ["demo"], profiles });
   assert.equal(plan.tickets[0].verification[0], "npm test");
-  assert.deepEqual(plan.tickets[0].retry_policy, { max_attempts: 2, stop_on_same_error: true });
+  assert.deepEqual(plan.tickets[0].retry_policy, { max_attempts: 3, stop_on_same_error: true });
   assert.deepEqual(plan.tickets[0].acceptance_criteria, ["Do work"]);
   assert.deepEqual(plan.tickets[0].implementation_steps, ["Do work"]);
   assert.deepEqual(plan.tickets[0].test_plan, { unit: [], integration: [], regression: [], manual: [] });

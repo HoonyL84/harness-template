@@ -10,8 +10,9 @@ const { inspectGitProject, readRegistry, validateProjectId } = require("./projec
 const { readPlan } = require("./request-command");
 const { requireRequestReady } = require("./request-plan");
 const { createVerificationOwner } = require("./verification-lease");
+const { requireJiraFresh } = require("./jira-input");
 
-function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand, runGit, tokenizeCommand, log }) {
+function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand, runGit, tokenizeCommand, log, env = process.env, fetchImpl = globalThis.fetch }) {
   const local = path.join(root, ".harness", "local");
   const statePath = (id) => path.join(local, "executions", `${validateProjectId(id)}.json`);
   const requireGitSuccess = (args, cwd) => {
@@ -72,7 +73,7 @@ function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand
     delete ticket.waiting_reason;
     return ticket;
   };
-  return function commandExecution(args) {
+  function commandExecution(args) {
     const { positional, options } = parseArgs(args);
     const [action, rawId] = positional;
     const id = validateProjectId(rawId);
@@ -214,6 +215,18 @@ function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand
       log(`[${state.status}] Dependency wave advanced ${advanced} ticket(s) for ${id}`);
       return state;
     }, { ttlMs: 120_000 });
+  }
+  return function guardedExecution(args) {
+    const { positional } = parseArgs(args);
+    if (!new Set(["prepare", "advance", "review-ready"]).has(positional[0])) return commandExecution(args);
+    const id = validateProjectId(positional[1]);
+    const file = path.join(local, "requests", `${id}.json`);
+    const plan = readPlan(file);
+    if (!plan.tickets.some((ticket) => ticket.source?.kind === "jira")) return commandExecution(args);
+    return requireJiraFresh(root, plan, { env, fetchImpl }).then(() => {
+      if (readPlan(file).content_fingerprint !== plan.content_fingerprint) throw new Error("Request changed during Jira check");
+      return commandExecution(args);
+    });
   };
 }
 

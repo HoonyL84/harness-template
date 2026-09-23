@@ -34,11 +34,25 @@ function setup() {
   return { root };
 }
 
+test("priority command edits only a DRAFT and does not need retry inputs", () => {
+  const { root } = setup();
+  const command = createRequestCommand({ root, parseArgs, log: () => {} });
+  const initial = command(["create", "work", "--project", "demo", "--goal", "safe"]);
+  const edited = command(["priority", "work", "--ticket", "work-demo", "--value", "P1"]);
+  assert.equal(edited.tickets[0].priority, "P1");
+  assert.equal(edited.tickets[0].retry_policy.max_attempts, 3);
+  assert.notEqual(initial.content_fingerprint, edited.content_fingerprint);
+  assert.throws(() => command(["priority", "work", "--ticket", "work-demo"]), /priority/);
+  assert.throws(() => command(["priority", "work", "--ticket", "missing", "--value", "P0"]), /Unknown request ticket/);
+  command(["approve", "work"]);
+  assert.throws(() => command(["priority", "work", "--ticket", "work-demo", "--value", "P0"]), /Only a DRAFT/);
+});
+
 test("request revise replaces only a DRAFT plan with an editable ticket retry policy", () => {
   const { root } = setup();
   const command = createRequestCommand({ root, parseArgs, log: () => {} });
   const initial = command(["create", "planned-work", "--project", "demo", "--goal", "Initial goal"]);
-  assert.equal(initial.tickets[0].retry_policy.max_attempts, 2);
+  assert.equal(initial.tickets[0].retry_policy.max_attempts, 3);
   const planFile = path.join(root, "revised-plan.json");
   fs.writeFileSync(planFile, JSON.stringify({
     goal: "Revised goal",

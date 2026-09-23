@@ -123,6 +123,21 @@ API 키는 커밋하지 않는다. 필요한 값은 `.env.local`에 두고, 공�
 `HARNESS_AGENT_MODE=interactive` 상태에서는 대화형 Codex/Cursor/Claude Code 사용을 기본으로 보고, `run-agent` 직접 호출은 막는다.
 회사 macOS처럼 토큰 기반 CLI를 쓸 때는 `.env.local`에서 `HARNESS_AGENT_MODE=api`로 바꾼 뒤 provider key를 넣는다.
 
+Provider 키를 모두 설정한 뒤 활성 Provider와 하네스 관측 사용량은 다음 명령으로 관리한다.
+
+```bash
+npm run harness -- provider status
+npm run harness -- provider use openai
+npm run harness -- provider use anthropic
+npm run harness -- provider use gemini
+npm run harness -- provider usage --json
+```
+
+`provider use`는 API 키를 복사하거나 출력하지 않고 Git에서 제외된 `.harness/local/provider.json`에
+활성 Provider 이름만 저장한다. 이 로컬 선택은 `.env.local`의 `AI_PROVIDER` 기본값보다 우선한다.
+사용량은 하네스 Node CLI가 성공적으로 받은 Provider 응답만 집계하며 하네스 밖의 사용량은 포함하지 않는다.
+월 토큰 예산이 설정되지 않았거나 원격 결제 조회 권한이 없으면 잔여량을 추측하지 않고 `unknown`으로 표시한다.
+
 L4.5 자동 수정은 추가로 `HARNESS_AUTO_FIX=true`를 설정하거나 `verify --auto-fix`를 명시해야 한다.
 자동 수정 범위와 원복 규칙은 `docs/design-docs/auto-fix-policy.md`를 따른다.
 

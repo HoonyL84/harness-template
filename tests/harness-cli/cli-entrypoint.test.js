@@ -21,6 +21,7 @@ test("CLI entrypoint declares Git boundaries for mutating commands", () => {
   assert.equal(getCommandMetadata("release").requiresGit, false);
   assert.equal(getCommandMetadata("evidence").requiresGit, false);
   assert.equal(getCommandMetadata("deployment").requiresGit, false);
+  assert.equal(getCommandMetadata("provider").requiresGit, false);
   assert.equal(getCommandMetadata("unknown").requiresGit, false);
 });
 

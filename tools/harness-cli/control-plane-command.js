@@ -8,8 +8,9 @@ const { addEvidence, approveRelease, beginReleaseApply, consumeReleaseApproval, 
 const { readRegistry, validateProjectId } = require("./project-registry");
 const { assertExecutionMatchesPlan } = require("./project-execution");
 const { readPlan } = require("./request-command");
+const { requireJiraFresh } = require("./jira-input");
 
-function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint, runGit, log }) {
+function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint, runGit, log, env = process.env, fetchImpl = globalThis.fetch }) {
   if (typeof reviewFingerprint !== "function") throw new Error("reviewFingerprint is required");
   if (typeof runGit !== "function") throw new Error("runGit is required");
   const local = path.join(root, ".harness", "local");
@@ -256,6 +257,23 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
     log(summary);
     return { bootstraps, requests, executions, releases, duplicate };
   };
-  return { dashboard, evidence, release };
+  const guardedRelease = (args) => {
+    const { positional, options } = parseArgs(args);
+    const [action, rawId] = positional;
+    if (!new Set(["request", "approve", "apply", "consume"]).has(action)) return release(args);
+    const id = validateProjectId(rawId);
+    const file = path.join(local, action === "request" ? "requests" : "releases", `${id}.json`);
+    const snapshot = action === "request" ? readPlan(file) : readJson(file, null);
+    const ticketIds = action === "request" && options.ticket && options.ticket !== true
+      ? String(options.ticket).split(",").map(value => value.trim()) : null;
+    const tickets = (snapshot?.tickets || []).filter(ticket => !ticketIds || ticketIds.includes(ticket.ticket_id));
+    if (!tickets.some(ticket => ticket.source?.kind === "jira")) return release(args);
+    return requireJiraFresh(root, { tickets }, { env, fetchImpl }).then(() => {
+      const current = readJson(file, null);
+      if (JSON.stringify(current) !== JSON.stringify(snapshot)) throw new Error("Release inputs changed during Jira check");
+      return release(args);
+    });
+  };
+  return { dashboard, evidence, release: guardedRelease };
 }
 module.exports = { createControlPlaneCommands };
