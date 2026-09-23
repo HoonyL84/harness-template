@@ -21,6 +21,7 @@
 8. 커밋 근거가 연결되면 경력 기록을 `VERIFIED`로 확정한다.
 
 ## 로드맵
+- **운영 보강 진행 중**: [개인 다중 프로젝트 운영 보강](OPERATIONS_COMPLETENESS_PLAN.md), [Jira + Confluence 설계](CONFLUENCE_PERSONAL_OPERATIONS.md), [사용 가이드](../HARNESS_PERSONAL_OPERATIONS_GUIDE.md). Jira 입출력/승인, 중요도/기본 3회 시도, 이력/검색/컨텍스트 및 공급자 조회를 구현했다. Atlassian 연결 도우미와 3사 연결 진단, Gemini 요청 수 조회를 추가한다. 실제 계정·신규 환경 검증 및 사용자 최종 검수는 별도이며 전체 로드맵 완료를 뜻하지 않는다.
 - **Task 1: Multi-project Registry** - 프로젝트 등록, 조회, 제거, 경로 및 Git 상태 진단
 - **Task 2: Request Planning & Approval** - 자연어 요청의 프로젝트별 티켓 분해와 계획 승인 게이트
 - **Task 3: Project-scoped Execution** - 프로젝트별 상태, 잠금, worktree, 검증 격리
@@ -31,6 +32,8 @@
 - **Task 8: Multi-project E2E** - 최소 두 프로젝트와 Windows, macOS, Linux 회귀 검증
 
 ## 공통 완료 기준
+- **MCP 우선 연결**: Jira/Confluence의 문서 관리·탐색은 MCP에 위임하고 하네스는 개발 실행/검증/승인/근거만 관리한다. Node CLI의 MCP 호출 경로와 opt-in REST 호환 경로를 분리한다. 실제 계정별 도구 매핑 검증 전에는 연결 완료로 표시하지 않는다. [설정 가이드](../ATLASSIAN_MCP.md)
+- **기록 연결 보강**: `ops-followup-integration`에서 로컬 DRAFT의 Jira 연결, 관리형 작업/검수의 follow-up 캡처, 누락 audit/repair와 승인형 게시를 구현했다. 선택적으로 프로젝트당 최초 범위 승인 후 자동 기록하며 Git 승인은 별개다. 사용자 요청으로 모의 연동을 검증하고 실제 계정 리허설은 보류한다.
 - 모든 상태는 `project_id:ticket_id`로 격리된다.
 - 원본 프로젝트의 기존 미커밋 변경을 수정하거나 삭제하지 않는다.
 - 사용자 승인 전 Git commit, push, merge가 실행되지 않는다.

@@ -1,10 +1,12 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { normalizeJiraSource } = require("./jira-input");
 
 const SCHEMA_VERSION = "1.0";
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const DEFAULT_RETRY_POLICY = Object.freeze({ max_attempts: 2, stop_on_same_error: true });
+const DEFAULT_RETRY_POLICY = Object.freeze({ max_attempts: 3, stop_on_same_error: true });
+const PRIORITIES = Object.freeze(["P0", "P1", "P2", "P3"]);
 const TEST_PLAN_SECTIONS = Object.freeze(["unit", "integration", "regression", "manual"]);
 
 function requireId(value, label) {
@@ -66,6 +68,12 @@ function normalizeRetryPolicy(value) {
   return { max_attempts: maxAttempts, stop_on_same_error: stopOnSameError };
 }
 
+/** Validate user priority without inferring it from untrusted ticket prose. */
+function normalizePriority(value = "P2") {
+  if (!PRIORITIES.includes(value)) throw new Error("Ticket priority must be P0, P1, P2 or P3");
+  return value;
+}
+
 function normalizeStringArray(value, label, fallback = []) {
   if (value === undefined) return [...fallback];
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
@@ -98,16 +106,26 @@ function createRequestPlan({ requestId, goal, projectIds = [], tickets = [], pro
     const ticketId = requireId(ticket.ticket_id, "Ticket id");
     const ticketGoal = String(ticket.goal || "").trim();
     if (!ticketGoal) throw new Error(`Ticket goal is required: ${ticketId}`);
+    const acceptance = normalizeStringArray(ticket.acceptance_criteria, "Ticket acceptance_criteria");
+    const steps = normalizeStringArray(ticket.implementation_steps, "Ticket implementation_steps");
+    const tests = normalizeTestPlan(ticket.test_plan);
     return {
       ticket_id: ticketId,
       project_id: projectId,
+      priority: normalizePriority(ticket.priority),
+      ...(ticket.source ? {
+        source: normalizeJiraSource(ticket.source),
+        planning_status: steps.length > 0 && acceptance.length > 0
+          && TEST_PLAN_SECTIONS.some((section) => tests[section].length > 0)
+          ? "READY" : "NEEDS_PLAN"
+      } : {}),
       goal: ticketGoal,
       scope: Array.isArray(ticket.scope) ? ticket.scope.map(String) : [ticketGoal],
       exclusions: Array.isArray(ticket.exclusions) ? ticket.exclusions.map(String) : [],
       context_summary: String(ticket.context_summary || "").trim(),
-      acceptance_criteria: normalizeStringArray(ticket.acceptance_criteria, "Ticket acceptance_criteria", [ticketGoal]),
-      implementation_steps: normalizeStringArray(ticket.implementation_steps, "Ticket implementation_steps", [ticketGoal]),
-      test_plan: normalizeTestPlan(ticket.test_plan),
+      acceptance_criteria: acceptance.length ? acceptance : (ticket.source ? [] : [ticketGoal]),
+      implementation_steps: steps.length ? steps : (ticket.source ? [] : [ticketGoal]),
+      test_plan: tests,
       depends_on: Array.isArray(ticket.depends_on) ? ticket.depends_on.map((value) => requireId(value, "Dependency id")) : [],
       retry_policy: normalizeRetryPolicy(ticket.retry_policy),
       verification: Array.isArray(ticket.verification) && ticket.verification.length > 0
@@ -153,6 +171,9 @@ function validateRequestPlan(plan) {
 function approveRequestPlan(plan, now = new Date().toISOString()) {
   validateRequestPlan(plan);
   if (plan.status !== "DRAFT") throw new Error("Only a DRAFT request plan can be approved");
+  if (plan.tickets.some((ticket) => ticket.source?.kind === "jira" && ticket.planning_status !== "READY")) {
+    throw new Error("Imported Jira tickets require explicit acceptance criteria, implementation steps and a test plan before approval");
+  }
   const approved = { ...plan, status: "APPROVED", approved_at: now };
   approved.content_fingerprint = planFingerprint(approved);
   return approved;
@@ -172,6 +193,8 @@ function requireRequestReady(plan, profiles) {
 }
 
 module.exports = {
+  DEFAULT_RETRY_POLICY,
+  normalizePriority,
   approveRequestPlan,
   createRequestPlan,
   normalizeTestPlan,

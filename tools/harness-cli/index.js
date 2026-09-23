@@ -12,8 +12,15 @@ const { createRequestCommand } = require("./request-command");
 const { createExecutionCommand } = require("./execution-command");
 const { createControlPlaneCommands } = require("./control-plane-command");
 const { createDeploymentCommand } = require("./deployment-ledger");
+const { appendHistory, createHistoryCommand, withHistory } = require("./work-history");
+const { createAtlassianCommand } = require("./atlassian-command");
+const { createAccountUsage } = require("./provider-account-usage");
+const { checkProviders } = require("./provider-connection");
+const { createFollowupCommand } = require("./operations-followup");
 const { createStateTransitionNotifier } = require("./transition-notifier");
+const { createProviderUsageService } = require("./provider-usage");
 const { createAgentRunnerCommand } = require("./agent-runner");
+const { createPublicationHook } = require("./operations-publish");
 const { repositoryContentFingerprint: calculateRepositoryContentFingerprint } = require("./content-fingerprint");
 const { runAutonomySoak } = require("./autonomy-utils");
 const { createCleanupManifest, findGeneratedPaths, isCleanupManifestValid } = require("./cleanup-utils");
@@ -460,6 +467,7 @@ const controlPlane = createControlPlaneCommands({
   log
 });
 const commandRunner = createAgentRunnerCommand({
+  onProgress: id => publishManagedFollowups("runner", ["run", id]),
   root: ROOT,
   parseArgs,
   invokeAgent: (prompt) => commandRunAgent(["--type", "code", "--role", "implementer", prompt]),
@@ -471,6 +479,17 @@ const commandRunner = createAgentRunnerCommand({
   log
 });
 const commandDeployment = createDeploymentCommand({ root: ROOT, parseArgs, runGit: runExternalGit, log });
+const commandHistory = createHistoryCommand({ root: ROOT, parseArgs, log,
+  reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) });
+const commandAtlassian = createAtlassianCommand({ root: ROOT, parseArgs, log,
+  reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) });
+const commandOperations = createFollowupCommand({ root: ROOT, parseArgs, log, atlassian: commandAtlassian,
+  reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) });
+const quietAtlassian = createAtlassianCommand({ root: ROOT, parseArgs, log: () => {},
+  reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) });
+const publishManagedFollowups = createPublicationHook({ parseArgs, log,
+  flush: createFollowupCommand({ root: ROOT, parseArgs, log: () => {}, atlassian: quietAtlassian,
+    reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) }) });
 const notifyStateTransition = createStateTransitionNotifier({
   root: ROOT,
   parseArgs,
@@ -497,6 +516,8 @@ function ensureEnvLocal() {
 function isPlaceholder(value) {
   return !value || value.startsWith("your_") || value === "sk-..." || value === "sk-ant-..." || value === "AIza...";
 }
+
+const providerUsage = createProviderUsageService({ root: ROOT, env: process.env, isPlaceholder });
 
 function parseArgs(argv) {
   const positional = [];
@@ -641,7 +662,7 @@ async function commandCheck() {
   parseEnvFile();
 
   const mode = process.env.HARNESS_AGENT_MODE || "interactive";
-  const provider = process.env.AI_PROVIDER || "openai";
+  const provider = providerUsage.activeProvider();
   const config = loadConfig();
   const multiAgent = config.multiAgent;
 
@@ -871,6 +892,10 @@ function commandCompleteTask(args) {
       }
     }
   }
+
+  appendHistory(ROOT, { project_id: "harness", ticket_id: name, kind: "COMPLETION_EVIDENCE",
+    status: options.force ? "FORCED" : "VERIFIED", timestamp: fullVerify.verified_at || start.started_at,
+    start, verification: fullVerify, forced: Boolean(options.force) });
 
   const worktreeRel = `.worktrees/${name}`;
   if (exists(worktreeRel)) {
@@ -2390,7 +2415,7 @@ async function commandRunAgent(args) {
   const role = options.role || inferRole(type);
   if (!VALID_ROLES.has(role)) fail(`Unsupported role: ${role}`);
 
-  const provider = process.env.AI_PROVIDER || "openai";
+  const provider = providerUsage.activeProvider();
   const model = selectModel(provider, type);
   const taskName = resolveTaskId({ strict: true });
   const rolePrompt = readText(`prompts/system/roles/${role}.md`);
@@ -2412,9 +2437,10 @@ async function commandRunAgent(args) {
   log(`   Log      : ${logRel}`);
 
   let text = "";
+  let responseJson = {};
   if (provider === "openai") {
     if (isPlaceholder(process.env.OPENAI_API_KEY)) fail("OPENAI_API_KEY is missing or placeholder");
-    const json = await postJson("https://api.openai.com/v1/chat/completions", {
+    responseJson = await postJson("https://api.openai.com/v1/chat/completions", {
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
     }, {
       model,
@@ -2423,10 +2449,10 @@ async function commandRunAgent(args) {
         { role: "user", content: prompt },
       ],
     });
-    text = json.choices?.[0]?.message?.content || "";
+    text = responseJson.choices?.[0]?.message?.content || "";
   } else if (provider === "anthropic") {
     if (isPlaceholder(process.env.ANTHROPIC_API_KEY)) fail("ANTHROPIC_API_KEY is missing or placeholder");
-    const json = await postJson("https://api.anthropic.com/v1/messages", {
+    responseJson = await postJson("https://api.anthropic.com/v1/messages", {
       "x-api-key": process.env.ANTHROPIC_API_KEY,
       "anthropic-version": "2023-06-01",
     }, {
@@ -2435,15 +2461,21 @@ async function commandRunAgent(args) {
       system: systemPrompt,
       messages: [{ role: "user", content: prompt }],
     });
-    text = json.content?.[0]?.text || "";
+    text = responseJson.content?.[0]?.text || "";
   } else if (provider === "gemini") {
     if (isPlaceholder(process.env.GEMINI_API_KEY)) fail("GEMINI_API_KEY is missing or placeholder");
-    const json = await postJson(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`, {}, {
+    responseJson = await postJson(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { "x-goog-api-key": process.env.GEMINI_API_KEY }, {
       contents: [{ parts: [{ text: `${systemPrompt}\n\n---\n\n${prompt}` }] }],
     });
-    text = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    text = responseJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
   } else {
     fail(`Unsupported provider: ${provider}`);
+  }
+
+  try {
+    providerUsage.record(provider, model, responseJson);
+  } catch (error) {
+    log(`[WARN] Provider usage could not be recorded: ${error.message}`);
   }
 
   log("─────────────────────────────────────────────────────────");
@@ -2464,6 +2496,50 @@ async function commandRunAgent(args) {
   return text;
 }
 
+function commandProvider(args) {
+  parseEnvFile();
+  const { positional, options } = parseArgs(args);
+  const action = positional[0] || "status";
+
+  if (action === "check") {
+    return checkProviders({ provider: options.provider, isPlaceholder })
+      .then(report => { log(JSON.stringify(report, null, 2)); return report; });
+  }
+
+  if (action === "account-usage") {
+    return createAccountUsage({ root: ROOT })({ from: options.from, to: options.to, provider: options.provider, refresh: Boolean(options.refresh) })
+      .then(report => { log(JSON.stringify(report, null, 2)); return report; });
+  }
+
+  if (action === "use") {
+    const provider = positional[1];
+    if (!provider) fail("Usage: provider use <openai|anthropic|gemini>");
+    providerUsage.use(provider);
+    if (!options.json) log(`Active provider changed to ${provider}.`);
+  } else if (!["status", "list", "usage"].includes(action)) {
+    fail("Usage: provider <status|list|usage|use|check|account-usage> [provider] [--provider openai|anthropic|gemini] [--json]");
+  }
+
+  const report = providerUsage.status();
+  if (options.json) {
+    log(JSON.stringify(report, null, 2));
+    return report;
+  }
+
+  log(`[Provider] ${report.month} usage`);
+  log(`Active: ${report.active_provider}`);
+  for (const item of report.providers) {
+    const marker = item.active ? "*" : " ";
+    const configured = item.configured ? "configured" : "missing-key";
+    const remaining = item.remaining_tokens === null
+      ? "unknown"
+      : `${item.remaining_tokens.toLocaleString()} (${item.remaining_percent}%)`;
+    log(`${marker} ${item.provider.padEnd(10)} ${configured.padEnd(12)} used=${item.observed_usage.total_tokens.toLocaleString()} remaining=${remaining}`);
+  }
+  log("Remote account remaining is unknown without provider-specific admin billing credentials.");
+  return report;
+}
+
 function usage() {
   log(`Harness CLI
 
@@ -2472,8 +2548,10 @@ Usage:
   node tools/harness-cli/index.js bootstrap <request|approve|apply|status> <id> [--path <project-root>] [--summary <text>] [--message <commit-message>]
   node tools/harness-cli/index.js project <add|list|show|check|context|onboard|profile|remove> [id] [--path <git-root>] [--bundle] [--approve] [--json]
   node tools/harness-cli/index.js request <create|revise|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]
+  node tools/harness-cli/index.js request import-jira <id> --project <id> --issues <KEY-1,KEY-2>
+  node tools/harness-cli/index.js request priority <id> --ticket <id> --value <P0|P1|P2|P3>
   node tools/harness-cli/index.js execution <prepare|advance|review-ready|status> <request-id>
-  node tools/harness-cli/index.js runner <run|reconcile|status> <request-id> [--ticket <ticket-id>] [--max-attempts N] [--max-tickets N]
+  node tools/harness-cli/index.js runner <run|reconcile|status|notify> <request-id> [--ticket <ticket-id>] [--max-attempts N] [--max-tickets N]
   node tools/harness-cli/index.js release request <request-id> [--ticket <id>] [--approval <id>] --summary "..." [--operation record|commit|push|merge]
   node tools/harness-cli/index.js release <approve|apply|consume> <request-id> --fingerprint <sha256>
   node tools/harness-cli/index.js release status <request-id>
@@ -2482,10 +2560,25 @@ Usage:
   node tools/harness-cli/index.js evidence export [--format json]
   node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
   node tools/harness-cli/index.js dashboard
+  node tools/harness-cli/index.js history <list|search|export|refresh|review|status> [--project id] [--query text] [--from ISO --to ISO]
+  node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|status>
+  node tools/harness-cli/index.js atlassian connect --site https://your-site.atlassian.net [--cloud-id UUID] [--transport mcp|rest]
+  node tools/harness-cli/index.js atlassian mcp-tools
+  node tools/harness-cli/index.js atlassian discover [--jira-project KEY] [--space-id ID]
+  node tools/harness-cli/index.js atlassian link <request-id> --ticket <ticket-id>
+  node tools/harness-cli/index.js atlassian workflow --project ID --running ID --blocked ID --review-ready ID --completed ID
+  node tools/harness-cli/index.js atlassian consent <preview|grant|status|revoke> --project ID [--approve SCOPE_DIGEST]
+  node tools/harness-cli/index.js operations flush <--request ID|--project ID>
+  node tools/harness-cli/index.js operations <audit|repair|prepare ID|annotate ID --file JSON> [--project ID]
+  node tools/harness-cli/index.js atlassian map --project ID --jira-project KEY --issue-type ID --space-id ID [--parent-id ID] [--context-pages ID,ID] [--priority-map ID:P0,ID:P1,ID:P2,ID:P3]
+  node tools/harness-cli/index.js provider check [--provider openai|anthropic|gemini]
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name>
   node tools/harness-cli/index.js verify [--quick|--full] [--offline] [--diagnose] [--auto-fix]
   node tools/harness-cli/index.js run-agent [--type type] [--role role] "prompt"
+  node tools/harness-cli/index.js provider <status|list|usage> [--json]
+  node tools/harness-cli/index.js provider use <openai|anthropic|gemini> [--json]
+  node tools/harness-cli/index.js provider account-usage [--provider openai|anthropic|gemini] [--from YYYY-MM-DD --to YYYY-MM-DD] [--refresh]
   node tools/harness-cli/index.js complete-task <name> [--force]
   node tools/harness-cli/index.js scan-drift
   node tools/harness-cli/index.js recover
@@ -2585,10 +2678,14 @@ async function main(argv = process.argv.slice(2)) {
     evidence: controlPlane.evidence,
     deployment: commandDeployment,
     dashboard: controlPlane.dashboard,
+    history: commandHistory,
+    atlassian: commandAtlassian,
+    operations: commandOperations,
     "start-ticket": commandStartTicket,
     "complete-task": commandCompleteTask,
     verify: commandVerify,
     "run-agent": commandRunAgent,
+    provider: commandProvider,
     "scan-drift": commandScanDrift,
     recover: commandRecover,
     autonomy: commandAutonomy,
@@ -2605,7 +2702,12 @@ async function main(argv = process.argv.slice(2)) {
       log(pkg.version || "unknown");
     }
   };
-  const handled = await dispatchCommand(command, args, handlers, notifyStateTransition);
+  for (const name of ["request", "execution", "runner", "release", "deployment", "start-ticket", "complete-task", "verify"]) {
+    handlers[name] = withHistory(ROOT, name, handlers[name]);
+  }
+  let handled;
+  try { handled = await dispatchCommand(command, args, handlers, notifyStateTransition); }
+  finally { if (handled || ["runner", "execution"].includes(command)) await publishManagedFollowups(command, args); }
   if (!handled) {
     usage();
     fail(`Unknown command: ${command}`);

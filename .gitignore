@@ -40,3 +40,4 @@ observability/metrics/*.json
 !observability/metrics/.gitkeep
 observability/autonomy/*.json
 observability/orchestration/
+observability/provider-usage/

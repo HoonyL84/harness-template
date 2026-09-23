@@ -52,6 +52,122 @@ function fixture({ approved = true, retryPolicy } = {}) {
   return { root, state };
 }
 
+function runnerFor(root, overrides = {}) {
+  return createAgentRunnerCommand({ root, parseArgs,
+    invokeAgent: async () => "diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1 +1 @@\n-old\n+new\n",
+    notify: async () => ({ sent: 1 }), reviewFingerprint: () => "baseline",
+    runCommand: () => ({ status: 0 }), runGit: () => ({ status: 0 }),
+    tokenizeCommand: value => value.split(" "), log: () => {}, ...overrides });
+}
+
+test("runner records all three attempts before effects and emits one exhausted outcome", async () => {
+  const { root } = fixture();
+  const file = path.join(root, ".harness", "local", "executions", "work.json");
+  let calls = 0; const notifications = [];
+  const command = runnerFor(root, {
+    invokeAgent: async () => {
+      calls++;
+      const current = JSON.parse(fs.readFileSync(file, "utf8")).tickets[0];
+      assert.equal(current.runner.attempts, calls);
+      assert.equal(current.runner.history.at(-1).status, "STARTED");
+      throw new Error(`failure ${calls}`);
+    }, notify: async (...args) => { notifications.push(args); return { sent: 1 }; }
+  });
+  const result = await command(["run", "work"]);
+  assert.equal(calls, 3);
+  assert.equal(result.tickets[0].runner.history.length, 3);
+  assert.equal(result.tickets[0].status, "BLOCKED");
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0][1], /3\/3 attempts/);
+  await command(["notify", "work"]);
+  await command(["run", "work"]);
+  assert.equal(calls, 3); assert.equal(notifications.length, 1);
+});
+
+test("runner retains intermediate failure and retries notifications without rerunning code", async () => {
+  const { root } = fixture();
+  let calls = 0, deliveries = 0;
+  const command = runnerFor(root, {
+    invokeAgent: async () => {
+      if (++calls === 1) throw new Error("temporary failure");
+      return "diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n";
+    }, notify: async () => { deliveries++; if (deliveries === 1) throw new Error("network unavailable"); return { sent: 1 }; }
+  });
+  const result = await command(["run", "work"]);
+  assert.equal(result.status, "REVIEW_READY");
+  assert.deepEqual(result.tickets[0].runner.history.map(item => item.status), ["FAILED", "SUCCEEDED"]);
+  assert.equal(deliveries, 1); assert.equal(calls, 2);
+  assert.equal(result.tickets[0].outcome_notification.status, "PENDING");
+  const delivered = await command(["notify", "work"]);
+  assert.equal(delivered.tickets[0].outcome_notification.status, "SENT");
+  await command(["notify", "work"]);
+  assert.equal(deliveries, 2); assert.equal(calls, 2);
+});
+
+test("runner stops immediately for permission, quota and protected-path failures", async () => {
+  for (const failure of [{ noRetry: true }, { code: "EPERM" }, { status: 401 }, { status: 403 }]) {
+    const { root } = fixture(); let calls = 0;
+    const command = runnerFor(root, { invokeAgent: async () => { calls++; throw Object.assign(new Error("blocked"), failure); } });
+    const result = await command(["run", "work"]);
+    assert.equal(calls, 1); assert.equal(result.status, "BLOCKED");
+  }
+  const { root } = fixture();
+  const command = runnerFor(root, { invokeAgent: async () => "diff --git a/.env b/.env\n",
+    runGit: () => { throw new Error("Must not apply protected patch"); } });
+  const result = await command(["run", "work"]);
+  assert.equal(result.tickets[0].runner.attempts, 1);
+  assert.match(result.tickets[0].error, /protected path/);
+});
+
+test("interrupted in-flight or unrecovered attempts stay charged and require inspection", async () => {
+  for (const status of ["STARTED", "FAILED"]) {
+    const { root, state } = fixture();
+    state.tickets[0].status = "RUNNING";
+    state.tickets[0].runner = { attempts: 1, lease_id: "old", lease_expires_at: "2000-01-01T00:00:00Z",
+      history: [{ attempt: 1, status }] };
+    fs.writeFileSync(path.join(root, ".harness", "local", "executions", "work.json"), JSON.stringify(state));
+    const command = runnerFor(root, { invokeAgent: async () => { throw new Error("Do not resume uncertain worktree"); } });
+    const result = await command(["reconcile", "work"]);
+    assert.equal(result.tickets[0].status, "BLOCKED");
+    assert.equal(result.tickets[0].runner.attempts, 1);
+    assert.match(result.tickets[0].error, /approve recovery/);
+  }
+});
+
+test("priority selects only dependency-ready tickets and is immutable in execution", async () => {
+  const { root } = fixture();
+  const local = path.join(root, ".harness", "local");
+  const profile = JSON.parse(fs.readFileSync(path.join(local, "profiles", "demo.json"), "utf8"));
+  const plan = approveRequestPlan(createRequestPlan({ requestId: "work", goal: "priority", profiles: { demo: profile }, tickets: [
+    { ticket_id: "low", project_id: "demo", goal: "low", priority: "P3" },
+    { ticket_id: "waiting", project_id: "demo", goal: "wait", priority: "P0", depends_on: ["low"] },
+    { ticket_id: "high", project_id: "demo", goal: "high", priority: "P1" }
+  ] }));
+  fs.writeFileSync(path.join(local, "requests", "work.json"), JSON.stringify(plan));
+  const state = buildExecutionState(plan, root);
+  for (const ticket of state.tickets) { ticket.status = "PREPARED"; fs.mkdirSync(ticket.worktree, { recursive: true }); }
+  const file = path.join(local, "executions", "work.json");
+  fs.writeFileSync(file, JSON.stringify(state));
+  const seen = [];
+  const command = runnerFor(root, { invokeAgent: async (_prompt, ticket) => { seen.push(ticket.ticket_id); return "diff --git a/src/a.js b/src/a.js\n"; } });
+  await command(["run", "work", "--max-tickets", "1"]);
+  assert.deepEqual(seen, ["high"]);
+  const modified = JSON.parse(fs.readFileSync(file, "utf8"));
+  delete modified.tickets[0].priority;
+  fs.writeFileSync(file, JSON.stringify(modified));
+  await assert.rejects(command(["run", "work"]), /priority changed/);
+});
+
+test("expired lease prevents a late provider response from applying its patch", async () => {
+  const { root } = fixture(); let time = 0, gitCalls = 0;
+  const command = runnerFor(root, { now: () => time,
+    invokeAgent: async () => { time = 31 * 60 * 1000; return "diff --git a/src/a.js b/src/a.js\n"; },
+    runGit: () => { gitCalls++; return { status: 0 }; } });
+  const result = await command(["run", "work"]);
+  assert.equal(gitCalls, 0); assert.equal(result.status, "BLOCKED");
+  assert.match(result.tickets[0].error, /lease expired/);
+});
+
 test("runner applies an approved patch, verifies it, and stops at REVIEW_READY", async () => {
   const { root } = fixture();
   let fingerprint = "baseline";
