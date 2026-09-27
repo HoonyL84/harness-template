@@ -1,16 +1,16 @@
 # 개인 하네스 운영 가이드
 
-> 2026-09-20 변경: Atlassian은 **MCP 우선, REST는 명시적 선택**이다. 먼저 [MCP 설정과 역할 분리](ATLASSIAN_MCP.md)를 읽는다. 아래 기존 REST 예시를 그대로 사용하려면 연결 설정에 `transport: "rest"`가 필요하다. 실제 MCP 연결/매핑은 아직 모의 검증 범위다.
+> 2026-09-20 변경: Atlassian은 **MCP 우선, REST는 명시적 선택**이다. 먼저 [MCP 설정과 역할 분리](ATLASSIAN_MCP.md)를 읽는다. 아래 기존 REST 예시를 그대로 사용하려면 연결 설정에 `transport: "rest"`가 필요하다. 개인 테스트 계정의 제한된 합성 시나리오는 검증했지만 전체 운영 흐름은 별도다.
 
-상태: 2026-09-18, 단계별 구현 중. 이 문서는 현재 구현된 명령을 안내한다.
-전체 로드맵 완료나 실제 Atlassian 계정 연결 완료를 뜻하지 않는다.
+상태: 2026-09-27, 단계별 구현 중. 이 문서는 현재 구현된 명령을 안내한다.
+개인 테스트 계정 연결이 전체 로드맵이나 실계정 운영 흐름 완료를 뜻하지 않는다.
 
 ## 1. 지금 가능한 범위
 
 | 항목 | 현재 상태 |
 | --- | --- |
 | 프로젝트 등록, 격리 worktree, 계획/Git 승인 | 기존 구현 |
-| Jira 이슈 읽기 -> 로컬 DRAFT | 구현, 모의 API 검증. 실제 계정 미검증 |
+| Jira 이슈 읽기 -> 로컬 DRAFT | 구현, 모의 API와 개인 테스트 계정의 제한된 읽기 검증. 전체 운영 흐름 미검증 |
 | Jira 제목/본문/중요도 변경 감지 | 승인/준비/검수 준비/API 실행/관리형 릴리스 경계에서 재조회 |
 | 로컬 중요도 설정 | DRAFT에서 P0/P1/P2/P3, 기본 P2 |
 | API runner 기본 최대 3회, 시도 이력, 결과 알림 대기열 | 구현. 기존에 승인한 명시적 한도는 보존 |
@@ -21,7 +21,7 @@
 | Jira 상태 변경 | 가능한 transition 조회 후 preview 승인으로 변경. 카드 이동에 따른 코드 자동 실행은 아님 |
 | 상태·결과 기록 연결 | 관리형 실행/검수 후 로컬 follow-up 자동 생성. audit/repair → prepare → 게시 승인 |
 | 로컬 티켓과 Jira 연결 | 게시 성공 후 link로 같은 DRAFT에 연결. 구현·테스트 계획 유지, 재승인 필수 |
-| Atlassian 연결 설정 | connect/check/discover/map. 로컬 저장 + 읽기 검증, 실제 계정 미검증 |
+| Atlassian 연결 설정 | connect/check/discover/map. 로컬 저장 + 읽기 검증. 개인 계정의 Jira/Confluence 읽기와 두 프로젝트 매핑 확인; 쓰기 권한은 별도 |
 | 3사 연결 진단 | OpenAI/Anthropic/Gemini 모델 목록 GET. 생성 호출 없이 인증 접근 확인 |
 | Gemini Cloud 조회 | 프로젝트 API 요청 수 조회. 토큰·잔액·비용은 별도이며 제공하지 않음 |
 | 카드 이동으로 자동 실행, 상시 원격 감시 | 지원하지 않음 |
@@ -247,7 +247,7 @@ node tools/harness-cli/index.js dashboard
 ## 9. 가이드 검증 현황
 
 이번 단계는 단위/모의 API 테스트로 승인 변경, 횟수 소진/보존, 알림 재전송, Jira 인증/응답 오류를 검증한다.
-실제 Atlassian 계정, 새로운 사용자의 전체 문서 재현, macOS/Linux 실계정 운영은 미검증이다.
+개인 테스트 계정의 제한된 합성 게시·조회와 Jira/Confluence 읽기는 확인했다. 새로운 사용자의 전체 문서 재현과 macOS/Linux 실계정 운영은 미검증이다.
 두 프로젝트의 승인, 실패 후 재시도, 검수, 이력 검색, 명시적 Confluence 게시를 임시 디렉터리/모의 어댑터로 검증했다. 실제 Git/모델/Atlassian을 모두 연결한 신규 환경 검증과는 구분한다.
 
 공식 참조: [Jira 인증](https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/), [Get issue API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/), [Scoped 토큰 endpoint](https://support.atlassian.com/confluence/kb/scoped-api-tokens-in-confluence-cloud/).
@@ -530,8 +530,9 @@ prepare는 Jira 현재 상태/가능한 transition 등을 읽고 기존 게시 o
 
 네트워크 실패는 코드를 다시 개발할 이유가 아니다. follow-up만 재처리하고 runner의 시도 수는 그대로 유지한다.
 
-### 14.5 실계정 리허설 (아직 미실행)
+### 14.5 전체 실계정 운영 리허설 (미완료)
 
+2026-09-21 개인 테스트 계정에서 합성 티켓·문서 생성, 조회, 상태 전이와 관리형 응답 보정을 검증했다. 이는 아래의 전체 요청-실행-검수-결과 게시 절차를 완료했다는 뜻이 아니다.
 개인 테스트 프로젝트/Confluence 부모 페이지/Telegram 수신 대상을 지정하고 회사 자료 업로드 정책을 확인한다. 실제 키는 로컬에만 둔다.
 작은 티켓 하나를 create → 게시 승인/sync → link → 계획 승인 → prepare/run → 알림 확인 → follow-up 게시 승인 → 사용자 검수 → 완료 상태 게시까지 진행한다. Jira 화면, Confluence 페이지, Telegram 수신을 각각 확인하여 기록한다. Git 작업은 승인하지 않았다면 실행하지 않는다.
 다른 OS·실제 모델 성능·새 사용자의 가이드 재현 및 업무 시간 절감률은 별도 측정 대상이다.

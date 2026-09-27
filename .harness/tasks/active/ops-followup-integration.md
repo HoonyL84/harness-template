@@ -32,3 +32,13 @@
 - atlassian link preserves local plans; workflow discovery/configuration validates review vs Done category.
 - Sixteen contract scenarios passed, including scoped recording, revocation, remote workflow changes, stale payloads, unknown writes, read-only isolation and runner integration. Full offline verification is recorded separately in observability/metrics/ops-followup-integration.verify.json.
 - Guide section 14 documents the complete flow and remaining live-account/other-OS validation. No actual account scope was granted. The user explicitly requested a mocked rehearsal instead.
+
+## Live contract correction (2026-09-21)
+- User authorized fixing live MCP defects and scoped synthetic revalidation. No Git release approval.
+- Normalize Confluence creation/content/ancestor evidence; compare only generated ticket JSON across ADF/Markdown; resolve transitions from project/work-type evidence and recheck before/after writes.
+- Verification: sanitized real-shape fixtures, negative evidence, existing regressions, Full offline verify, managed live reconciliation/create-link/state checks. Never replace an uncertain receipt with guessed success.
+
+## Release review (2026-09-27)
+- The earlier no-release-approval notes describe the authorization at the time of implementation. The user now explicitly requests completing the outstanding release checks, merging to main, and aligning the IntelliJ checkout with main.
+- Scope of this release: the live MCP contract correction, its tests, and accurate documentation. Full operational account rehearsal and AX time measurement remain separate, unverified work; this release does not mark those criteria complete.
+- Before merging: Full offline verification, clean diff review, and GitHub cross-platform/security checks must pass.

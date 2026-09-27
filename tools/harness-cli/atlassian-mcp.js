@@ -3,10 +3,11 @@
 // The hosted MCP endpoint owns Atlassian API details. Bindings come from its actual tool schemas.
 const ENDPOINT = "https://mcp.atlassian.com/v2/mcp?tools=all";
 const LIMIT = 256 * 1024;
+const { normalizeResponse, ticketDescriptionJson } = require("./atlassian-mcp-contracts");
 const READ_TOOLS = new Set(["atlassianUserInfo", "getAccessibleAtlassianResources", "getJiraIssue", "listJiraProjects",
   "listJiraProjectIssueTypesMetadata", "listJiraIssueTransitions", "listJiraStatuses", "getJiraCurrentUser",
   "searchJiraIssuesUsingJql", "getConfluenceContent", "listConfluenceContent", "listConfluenceSpaces", "getConfluenceSpace",
-  "searchConfluence", "getTeamworkGraphContext", "getTeamworkGraphObject", "search", "executeRead"]);
+  "getConfluenceContentAncestors", "searchConfluence", "getTeamworkGraphContext", "getTeamworkGraphObject", "search", "executeRead"]);
 const WRITE_TOOLS = { "jira.createIssue": "createJiraIssue", "jira.transitionIssue": "transitionJiraIssue", "confluence.createPage": "createConfluenceContent" };
 
 function transport(config) {
@@ -139,10 +140,14 @@ function createMcpClient({ env = process.env, fetchImpl = globalThis.fetch } = {
     if (payload ? WRITE_TOOLS[input.operation] !== binding.tool : !READ_TOOLS.has(binding.tool)) throw new Error("MCP tool is not allowed for this managed operation");
     catalog ||= await list();
     if (!catalog.some(t => t.name === binding.tool)) throw new Error("Configured MCP tool unavailable; inspect permissions and current catalog");
-    return { binding, call: { name: binding.tool, arguments: render(binding.arguments, input) } };
+    const args = render(binding.arguments, input);
+    if (input.operation === "jira.createIssue" && binding.tool === "createJiraIssue" && ticketDescriptionJson(payload?.fields?.description)
+        && args.description === payload.fields.description.content[0].content[0].text) {
+      args.description = "```json\n" + args.description + "\n```";
+    }
+    return { binding, input, call: { name: binding.tool, arguments: args } };
   };
-  return { list, prepare, async send(config, service, endpoint, payload) {
-    const { binding, call } = await prepare(config, service, endpoint, payload);
+  const invoke = async call => {
     const result = await rpc("tools/call", call);
     if (result.isError) throw new Error("MCP tool reported an error; reconcile writes before retrying");
     let data = result.structuredContent;
@@ -151,7 +156,17 @@ function createMcpClient({ env = process.env, fetchImpl = globalThis.fetch } = {
       if (text?.length !== 1) throw new Error("MCP result needs structured JSON, not a narrative success claim");
       try { data = JSON.parse(text[0].text); } catch { throw new Error("MCP result needs structured JSON"); }
     }
-    return binding.result === undefined ? data : render(binding.result, data);
+    return data;
+  };
+  return { list, prepare, async send(config, service, endpoint, payload) {
+    const { binding, input, call } = await prepare(config, service, endpoint, payload);
+    const raw = await invoke(call);
+    const mapped = binding.result === undefined ? raw : render(binding.result, raw);
+    const read = async (name, args) => {
+      if (!READ_TOOLS.has(name) || !catalog.some(t => t.name === name)) throw new Error("Required MCP evidence tool unavailable");
+      return invoke({ name, arguments: args });
+    };
+    return normalizeResponse({ raw, mapped, tool: binding.tool, input, call, read });
   } };
 }
 

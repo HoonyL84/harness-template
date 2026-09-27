@@ -53,7 +53,7 @@ npm run harness -- project context sample --bundle
 | --- | --- |
 | 대화형 AI | Codex, Claude Code 등에서 규칙 문서와 CLI를 함께 사용. 대화형 호스트의 로그인·토큰은 하네스 API 키와 별개 |
 | 모델 API | OpenAI, Anthropic, Gemini를 선택적으로 연결. 하네스가 관측한 토큰 사용량과 설정 예산을 조회할 수 있으나 계정 전체 잔액은 알 수 없음 |
-| Atlassian | Jira 이슈와 Confluence 문서의 조회·게시·상태 기록을 MCP 우선 방식으로 연결. REST는 명시적 호환 선택. 실제 계정별 도구 매핑은 확인이 필요하며 현재 테스트는 모의 서버 중심 |
+| Atlassian | Jira 이슈와 Confluence 문서의 조회·게시·상태 기록을 MCP 우선 방식으로 연결. REST는 명시적 호환 선택. 모의 서버와 개인 테스트 계정의 제한된 합성 시나리오를 검증했으며, 계정별 도구 매핑은 확인이 필요 |
 | 알림 | 설정된 Telegram 또는 Slack으로 상태 변화와 실패·검수 대기 알림 |
 | 멀티에이전트 | 역할 분리와 격리 실행은 기본 비활성화된 선택형 실험 기능 |
 | L4.5/L5 | 저위험 자동 수정과 예산 제한 자율 루프는 opt-in. 고위험 변경 및 Git 반영은 승인 경계를 유지 |
@@ -69,7 +69,7 @@ npm run lint
 npm run harness -- verify --full
 ```
 
-Full 검증은 완료 게이트이며 Quick 검증은 개발 중 피드백용입니다. 기능 테스트와 모의 연동은 실제 프로젝트에서의 코드 품질이나 외부 서비스 실계정 연결 성공을 대신하지 않습니다. 현재 실계정 Atlassian 게시, 공급자 관리자 API, 다른 운영체제의 최신 변경분 검증은 별도 리허설이 필요합니다. 검증 수준은 [운영 시나리오 기록](docs/project/PERSONAL_OPERATIONS_VALIDATION.md)에서 구분합니다.
+Full 검증은 완료 게이트이며 Quick 검증은 개발 중 피드백용입니다. 기능 테스트와 모의 연동은 실제 프로젝트에서의 코드 품질을 보장하지 않습니다. 개인 테스트 계정의 제한된 합성 게시·조회는 확인했지만, 전체 실계정 운영 흐름과 공급자 관리자 API는 별도 검증이 필요합니다. 검증 수준은 [운영 시나리오 기록](docs/project/PERSONAL_OPERATIONS_VALIDATION.md)에서 구분합니다.
 
 ## 문서
 
