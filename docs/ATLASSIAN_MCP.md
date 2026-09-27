@@ -79,6 +79,17 @@ REST는 호환용 명시적 선택이다. transport가 없는 오래된 설정�
 
 ## 검증 범위
 
-모의 MCP 서버에서 initialize → tools/list → tools/call, JSON/SSE, 세션 헤더, Jira 입력 재조회, 승인형 티켓/상태/결과 기록, 오류·응답 유실·재진입을 검증한다. **실제 계정 연결·실제 도구 인자/응답 매핑 검증은 아직 수행하지 않았다.** 모의 서버의 예제 스키마를 실서버 스키마라고 주장하지 않는다.
+모의 MCP 서버에서 initialize → tools/list → tools/call, JSON/SSE, 세션 헤더, Jira 입력 재조회, 승인형 티켓/상태/결과 기록, 오류·응답 유실·재진입을 검증한다. 2026-09-21 개인 테스트 계정에서 합성 문서/티켓의 실제 연결과 응답 계약을 검증했다. 모든 계정·권한·프로젝트의 운영 흐름 검증을 뜻하지 않는다. 모의 서버의 예제 스키마를 실서버 스키마라고 주장하지 않는다.
 
 공식 참고: [지원 도구](https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/), [API-token 인증](https://developer.atlassian.com/cloud/rovo-mcp/guides/configuring-authentication-via-api-token/), [MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports).
+
+## 실계정 v2 응답 계약 보정 (2026-09-21)
+
+- 공식 도구의 `data` envelope만 인식한다. 기존 사용자 정의 응답 매핑과 REST 경로는 유지한다.
+- `createConfluenceContent`의 `data.content`를 읽고 페이지 ID, 타입, 공간, 부모, 제목이 승인 payload와 일치하는지 검사한다.
+- `getConfluenceContent`의 `metadata.version`과 `body.format/value`를 컨텍스트 형식으로 변환한다. `getConfluenceContentAncestors`를 읽어 실제 바로 위 부모를 확인한다. 필요한 도구/증거가 없으면 추정하지 않고 실패한다.
+- 하네스 생성 티켓의 단일 JSON 텍스트는 Markdown JSON 코드 블록으로 보내고, ADF와 읽기 응답 JSON을 구조적으로 비교한다. 임의 rich text/HTML, 추가 설명, 변경된 값은 동등하다고 인정하지 않는다. 소스 fingerprint 검사와 DRAFT 승인 경계는 유지된다.
+- 목적 상태 ID가 없는 전이는 해당 이슈의 실제 프로젝트/작업유형에 속한 상태 목록에서 이름·범주가 유일하게 일치할 때만 해석한다. 실행 직전에 전이를 다시 확인하고 실행 후 실제 이슈 상태를 재조회한다.
+- 복구는 기존 connection/marker/공간/부모 검사를 유지한다. 연결 설정을 고쳐 옛 승인을 재사용하거나 outbox의 성공 상태를 수동 조작하지 않는다.
+- 새로운 익명화 계약 테스트는 생성/연결/상태 전이/응답 유실 복구, 본문 변조, 중복/오래된 승인, 잘못된 부모 및 모호한 상태를 검증한다. 실계정 증거는 `.harness/local/mcp-rehearsal/`에만 보관하고 저장소에 개인 ID나 자격증명을 넣지 않는다.
+- 회사 자료는 비공개 공간이어도 회사 정책 승인 없이 개인 Atlassian에 복제하지 않는다.

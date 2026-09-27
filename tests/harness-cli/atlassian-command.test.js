@@ -7,6 +7,7 @@ const os = require("node:os");
 const { writeJsonAtomic } = require("../../tools/harness-cli/control-plane-state");
 const { createAtlassianCommand } = require("../../tools/harness-cli/atlassian-command");
 const { requirePublishedDraftImported } = require("../../tools/harness-cli/jira-input");
+const { createRequestPlan } = require("../../tools/harness-cli/request-plan");
 const parseArgs = args => {
   const positional = [], options = {};
   for (let i = 0; i < args.length; i++) args[i].startsWith("--") ? options[args[i].slice(2)] = args[++i] : positional.push(args[i]);
@@ -62,6 +63,25 @@ test("lost POST response is not retried and matching remote record can be reconc
   await assert.rejects(f.command(["reconcile", entry.id, "--remote-id", "123"]), /does not match/);
   f.setFetch(async () => ({ id: "123", fields: { project: { key: "DEMO" }, labels: [entry.marker] } }));
   assert.equal((await f.command(["reconcile", entry.id, "--remote-id", "123"])).entries[0].status, "SYNCED");
+});
+test("link accepts Jira's default priority when publication did not request a mapped priority", async t => {
+  const f = setup(t);
+  const profile = { status: "APPROVED", content_fingerprint: "profile-fingerprint", verify_commands: ["npm test"] };
+  const plan = createRequestPlan({ requestId: "work", goal: "Test feature", profiles: { demo: profile }, tickets: [{
+    project_id: "demo", ticket_id: "feature", goal: "Test feature", priority: "P3",
+    acceptance_criteria: ["Ticket is linked"], implementation_steps: ["Publish ticket"], test_plan: { manual: ["Inspect Jira"] }
+  }] });
+  writeJsonAtomic(path.join(f.local, "requests", "work.json"), plan);
+  const entry = await f.command(["queue-ticket", "work", "--ticket", "feature"]);
+  const preview = await f.command(["preview"]);
+  f.setFetch(async (url, init) => {
+    if (init.method === "POST") return { id: "123", key: "DEMO-1" };
+    return { id: "123", key: "DEMO-1", fields: { project: { key: "DEMO" }, summary: entry.payload.fields.summary,
+      description: entry.payload.fields.description, priority: { id: "3", name: "Medium" }, updated: "revision-a", labels: [entry.marker] } };
+  });
+  await f.command(["sync", "--approve", preview.approval_digest]);
+  const linked = await f.command(["link", "work", "--ticket", "feature"]);
+  assert.equal(linked.tickets[0].source.issue_key, "DEMO-1");
 });
 test("destination changes, offline mode and modified preview block all writes", async t => {
   const f = setup(t);

@@ -12,6 +12,7 @@ const { searchRemote, fetchProjectPages } = require("./atlassian-read");
 const { createConnectionCommand } = require("./atlassian-connection");
 const { consentCommand, assertConsentedEntry } = require("./atlassian-consent");
 const { ticketDraft, resultPayload } = require("./atlassian-payloads");
+const { publishedDescriptionMatches } = require("./atlassian-mcp-contracts");
 const { transport, connectionIdentity, matchesConnection, createMcpClient } = require("./atlassian-mcp");
 
 const hash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -133,9 +134,10 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
       if (entry.ticket_snapshot !== hash(ticket) || !matchesConnection(entry.connection, config)
           || entry.payload.fields.project.key !== config.jira_projects[ticket.project_id]) throw new Error("Local ticket or connection changed since publication; review a fresh plan");
       const issue = await send(config, "jira", `/rest/api/3/issue/${entry.remote_id}?fields=summary,description,priority,project,updated,labels`);
+      const requestedPriorityId = entry.payload.fields.priority?.id;
       if (String(issue.id) !== entry.remote_id || !issue.fields?.labels?.includes(entry.marker)
-          || issue.fields.summary !== entry.payload.fields.summary || hash(issue.fields.description) !== hash(entry.payload.fields.description)
-          || config.priority_map?.[issue.fields.priority?.id] !== ticket.priority) throw new Error("Published Jira content/priority changed; import and review rather than silently trusting the old plan");
+          || issue.fields.summary !== entry.payload.fields.summary || !publishedDescriptionMatches(issue.fields.description, entry.payload.fields.description)
+          || (requestedPriorityId && issue.fields.priority?.id !== requestedPriorityId)) throw new Error("Published Jira content/priority changed; import and review rather than silently trusting the old plan");
       const source = snapshot(config, issue, config.jira_projects[ticket.project_id]);
       const linked = updateJsonLocked(planFile, null, current => {
         if (current?.status !== "DRAFT" || current.content_fingerprint !== plan.content_fingerprint) throw new Error("Plan changed during link");
@@ -247,12 +249,14 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
             const current = await send(config, "jira", `/rest/api/3/issue/${item.transition.issue_id}?fields=project,status,updated`);
             if (current.fields?.project?.key !== item.transition.project_key || current.fields?.status?.id !== item.transition.from_status
               || current.fields?.updated !== item.transition.updated) throw Object.assign(new Error("Jira changed after preview"), { status: 409 });
-            if (scoped) {
+            if (scoped || transport(config) === "mcp") {
               const available = await send(config, "jira", `/rest/api/3/issue/${item.transition.issue_id}/transitions`);
               if (!available.transitions?.some(t => t.id === item.payload.transition.id && t.to?.id === item.transition.to_status)) throw Object.assign(new Error("Transition destination changed"), { status: 409 });
-              const destination = await send(config, "jira", `/rest/api/3/status/${item.transition.to_status}`);
-              const intent = readIntent(root, item.followup.id);
-              if (destination.id !== item.transition.to_status || !destination.statusCategory?.key || (intent.fact.status === "COMPLETED") !== ["done", "completed"].includes(destination.statusCategory.key)) throw Object.assign(new Error("Workflow category changed"), { status: 409 });
+              if (scoped) {
+                const destination = await send(config, "jira", `/rest/api/3/status/${item.transition.to_status}`);
+                const intent = readIntent(root, item.followup.id);
+                if (destination.id !== item.transition.to_status || !destination.statusCategory?.key || (intent.fact.status === "COMPLETED") !== ["done", "completed"].includes(destination.statusCategory.key)) throw Object.assign(new Error("Workflow category changed"), { status: 409 });
+              }
             }
           }
           try { assertFollowup(root, item.followup, readConnection(root), reviewFingerprint); }
@@ -264,7 +268,14 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
           }
           const result = await send(config, item.service, item.operation === "transition" ? `/rest/api/3/issue/${item.transition.issue_id}/transitions`
             : item.service === "jira" ? "/rest/api/3/issue" : "/api/v2/pages", item.payload);
-          if (item.operation === "transition") result.id = item.transition.issue_id;
+          if (item.operation === "transition") {
+            if (transport(config) === "mcp") {
+              const observed = await send(config, "jira", `/rest/api/3/issue/${item.transition.issue_id}?fields=project,status`);
+              if (observed.id !== item.transition.issue_id || observed.fields?.project?.key !== item.transition.project_key
+                  || observed.fields?.status?.id !== item.transition.to_status) throw new Error("Transition destination not confirmed");
+            }
+            result.id = item.transition.issue_id;
+          }
           if (!/^[0-9]+$/.test(result.id || "")) throw new Error("Missing remote id");
           update(current => { Object.assign(current.entries.find(e => e.id === item.id), { status: "SYNCED", remote_id: result.id,
             remote_key: item.service === "jira" ? result.key : null, synced_at: new Date(now()).toISOString() }); return current; });

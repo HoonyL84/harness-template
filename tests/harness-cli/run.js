@@ -40,3 +40,4 @@ require("./orchestration-state.test");
 require("./orchestration-utils.test");
 require("./verify-utils.test");
 require("./workflow-policy.test");
+require("./atlassian-mcp-contracts.test");
