@@ -61,7 +61,7 @@ node tools/harness-cli/index.js project onboard demo --approve
 ```
 
 기대 결과: `demo` 등록 및 APPROVED profile. 실패하면 프로젝트 경로/Git HEAD/테스트 명령을 확인한다.
-원본 프로젝트의 미커밋 작업을 버리거나 임의로 초기화하지 않는다.
+원본 프로젝트의 미커밋 작업을 버리거나 임의로 초기화하지 않는다. 승인된 프로필에 미커밋 변경이 있거나 준비 시점에 새 변경이 생겼다면 `execution prepare`는 worktree 생성 전에 `BLOCKED`로 멈춘다. 변경을 수동으로 정리한 뒤 현재 HEAD로 재온보딩하고 새 요청 계획을 승인한다(기존 승인 계획은 수정할 수 없다). 미커밋 내용을 조용히 제외한 채 실행하지 않는다.
 
 ## 3. 개인 Jira 연결
 
@@ -367,7 +367,7 @@ node tools/harness-cli/index.js history review --project demo --request demo-wor
 # 수정 요청이면 --result changes-requested
 ```
 
-현재 worktree의 지문이 달라지면 거부한다. 이 기록은 별도의 Git 승인/반영을 대신하지 않는다.
+현재 worktree의 지문이 달라지면 거부한다. 관리형 commit/push/merge에는 해당 티켓의 **최신** 검토가 `accepted`여야 한다. 승인 요청 뒤라도 `changes-requested`가 기록되면 이전 릴리스 승인은 실행할 수 없고, 재검토 수락과 새 승인 요청이 필요하다. 이 검토 기록은 별도의 Git 승인/반영을 대신하지 않는다.
 `.harness/local/history/ledger.json`에는 관리형 명령의 시작 의도와 성공/실패, 티켓/시도/검증/릴리스 근거를 보존한다.
 프로세스 강제 종료 시 STARTED가 남을 수 있다. `history refresh`는 원본 상태에서 누락 스냅샷을 복원하지만 실제 성공 여부를 추측해 STARTED를 성공으로 바꾸지 않는다.
 하네스를 거치지 않은 모든 외부 파일 수정/명령을 감시하는 도구는 아니다.

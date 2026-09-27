@@ -72,6 +72,7 @@ function dependencyReadiness(ticket, state) {
 
 function assertProjectSnapshot(profile, diagnosis) {
   if (profile.status !== "APPROVED") throw new Error(`Project profile is not approved: ${profile.project_id}`);
+  if (profile.git.dirty || diagnosis.dirty) throw new Error(`Original project worktree is dirty: ${profile.project_id}; resolve changes and repeat onboarding and request approval`);
   if (profile.git.head !== diagnosis.head) throw new Error(`Project HEAD changed after onboarding: ${profile.project_id}`);
   if (profile.git.worktree_fingerprint !== diagnosis.worktree_fingerprint) {
     throw new Error(`Project worktree changed after onboarding: ${profile.project_id}`);

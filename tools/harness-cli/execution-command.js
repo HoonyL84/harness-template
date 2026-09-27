@@ -44,6 +44,9 @@ function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand
     const profile = profiles[ticket.project_id];
     if (!profile) throw new Error(`Approved onboarding profile required: ${ticket.project_id}`);
     const diagnosis = inspectGitProject(project.path, runGit);
+    if (profile.git.dirty || diagnosis.dirty) {
+      throw new Error(`Original project worktree is dirty: ${ticket.project_id}; resolve changes and repeat onboarding and request approval`);
+    }
     for (const dependency of readiness.dependencies) {
       const dependencyProject = registry.projects[dependency.project_id];
       if (!dependencyProject) throw new Error(`Unknown dependency project: ${dependency.project_id}`);

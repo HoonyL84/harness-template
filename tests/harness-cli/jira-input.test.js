@@ -13,6 +13,7 @@ const { createControlPlaneCommands } = require("../../tools/harness-cli/control-
 const { buildExecutionState } = require("../../tools/harness-cli/project-execution");
 const { approveOnboardingProfile, createOnboardingProfile, writeOnboardingProfile } = require("../../tools/harness-cli/project-onboarding");
 const { emptyRegistry, writeRegistry } = require("../../tools/harness-cli/project-registry");
+const { appendHistory } = require("../../tools/harness-cli/work-history");
 
 function parseArgs(args) {
   const positional = [], options = {};
@@ -153,6 +154,7 @@ test("Jira import stays DRAFT until a detailed plan is provided and current inpu
   fs.mkdirSync(state.tickets[0].worktree, { recursive: true });
   fs.mkdirSync(path.join(f.local, "executions"), { recursive: true });
   fs.writeFileSync(path.join(f.local, "executions", "work.json"), JSON.stringify(state));
+  appendHistory(f.root, { kind: "USER_REVIEW", status: "accepted", request_id: "work", project_id: "demo", ticket_id: "jira-10001", fingerprint: "verified", reason: "Reviewed", timestamp: new Date().toISOString() });
   const control = createControlPlaneCommands({ root: f.root, parseArgs, ...f.options, log: () => {},
     reviewFingerprint: () => "verified", runGit: () => { throw new Error("Do not run Git"); } });
   const release = await control.release(["request", "work", "--summary", "Review implementation", "--operation", "commit", "--message", "feat: test"]);

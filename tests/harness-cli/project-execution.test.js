@@ -79,6 +79,8 @@ test("execution rejects stale onboarding snapshots", () => {
   assert.doesNotThrow(() => assertProjectSnapshot(profile, { head: "abc", worktree_fingerprint: "one" }));
   assert.throws(() => assertProjectSnapshot(profile, { head: "def", worktree_fingerprint: "one" }), /HEAD changed/);
   assert.throws(() => assertProjectSnapshot(profile, { head: "abc", worktree_fingerprint: "two" }), /worktree changed/);
+  assert.throws(() => assertProjectSnapshot({ ...profile, git: { ...profile.git, dirty: true } }, { head: "abc", worktree_fingerprint: "one", dirty: true }), /worktree is dirty/);
+  assert.throws(() => assertProjectSnapshot(profile, { head: "abc", worktree_fingerprint: "one", dirty: true }), /worktree is dirty/);
 });
 
 test("execution immutable fields remain bound to the approved request", () => {

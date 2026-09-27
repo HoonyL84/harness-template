@@ -12,6 +12,7 @@ const { createExecutionCommand } = require("../../tools/harness-cli/execution-co
 const { createOnboardingProfile, fingerprintProfile } = require("../../tools/harness-cli/project-onboarding");
 const { dependencyReadiness } = require("../../tools/harness-cli/project-execution");
 const { inspectGitProject } = require("../../tools/harness-cli/project-registry");
+const { createHistoryCommand } = require("../../tools/harness-cli/work-history");
 const { approveRequestPlan, createRequestPlan } = require("../../tools/harness-cli/request-plan");
 
 function parseArgs(args) {
@@ -50,6 +51,41 @@ test("dependency readiness waits for commits and rejects implicit same-project f
   assert.equal(fanIn.ready, false);
   assert.equal(fanIn.fan_in, true);
   assert.match(fanIn.reason, /integration ticket/);
+});
+
+test("execution refuses an approved dirty project without creating a worktree", (t) => {
+  if (!requireGit(t)) return;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dirty-central-"));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dirty-project-"));
+  assert.equal(runGit(["init", "-b", "main"], project).status, 0);
+  assert.equal(runGit(["config", "user.name", "Harness Test"], project).status, 0);
+  assert.equal(runGit(["config", "user.email", "harness@example.invalid"], project).status, 0);
+  fs.writeFileSync(path.join(project, "README.md"), "base\n");
+  assert.equal(runGit(["add", "README.md"], project).status, 0);
+  assert.equal(runGit(["commit", "-m", "initial"], project).status, 0);
+  fs.writeFileSync(path.join(project, "local-note.txt"), "uncommitted input\n");
+
+  const diagnosis = inspectGitProject(project, runGit);
+  const projectRecord = { id: "demo", name: "demo", ...diagnosis };
+  const profile = createOnboardingProfile(projectRecord, diagnosis, [], []);
+  profile.status = "APPROVED";
+  profile.content_fingerprint = fingerprintProfile(profile);
+  const plan = approveRequestPlan(createRequestPlan({
+    requestId: "dirty-work", goal: "Preserve local input", profiles: { demo: profile },
+    tickets: [{ ticket_id: "first", project_id: "demo", goal: "First", verification: ["verify"] }]
+  }));
+  const local = path.join(root, ".harness", "local");
+  fs.mkdirSync(path.join(local, "profiles"), { recursive: true });
+  fs.mkdirSync(path.join(local, "requests"), { recursive: true });
+  fs.writeFileSync(path.join(local, "projects.json"), JSON.stringify({ schema_version: "1.0", projects: { demo: projectRecord } }));
+  fs.writeFileSync(path.join(local, "profiles", "demo.json"), JSON.stringify(profile));
+  fs.writeFileSync(path.join(local, "requests", "dirty-work.json"), JSON.stringify(plan));
+  const execution = createExecutionCommand({ root, parseArgs, reviewFingerprint: () => "unused", runCommand: () => ({ status: 0 }), runGit, tokenizeCommand: (value) => [value], log: () => {} });
+  const state = execution(["prepare", "dirty-work"]);
+  assert.equal(state.tickets[0].status, "BLOCKED");
+  assert.match(state.tickets[0].error, /worktree is dirty/);
+  assert.equal(fs.existsSync(state.tickets[0].worktree), false);
+  assert.equal(fs.readFileSync(path.join(project, "local-note.txt"), "utf8"), "uncommitted input\n");
 });
 
 test("ticket-scoped commit advances a dependent worktree from the managed predecessor SHA", (t) => {
@@ -105,6 +141,7 @@ test("ticket-scoped commit advances a dependent worktree from the managed predec
   state = execution(["review-ready", "linear-work", "--ticket", "first"]);
   assert.equal(state.tickets.find((ticket) => ticket.ticket_id === "first").status, "REVIEW_READY");
   const control = createControlPlaneCommands({ root, parseArgs, notify: async () => ({ sent: 0 }), reviewFingerprint: fingerprint, runGit, log: () => {} });
+  createHistoryCommand({ root, parseArgs, reviewFingerprint: fingerprint, log: () => {} })(["review", "--project", "demo", "--request", "linear-work", "--ticket", "first", "--fingerprint", state.tickets[0].verification.content_fingerprint, "--result", "accepted", "--reason", "Reviewed dependent implementation"]);
   const pending = control.release(["request", "linear-work", "--ticket", "first", "--approval", "first-commit", "--summary", "reviewed", "--operation", "commit", "--message", "feat: first"]);
   control.release(["approve", "first-commit", "--fingerprint", pending.fingerprint]);
   control.release(["apply", "first-commit", "--fingerprint", pending.fingerprint]);

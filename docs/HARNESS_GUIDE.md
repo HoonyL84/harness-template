@@ -169,7 +169,10 @@ npm run harness -- runner reconcile ad-cache-work
 # 전체 상태와 BLOCKED/REVIEW_READY 알림 확인
 npm run harness -- dashboard
 
-# 모든 티켓이 REVIEW_READY인 경우에만 승인 요청 가능
+# 사용자 검토 수락은 Git 작업 승인과 별개. 실행 기록의 현재 지문을 사용
+npm run harness -- history review --project <project-id> --request ad-cache-work --ticket <ticket-id> --fingerprint <ticket-content-fingerprint> --result accepted --reason "diff와 검증 결과 확인"
+
+# 모든 티켓이 REVIEW_READY이고 최신 검토가 수락된 경우에만 관리형 Git 승인 요청 가능
 npm run harness -- release request ad-cache-work --approval ad-cache-commit --summary "diff, 테스트, 위험 검토 완료" --operation commit --message "feat: 광고 캐시 개선"
 npm run harness -- release approve ad-cache-commit --fingerprint <fingerprint>
 
@@ -243,8 +246,8 @@ git commit -m "chore(harness): user-auth 완료 기록"
 `request revise <id> --plan-file <json>`은 `DRAFT` 계획만 교체하며 새 fingerprint를 생성합니다. 승인된 계획은 수정할 수 없습니다. Runner의 `--max-attempts`는 승인 정책과 비교해 더 작은 값만 적용하므로 실행 시 상한을 우회해 늘릴 수 없습니다. 시도 횟수는 티켓 상태에 누적되고, 예산 소진 또는 동일 오류 반복 시 `BLOCKED`로 종료됩니다.
 `complete-task`와 L5 자율 실행 완료는 반드시 `verify --full`이 성공한 지문 상태에서만 허용됩니다.
 중앙 runner는 승인된 request와 onboarding profile에 결속된 PREPARED 티켓만 실행합니다. 프로젝트 문서는 `untrusted-project-input`으로 전달되며 중앙 정책, 승인, 도구 권한, 비밀 접근을 변경할 수 없습니다. 실패는 제한 재시도 뒤 `BLOCKED`, 성공은 실제 검증 결과와 콘텐츠 지문을 포함한 `REVIEW_READY`로 기록됩니다.
-`release apply`는 승인 요청에 고정된 Git 작업과 인자만 실행하는 일회성 게이트입니다. commit 뒤 push, push 뒤 merge처럼 단계가 바뀌면 새 `--approval` ID와 새 지문 승인이 필요합니다. `release consume`은 Git을 실행하지 않는 감사 기록 호환 명령이며, 사용자가 하네스 밖에서 직접 실행한 raw Git 명령을 운영체제 수준에서 차단하지는 않습니다.
-요청에 의존 관계가 있으면 최초 `execution prepare`는 독립 티켓만 준비하고 후속 티켓을 `WAITING_DEPENDENCY`로 둡니다. 선행 티켓을 `review-ready`로 검증한 뒤 `release request <request-id> --ticket <ticket-id> ...`로 해당 티켓만 승인·커밋하고 `execution advance <request-id>`를 실행하면, 같은 프로젝트의 후속 티켓은 기록된 선행 commit SHA를 기준으로 시작합니다. 교차 프로젝트 의존성은 관리 릴리스 commit의 존재만 완료 게이트로 확인하고 대상 프로젝트의 승인된 HEAD를 사용합니다. 같은 프로젝트의 fan-in은 자동 merge하지 않으므로 통합 순서와 검증을 담은 별도 티켓으로 명시해야 합니다.
+`release apply`는 승인 요청에 고정된 Git 작업과 인자만 실행하는 일회성 게이트입니다. 관리형 commit/push/merge는 해당 티켓의 최신 `history review --result accepted` 기록을 요구하며, 요청이나 승인 이후 `changes-requested`가 기록되면 실행을 차단합니다. 기존 승인 기록에 검토 결속 정보가 없으면 새 검토와 승인 요청이 필요합니다. commit 뒤 push, push 뒤 merge처럼 단계가 바뀌면 새 `--approval` ID와 새 지문 승인이 필요합니다. 같은 검토 결과는 내용이 그대로인 관리형 commit 이후 push/merge에 사용할 수 있습니다. `release consume`은 Git을 실행하지 않는 감사 기록 호환 명령이며, 사용자가 하네스 밖에서 직접 실행한 raw Git 명령을 운영체제 수준에서 차단하지는 않습니다.
+요청에 의존 관계가 있으면 최초 `execution prepare`는 독립 티켓만 준비하고 후속 티켓을 `WAITING_DEPENDENCY`로 둡니다. 선행 티켓을 `review-ready`로 검증하고 `history review`로 수락한 뒤 `release request <request-id> --ticket <ticket-id> ...`로 해당 티켓만 승인·커밋하고 `execution advance <request-id>`를 실행하면, 같은 프로젝트의 후속 티켓은 기록된 선행 commit SHA를 기준으로 시작합니다. 교차 프로젝트 의존성은 관리 릴리스 commit의 존재만 완료 게이트로 확인하고 대상 프로젝트의 승인된 HEAD를 사용합니다. 같은 프로젝트의 fan-in은 자동 merge하지 않으므로 통합 순서와 검증을 담은 별도 티켓으로 명시해야 합니다.
 경력 증빙의 기본 공개 범위는 `private`입니다. 외부 Markdown/JSON 출력에 포함하려면 `status`를 `VERIFIED`, `visibility`를 `public`으로 두고 실제 commit 또는 PR 근거를 연결해야 합니다. VERIFIED 등록 시 프로젝트 레지스트리와 실행 티켓 이력을 대조하고, commit SHA는 등록 저장소의 실제 commit 객체인지 확인합니다.
 관리형 commit 성공 시 해당 티켓의 구현 단계, 검증 요약, 변경 경로와 commit을 연결한 `DRAFT/private` evidence가 중복 없이 자동 생성됩니다. 실제 결과를 검토한 뒤에만 별도로 공개 근거를 등록합니다.
 Runner는 한 티켓 실행 pass에서 동일 프로젝트 컨텍스트를 한 번만 구성하고 재시도에는 직전 실패 증거를 추가합니다. 실행 상태의 `estimated_input_tokens`와 `estimated_output_tokens`는 문자 길이 기반 비교 지표이며 공급자 청구 토큰을 뜻하지 않습니다.

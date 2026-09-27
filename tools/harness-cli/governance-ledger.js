@@ -31,7 +31,7 @@ function createReleaseApproval(execution, summary, spec) {
   if (selected.some((ticket) => ticket.status !== "REVIEW_READY")) {
     throw new Error("Every selected release ticket must be REVIEW_READY");
   }
-  const payload = { approval_id: String(spec?.approvalId || execution.request_id), execution_id: execution.execution_id, request_id: execution.request_id, summary: String(summary || "").trim(), release: normalizeReleaseSpec(spec), tickets: selected.map(({ ticket_id, project_id, branch, worktree, base_commit, review_fingerprint, verification, source }) => ({ ticket_id, project_id, branch, worktree, base_commit, review_fingerprint, verification, ...(source ? { source: { ...source } } : {}) })) };
+  const payload = { approval_id: String(spec?.approvalId || execution.request_id), execution_id: execution.execution_id, request_id: execution.request_id, summary: String(summary || "").trim(), release: normalizeReleaseSpec(spec), tickets: selected.map(({ ticket_id, project_id, branch, worktree, base_commit, review_fingerprint, review_event_id, committed_sha, verification, source }) => ({ ticket_id, project_id, branch, worktree, base_commit, review_fingerprint, review_event_id, committed_sha, verification, ...(source ? { source: { ...source } } : {}) })) };
   if (!payload.summary) throw new Error("Release summary is required");
   if (payload.tickets.some((ticket) => !ticket.review_fingerprint)) throw new Error("Every ticket requires a review fingerprint");
   return { ...payload, status: "PENDING", fingerprint: hash(payload), approved_at: null, consumed_at: null };

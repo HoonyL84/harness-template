@@ -21,6 +21,17 @@ function appendHistory(root, event) {
   });
 }
 
+function requireAcceptedReview(root, requestId, ticket, fingerprints, eventId = null) {
+  const reviews = readJson(historyPath(root), emptyHistory()).events.filter(item => item.kind === "USER_REVIEW"
+    && item.request_id === requestId && item.project_id === ticket.project_id && item.ticket_id === ticket.ticket_id);
+  const latest = reviews.at(-1);
+  if (!latest || latest.status !== "accepted" || !fingerprints.includes(latest.fingerprint)
+    || (eventId && latest.event_id !== eventId)) {
+    throw new Error(`Current accepted user review is required for ticket: ${ticket.ticket_id}`);
+  }
+  return latest;
+}
+
 /** Persist an intent before managed effects; unfinished intents are never labeled successful. */
 function beginOperation(root, command, action, subject) {
   const id = crypto.randomUUID();
@@ -165,4 +176,4 @@ function createHistoryCommand({ root, parseArgs, log, reviewFingerprint }) {
   };
 }
 
-module.exports = { appendHistory, beginOperation, collectHistory, createHistoryCommand, filterHistory, finishOperation, refreshHistory, withHistory };
+module.exports = { appendHistory, beginOperation, collectHistory, createHistoryCommand, filterHistory, finishOperation, refreshHistory, requireAcceptedReview, withHistory };

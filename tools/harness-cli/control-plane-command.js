@@ -4,11 +4,12 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { readJson, readJsonDirectory, updateJsonLocked, withFileLockAsync, writeJsonAtomic } = require("./control-plane-state");
-const { addEvidence, approveRelease, beginReleaseApply, consumeReleaseApproval, createReleaseApproval, exportEvidenceMarkdown, failReleaseApply, finishReleaseApply, publicVerifiedEvidence, requireReleaseApproved, searchEvidence, upsertManagedCommitDraft, validateEvidenceReference } = require("./governance-ledger");
+const { addEvidence, approveRelease, beginReleaseApply, consumeReleaseApproval, createReleaseApproval, exportEvidenceMarkdown, failReleaseApply, finishReleaseApply, normalizeReleaseSpec, publicVerifiedEvidence, requireReleaseApproved, searchEvidence, upsertManagedCommitDraft, validateEvidenceReference } = require("./governance-ledger");
 const { readRegistry, validateProjectId } = require("./project-registry");
 const { assertExecutionMatchesPlan } = require("./project-execution");
 const { readPlan } = require("./request-command");
 const { requireJiraFresh } = require("./jira-input");
+const { requireAcceptedReview } = require("./work-history");
 
 function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint, runGit, log, env = process.env, fetchImpl = globalThis.fetch }) {
   if (typeof reviewFingerprint !== "function") throw new Error("reviewFingerprint is required");
@@ -20,6 +21,16 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
     const result = runGit(args, cwd);
     if (result.error || result.status !== 0) throw new Error(String(result.stderr || result.error?.message || `git ${args.join(" ")} failed`).trim());
     return String(result.stdout || "").trim();
+  };
+  const requireCommittedWorktree = (ticket) => {
+    const branch = requireGitSuccess(["branch", "--show-current"], ticket.worktree);
+    if (branch !== ticket.branch) throw new Error(`Managed release branch mismatch for ${ticket.ticket_id}: ${branch}`);
+    if (requireGitSuccess(["rev-parse", "HEAD"], ticket.worktree) !== ticket.committed_sha) {
+      throw new Error(`Managed commit is no longer the branch HEAD: ${ticket.ticket_id}`);
+    }
+    if (requireGitSuccess(["status", "--porcelain=v1", "--untracked-files=all"], ticket.worktree)) {
+      throw new Error(`Managed release requires a clean ticket worktree: ${ticket.ticket_id}`);
+    }
   };
   const applyManagedRelease = (record) => {
     const results = [];
@@ -36,11 +47,11 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
           requireGitSuccess(["commit", "-m", record.release.message], ticket.worktree);
           results.push({ ticket_id: ticket.ticket_id, project_id: ticket.project_id, operation, commit: requireGitSuccess(["rev-parse", "HEAD"], ticket.worktree) });
         } else if (operation === "push") {
-          const branch = requireGitSuccess(["branch", "--show-current"], ticket.worktree);
-          if (branch !== ticket.branch) throw new Error(`Managed push branch mismatch for ${ticket.ticket_id}: ${branch}`);
+          requireCommittedWorktree(ticket);
           requireGitSuccess(["push", "-u", record.release.remote, ticket.branch], ticket.worktree);
           results.push({ ticket_id: ticket.ticket_id, project_id: ticket.project_id, operation, remote: record.release.remote, branch: ticket.branch });
         } else if (operation === "merge") {
+          requireCommittedWorktree(ticket);
           const project = registry.projects[ticket.project_id];
           if (!project) throw new Error(`Unknown project for managed merge: ${ticket.project_id}`);
           const branch = requireGitSuccess(["branch", "--show-current"], project.path);
@@ -66,6 +77,7 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
         if (result.operation === "commit") {
           const fingerprint = reviewFingerprint(ticket.worktree);
           if (!fingerprint) throw new Error(`Could not fingerprint committed worktree: ${ticket.ticket_id}`);
+          ticket.verification.reviewed_content_fingerprint = record.tickets.find((item) => item.ticket_id === result.ticket_id).review_fingerprint;
           ticket.verification.content_fingerprint = fingerprint;
           ticket.committed_sha = result.commit;
         }
@@ -113,6 +125,7 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
           if (!ticket) throw new Error(`Unknown release ticket: ${ticketId}`);
           return ticket;
         });
+      const operation = normalizeReleaseSpec({ operation: options.operation, message: options.message, remote: options.remote, targetBranch: options.target }).operation;
       for (const ticket of selectedTickets) {
         if (!fs.existsSync(ticket.worktree)) throw new Error(`Worktree missing: ${ticket.worktree}`);
         if (ticket.status !== "REVIEW_READY" || !ticket.verification?.content_fingerprint) {
@@ -122,6 +135,16 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
         if (!ticket.review_fingerprint) throw new Error(`Could not fingerprint worktree: ${ticket.worktree}`);
         if (ticket.review_fingerprint !== ticket.verification.content_fingerprint) {
           throw new Error(`Worktree changed after verification: ${ticket.ticket_id}`);
+        }
+        if (operation !== "record") {
+          if (operation !== "commit" && (!ticket.committed_sha || !ticket.release_history?.some((entry) => entry.operation === "commit" && entry.commit === ticket.committed_sha))) {
+            throw new Error(`Managed commit is required before ${operation}: ${ticket.ticket_id}`);
+          }
+          if (operation !== "commit") requireCommittedWorktree(ticket);
+          const accepted = requireAcceptedReview(root, requestId, ticket,
+            operation === "commit" ? [ticket.review_fingerprint]
+              : [ticket.review_fingerprint, ticket.verification.reviewed_content_fingerprint].filter(Boolean));
+          ticket.review_event_id = accepted.event_id;
         }
       }
       const record = createReleaseApproval(execution, options.summary, {
@@ -143,7 +166,20 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
     }
     const record = readJson(recordPath, null);
     if (!record) throw new Error(`Unknown release approval: ${id}`);
+    const requireCurrentReviews = () => {
+      if (record.release.operation === "record") return;
+      const execution = readJson(path.join(local, "executions", `${record.request_id}.json`), null);
+      for (const approved of record.tickets) {
+        const ticket = execution?.tickets?.find((item) => item.ticket_id === approved.ticket_id && item.project_id === approved.project_id);
+        if (!ticket || ticket.status !== "REVIEW_READY" || !approved.review_event_id) throw new Error(`Current accepted user review is required for ticket: ${approved.ticket_id}`);
+        if (record.release.operation !== "commit" && ticket.committed_sha !== approved.committed_sha) throw new Error(`Managed commit changed after release request: ${approved.ticket_id}`);
+        requireAcceptedReview(root, record.request_id, ticket,
+          record.release.operation === "commit" ? [approved.review_fingerprint]
+            : [approved.review_fingerprint, ticket.verification?.reviewed_content_fingerprint].filter(Boolean), approved.review_event_id);
+      }
+    };
     if (action === "approve") {
+      requireCurrentReviews();
       const value = updateJsonLocked(recordPath, null, (current) => approveRelease(current, options.fingerprint));
       log(`[APPROVED] ${id}`); return value;
     }
@@ -155,6 +191,7 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
       log(`[CONSUMED] ${id}`); return value;
     }
     if (action === "apply") {
+      requireCurrentReviews();
       for (const ticket of record.tickets) {
         if (reviewFingerprint(ticket.worktree) !== ticket.review_fingerprint) throw new Error(`Worktree changed after release approval: ${ticket.ticket_id}`);
       }
