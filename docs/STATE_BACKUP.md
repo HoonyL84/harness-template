@@ -45,6 +45,7 @@ node tools/harness-cli/index.js history search --query "검색어"
 ```
 
 첫 명령은 10분짜리 미리보기만 생성한다. 승인은 암호문의 지문, 대상 하네스, 백업 ID에 결속되며 한 번만 사용된다. 변경·만료·재사용은 거부된다. symlink/junction과 경로 이탈, Windows 경로 별칭 및 파일 해시 불일치도 거부된다.
+macOS의 `/var`, `/tmp`, `/etc`는 실제 대상이 각각 `/private/var`, `/private/tmp`, `/private/etc`일 때에만 OS 기본 경로로 정규화한다. 그 아래의 사용자 링크나 다른 목적지를 가리키는 링크는 계속 거부한다.
 
 승인 후 결과:
 - 원래 파일은 `.harness/local/restored/<backup-id>/` 아래에 **격리 자료**로만 저장한다.

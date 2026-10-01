@@ -6,11 +6,32 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { createBackupCommand, createSnapshot, encodeSnapshot, readSnapshot, validateSnapshot } = require("../../tools/harness-cli/backup-command");
+const { canonicalSystemPath, createBackupCommand, createSnapshot, encodeSnapshot, readSnapshot, validateSnapshot } = require("../../tools/harness-cli/backup-command");
 const { appendHistory, collectHistory, requireAcceptedReview } = require("../../tools/harness-cli/work-history");
 
 const PASSWORD = "fixture-only-backup-passphrase";
 const clone = value => JSON.parse(JSON.stringify(value));
+
+test("backup canonicalizes verified macOS system aliases without resolving nested user links", () => {
+  const realpath = alias => `/private${alias}`;
+  assert.equal(canonicalSystemPath("/var/folders/fixture", "darwin", realpath), "/private/var/folders/fixture");
+  assert.equal(canonicalSystemPath("/tmp/archive.json", "darwin", realpath), "/private/tmp/archive.json");
+  assert.equal(canonicalSystemPath("/etc/fixture", "darwin", realpath), "/private/etc/fixture");
+  assert.equal(canonicalSystemPath("/var", "darwin", realpath), "/private/var");
+  assert.equal(canonicalSystemPath("/var/user-link/archive.json", "darwin", realpath), "/private/var/user-link/archive.json");
+});
+
+test("backup system alias normalization cannot whitelist arbitrary symlinks or unexpected targets", () => {
+  let calls = 0;
+  const unexpected = () => { calls += 1; return "/attacker-controlled"; };
+  assert.equal(canonicalSystemPath("/var/folders/fixture", "darwin", unexpected), "/var/folders/fixture");
+  assert.equal(calls, 1);
+  assert.equal(canonicalSystemPath("/various/fixture", "darwin", unexpected), "/various/fixture");
+  assert.equal(canonicalSystemPath("/Users/user-link/fixture", "darwin", unexpected), "/Users/user-link/fixture");
+  assert.equal(canonicalSystemPath("/var/fixture", "linux", unexpected), "/var/fixture");
+  assert.equal(canonicalSystemPath("C:\\Temp\\fixture", "win32", unexpected), "C:\\Temp\\fixture");
+  assert.equal(calls, 1);
+});
 function parseArgs(args) {
   const positional = [], options = {};
   for (let index = 0; index < args.length; index += 1) {
@@ -151,6 +172,7 @@ test("backup and restore reject source and target junctions", () => {
   assert.throws(() => target.command()(["restore", "--file", created.file]), /symlinks or junctions/);
   const linked = path.join(target.root, "link"); fs.symlinkSync(outside.root, linked, "junction");
   assert.throws(() => target.command()(["create", "--output", path.join(linked, "export.json")]), /symlinks or junctions/);
+  assert.throws(() => createSnapshot(linked), /symlinks or junctions/);
 });
 
 test("partial restore consumes approval before effects and never removes existing files", () => {

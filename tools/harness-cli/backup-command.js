@@ -14,6 +14,18 @@ const MAX_FILES = 1000;
 const TTL = 10 * 60 * 1000;
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const uuid = value => typeof value === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value);
+const MACOS_SYSTEM_ALIASES = Object.freeze({ "/var": "/private/var", "/tmp": "/private/tmp", "/etc": "/private/etc" });
+
+/** Resolve only verified macOS system aliases; user-controlled links remain subject to noLinks. */
+function canonicalSystemPath(absolute, platform = process.platform, realpath = fs.realpathSync) {
+  if (platform !== "darwin") return absolute;
+  for (const [alias, target] of Object.entries(MACOS_SYSTEM_ALIASES)) {
+    if ((absolute === alias || absolute.startsWith(`${alias}/`)) && realpath(alias) === target) {
+      return target + absolute.slice(alias.length);
+    }
+  }
+  return absolute;
+}
 
 function safeRelative(name) {
   if (typeof name !== "string" || name.includes("\\") || name.split("/").some(part =>
@@ -39,7 +51,7 @@ function containsSecret(value) {
 
 // Check every existing ancestor, not only the final file (Windows junctions included).
 function noLinks(file) {
-  const absolute = path.resolve(file);
+  const absolute = canonicalSystemPath(path.resolve(file));
   const parsed = path.parse(absolute);
   let current = parsed.root;
   for (const part of absolute.slice(parsed.root.length).split(path.sep)) {
@@ -225,4 +237,4 @@ function createBackupCommand({ root, parseArgs, log = message => process.stdout.
   };
 }
 
-module.exports = { createBackupCommand, createSnapshot, encodeSnapshot, readSnapshot, validateSnapshot };
+module.exports = { canonicalSystemPath, createBackupCommand, createSnapshot, encodeSnapshot, readSnapshot, validateSnapshot };
