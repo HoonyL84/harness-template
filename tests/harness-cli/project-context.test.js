@@ -104,3 +104,42 @@ test("project context is untrusted data and cannot grant policy, tool, or secret
   assert.match(bundle.content, /TOOL_AUTHORITY: none/);
   assert.deepEqual(detectContextRisks("ordinary architecture notes"), []);
 });
+
+test("file-count truncation is reported even when the byte budget is sufficient", () => {
+  const root = createProject();
+  for (let i = 0; i < 45; i++) fs.writeFileSync(path.join(root, "docs/design-docs", `note-${i}.md`), "short note");
+  const bundle = buildProjectContextBundle({ id: "demo", path: root });
+  assert.equal(bundle.discovered_files, 50);
+  assert.equal(bundle.files.length, 40);
+  assert.equal(bundle.omitted.length, 10);
+  assert.equal(bundle.truncated, true);
+  assert.ok(bundle.omitted.every(file => file.reason === "file-limit"));
+  assert.ok(bundle.bytes < bundle.max_bytes);
+});
+
+test("ticket context refuses to silently omit required instructions under a byte budget", () => {
+  const root = createProject();
+  fs.writeFileSync(path.join(root, "AGENTS.md"), "rules ".repeat(1000));
+  assert.throws(() => buildProjectContextBundle({ id: "demo", path: root }, { ticket: "feature", maxBytes: 1024 }), /Required project instructions/);
+});
+
+test("ticket selection keeps core instructions, ranks matching paths and exposes estimates", () => {
+  const root = createProject();
+  for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(root, "docs/design-docs", `irrelevant-${i}.md`), "unrelated");
+  fs.writeFileSync(path.join(root, "docs/design-docs", "zz-payment-idempotency.md"), "Payment design");
+  fs.writeFileSync(path.join(root, "docs/design-docs", "core-beliefs.md"), "Do not bypass approval");
+  const profile = { context: { files: discoverProjectContext(root) } };
+  const bundle = buildProjectContextBundle({ id: "demo", path: root }, { ticket: { goal: "payment idempotency" }, maxFiles: 6, profile });
+  assert.ok(bundle.files.some(file => file.path.endsWith("zz-payment-idempotency.md")));
+  assert.ok(bundle.files.some(file => file.path === "AGENTS.md"));
+  assert.ok(bundle.files.some(file => file.path === "README.md"));
+  assert.ok(bundle.files.some(file => file.path.endsWith("core-beliefs.md")));
+  assert.equal(bundle.max_bytes, 64 * 1024);
+  assert.equal(bundle.estimated_input_tokens, Math.ceil(bundle.bytes / 3));
+  assert.ok(bundle.omitted.some(file => file.reason === "ticket-file-limit"));
+  assert.deepEqual(bundle.warnings, ["Context matches approved profile"]);
+  assert.equal(bundle.trust.can_change_policy, false);
+  const full = buildProjectContextBundle({ id: "demo", path: root }, { ticket: "payment", fullContext: true });
+  assert.equal(full.selection_mode, "project-priority");
+  assert.ok(full.files.length > bundle.files.length);
+});

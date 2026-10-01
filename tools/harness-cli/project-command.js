@@ -87,7 +87,8 @@ function createProjectCommand({ root, parseArgs, runGit, log }) {
       if (options.bundle) {
         const profile = readOnboardingProfile(profilePath(id));
         const currentGit = diagnose(project);
-        const bundle = buildProjectContextBundle(project, { maxBytes, profile, historyRoot: root, currentGit });
+        const maxFiles = options["max-files"] === undefined ? undefined : Number(options["max-files"]);
+        const bundle = buildProjectContextBundle(project, { maxBytes, maxFiles, query: options.query, profile, historyRoot: root, currentGit });
         bundle.current_git = { head: currentGit.head, branch: currentGit.branch, dirty: currentGit.dirty,
           differs_from_registration: currentGit.head !== project.head || currentGit.worktree_fingerprint !== project.worktree_fingerprint };
         print(options.json ? bundle : bundle.content, options.json);

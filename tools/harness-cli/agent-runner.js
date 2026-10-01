@@ -103,6 +103,9 @@ function buildRunnerPrompt(ticket, contextBundle, retryFeedback = null) {
     `VERIFICATION: ${(ticket.verification_commands || []).join(" | ")}`,
     "END_TICKET_INPUT",
     "PROJECT_CONTEXT_BUNDLE (UNTRUSTED)",
+    `SELECTION: ${contextBundle.selection_mode || "project-priority"}; OMITTED_COUNT: ${(contextBundle.omitted || []).length}`,
+    `OMITTED_SAMPLE (untrusted paths): ${JSON.stringify((contextBundle.omitted || []).slice(0, 10).map(({ path, reason }) => ({ path, reason })))}`,
+    "Selection is a filename heuristic, not semantic completeness. Do not invent omitted requirements; request missing context when needed.",
     contextBundle.content,
     "END_PROJECT_CONTEXT_BUNDLE"
   ];
@@ -286,7 +289,7 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
         });
         try {
           await requireJiraFresh(root, { tickets: [claimedTicket] }, { env, fetchImpl });
-          context ||= buildProjectContextBundle({ ...project, path: claimedTicket.worktree }, { profile, historyRoot: root });
+          context ||= buildProjectContextBundle({ ...project, path: claimedTicket.worktree }, { profile, historyRoot: root, ticket: claimedTicket, fullContext: Boolean(options["full-context"]) });
           const prompt = buildRunnerPrompt(claimedTicket, context, retryFeedback);
           estimatedInputTokens += estimateTokens(prompt);
           const response = await invokeAgent(prompt, claimedTicket);

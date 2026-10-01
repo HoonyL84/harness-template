@@ -17,6 +17,7 @@ const { createAtlassianCommand } = require("./atlassian-command");
 const { createAccountUsage } = require("./provider-account-usage");
 const { checkProviders } = require("./provider-connection");
 const { createFollowupCommand } = require("./operations-followup");
+const { createBackupCommand } = require("./backup-command");
 const { createStateTransitionNotifier } = require("./transition-notifier");
 const { createProviderUsageService } = require("./provider-usage");
 const { createAgentRunnerCommand } = require("./agent-runner");
@@ -479,6 +480,7 @@ const commandRunner = createAgentRunnerCommand({
   log
 });
 const commandDeployment = createDeploymentCommand({ root: ROOT, parseArgs, runGit: runExternalGit, log });
+const commandBackup = createBackupCommand({ root: ROOT, parseArgs, log });
 const commandHistory = createHistoryCommand({ root: ROOT, parseArgs, log,
   reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) });
 const commandAtlassian = createAtlassianCommand({ root: ROOT, parseArgs, log,
@@ -2570,6 +2572,11 @@ Usage:
   node tools/harness-cli/index.js atlassian consent <preview|grant|status|revoke> --project ID [--approve SCOPE_DIGEST]
   node tools/harness-cli/index.js operations flush <--request ID|--project ID>
   node tools/harness-cli/index.js operations <audit|repair|prepare ID|annotate ID --file JSON> [--project ID]
+  node tools/harness-cli/index.js backup create [--output FILE]
+  node tools/harness-cli/index.js backup inspect --file FILE
+  node tools/harness-cli/index.js backup restore --file FILE [--approve PREVIEW_ID]
+  node tools/harness-cli/index.js project context ID --bundle [--query TEXT] [--max-files N] [--max-bytes N]
+  node tools/harness-cli/index.js runner run REQUEST_ID [--full-context]
   node tools/harness-cli/index.js atlassian map --project ID --jira-project KEY --issue-type ID --space-id ID [--parent-id ID] [--context-pages ID,ID] [--priority-map ID:P0,ID:P1,ID:P2,ID:P3]
   node tools/harness-cli/index.js provider check [--provider openai|anthropic|gemini]
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
@@ -2681,6 +2688,7 @@ async function main(argv = process.argv.slice(2)) {
     history: commandHistory,
     atlassian: commandAtlassian,
     operations: commandOperations,
+    backup: commandBackup,
     "start-ticket": commandStartTicket,
     "complete-task": commandCompleteTask,
     verify: commandVerify,

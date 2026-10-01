@@ -16,6 +16,7 @@ const COMMAND_METADATA = Object.freeze({
   "history": { requiresGit: false },
   "atlassian": { requiresGit: false },
   "operations": { requiresGit: false },
+  "backup": { requiresGit: false },
   "start-ticket": { requiresGit: true },
   "complete-task": { requiresGit: true },
   "verify": { requiresGit: true },
@@ -42,7 +43,7 @@ const COMMAND_METADATA = Object.freeze({
 const CONFIG_BYPASS_COMMANDS = new Set(["help", "--help", "-h", "version", "--version", "-v", undefined]);
 const RUNTIME_MANAGED_ENV_VARS = new Set([
   "PATH", "PATHEXT", "PWD", "HOME", "SHELL", "USER",
-  "LANG", "PORT", "NODE_ENV", "NODE_V8_COVERAGE", "TEMP", "TMP"
+  "LANG", "PORT", "NODE_ENV", "NODE_V8_COVERAGE", "TEMP", "TMP", "HARNESS_BACKUP_PASSPHRASE"
 ]);
 const COMMAND_ALIASES = Object.freeze({
   "--help": "help",

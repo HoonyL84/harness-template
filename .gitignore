@@ -22,6 +22,7 @@ application-prod.yml
 # Harness Worktrees
 .worktrees/
 .harness/local/
+.harness/backups/
 
 # IDE
 .idea/

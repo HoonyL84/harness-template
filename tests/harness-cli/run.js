@@ -2,6 +2,7 @@
 
 require("./autonomy-utils.test");
 require("./agent-runner.test");
+require("./backup-command.test");
 require("./cleanup-utils.test");
 require("./cli-entrypoint.test");
 require("./cli-process.test");
