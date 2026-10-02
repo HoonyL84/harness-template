@@ -60,6 +60,58 @@ function runnerFor(root, overrides = {}) {
     tokenizeCommand: value => value.split(" "), log: () => {}, ...overrides });
 }
 
+test("verification repair requires recorded evidence and refuses an identical failed patch before applying", async () => {
+  for (const repairKind of ["missing", "duplicate", "new"]) {
+    const { root } = fixture({ retryPolicy: { max_attempts: 3, stop_on_same_error: false } });
+    let calls = 0, checks = 0, applications = 0;
+    const patch = "diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1 +1 @@\n-old\n+new\n";
+    const command = runnerFor(root, {
+      invokeAgent: async prompt => {
+        if (++calls === 1) return patch;
+        assert.match(prompt, /REPAIR_CONTRACT/);
+        if (repairKind === "missing") return patch.replace("+new", "+other");
+        const nextPatch = repairKind === "new" ? patch.replace("+new", "+other") : patch;
+        return '```repair\n{"hypothesis":"boundary error","evidence":"case failed","minimal_test":"run boundary case"}\n```\n```diff\n' + nextPatch + "```";
+      },
+      runCommand: () => ++checks === 1 ? { status: 1, stderr: "boundary case failed" } : { status: 0 },
+      runGit: args => { if (args[0] === "apply" && !args.includes("--check") && !args.includes("-R")) applications++; return { status: 0 }; }
+    });
+    const result = await command(["run", "work"]);
+    assert.equal(calls, 2);
+    if (repairKind === "new") {
+      assert.equal(result.status, "REVIEW_READY");
+      assert.equal(applications, 2);
+      assert.equal(result.tickets[0].runner.history[1].repair.hypothesis, "boundary error");
+    } else {
+      assert.equal(result.status, "BLOCKED");
+      assert.equal(applications, 1);
+      assert.match(result.tickets[0].error, /Repair evidence|Identical failed/);
+    }
+  }
+});
+
+test("resuming a prepared ticket retains failed patch evidence and cannot reapply it", async () => {
+  const { root, state } = fixture();
+  const patch = "diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1 +1 @@\n-old\n+new\n";
+  const hash = require("node:crypto").createHash("sha256").update(patch.trim()).digest("hex");
+  state.tickets[0].runner = { attempts: 1, history: [{ status: "FAILED", patch_sha256: hash, error: "prior boundary case failed", rollback_status: "ROLLED_BACK" }] };
+  fs.writeFileSync(path.join(root, ".harness/local/executions/work.json"), JSON.stringify(state));
+  let applications = 0;
+  const command = runnerFor(root, {
+    invokeAgent: async prompt => {
+      assert.match(prompt, /REPAIR_CONTRACT/);
+      assert.match(prompt, /prior boundary case failed/);
+      return '```repair\n{"hypothesis":"same idea","evidence":"prior failure","minimal_test":"boundary case"}\n```\n```diff\n' + patch + "```";
+    },
+    runGit: () => { applications++; return { status: 0 }; }
+  });
+  const result = await command(["run", "work"]);
+  assert.equal(result.status, "BLOCKED");
+  assert.match(result.tickets[0].error, /Identical failed/);
+  assert.equal(applications, 0);
+  assert.equal(result.tickets[0].runner.attempts, 2);
+});
+
 test("runner records all three attempts before effects and emits one exhausted outcome", async () => {
   const { root } = fixture();
   const file = path.join(root, ".harness", "local", "executions", "work.json");

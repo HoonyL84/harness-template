@@ -3,6 +3,7 @@
   "verify": {
     "quick": {},
     "full": [],
+    "smoke": [],
     "quick_cache": true,
     "parallel_scripts": [],
     "max_attempts": 2

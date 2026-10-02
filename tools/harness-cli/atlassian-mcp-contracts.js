@@ -81,6 +81,17 @@ async function normalizeResponse({ raw, mapped, tool, input, read }) {
       return { ...t, to: { ...t.to, ...matches[0] } };
     }) };
   }
+  if (tool === "listJiraStatuses" && input.operation === "jira.projectStatuses") {
+    const available = statuses(data);
+    if (data.mode !== "project" || !Array.isArray(data.workTypes) || !data.workTypes.length
+      || new Set(available.map(s => s.id)).size !== available.length
+      || new Set(data.workTypes.map(t => t.id)).size !== data.workTypes.length) throw new Error("Invalid project workflow status evidence");
+    return data.workTypes.map(type => {
+      if (!numeric(type.id) || !Array.isArray(type.statusIds) || !type.statusIds.length
+        || new Set(type.statusIds).size !== type.statusIds.length || type.statusIds.some(id => !available.some(s => s.id === id))) throw new Error("Work type references unknown or duplicate status");
+      return { id: type.id, name: type.name || type.id, statuses: available.filter(s => type.statusIds.includes(s.id)) };
+    });
+  }
   if (tool === "listJiraStatuses" && input.operation === "jira.getStatus") {
     const matches = statuses(data).filter(s => s.id === input.id);
     if (matches.length !== 1) throw new Error("Status lookup identity mismatch");

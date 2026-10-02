@@ -66,6 +66,7 @@ function validateConfigSchema(config, fail) {
     }
   }
   if (config.verify?.full !== undefined) requireStringArray(config.verify.full, "verify.full", fail);
+  if (config.verify?.smoke !== undefined) requireStringArray(config.verify.smoke, "verify.smoke", fail);
   if (config.verify?.quick_cache !== undefined && typeof config.verify.quick_cache !== "boolean") {
     fail("verify.quick_cache must be a boolean.");
   }
@@ -185,6 +186,7 @@ function createConfigLoader({ root, argv = process.argv, env = process.env, fail
       verify: {
         quick: fileConfig.verify?.quick || {},
         full: fileConfig.verify?.full || [],
+        smoke: fileConfig.verify?.smoke || [],
         quickCache: booleanSetting(
           "HARNESS_VERIFY_QUICK_CACHE",
           fileConfig.verify?.quick_cache,

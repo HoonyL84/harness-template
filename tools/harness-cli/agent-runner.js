@@ -13,6 +13,7 @@ const { readPlan } = require("./request-command");
 const { createConfigLoader } = require("./config");
 const { reconcileVerificationLeases } = require("./verification-lease");
 const { DEFAULT_RETRY_POLICY, normalizePriority } = require("./request-plan");
+const { REPAIR_CONTRACT, validateRepairResponse } = require("./repair-evidence");
 const { flushRunnerOutcomes, queueRunnerOutcome } = require("./runner-notifications");
 const { requireJiraFresh } = require("./jira-input");
 
@@ -31,7 +32,8 @@ function fingerprintError(error) {
 
 function extractUnifiedDiff(text) {
   const value = String(text || "");
-  const fenced = value.match(/```(?:diff|patch)?\s*\n([\s\S]*?)```/i);
+  const fenced = value.match(/```(?:diff|patch)[ \t]*\r?\n([\s\S]*?)```/i)
+    || value.match(/```[ \t]*\r?\n([\s\S]*?)```/);
   const candidate = (fenced ? fenced[1] : value).trim();
   const index = candidate.indexOf("diff --git ");
   if (index < 0) throw new Error("Agent response did not contain a unified diff");
@@ -268,7 +270,10 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
       let completed = false;
       let lastError;
       let previousErrorFingerprint = claimedTicket.runner.last_error_fingerprint || null;
-      let retryFeedback = null;
+      const failedRepairs = (claimedTicket.runner.history || []).filter(item => item.status === "FAILED" && item.patch_sha256);
+      let repairRequired = failedRepairs.length > 0;
+      let retryFeedback = repairRequired ? failedRepairs.at(-1).error : null;
+      const failedRepairHashes = new Set(failedRepairs.map(item => item.patch_sha256));
       let attemptsMade = 0;
       let estimatedInputTokens = Number(claimedTicket.runner.estimated_input_tokens || 0);
       let estimatedOutputTokens = Number(claimedTicket.runner.estimated_output_tokens || 0);
@@ -290,9 +295,10 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
         try {
           await requireJiraFresh(root, { tickets: [claimedTicket] }, { env, fetchImpl });
           context ||= buildProjectContextBundle({ ...project, path: claimedTicket.worktree }, { profile, historyRoot: root, ticket: claimedTicket, fullContext: Boolean(options["full-context"]) });
-          const prompt = buildRunnerPrompt(claimedTicket, context, retryFeedback);
+          const prompt = buildRunnerPrompt(claimedTicket, context, retryFeedback)
+            + (repairRequired ? `\nREPAIR_CONTRACT (TRUSTED)\n${REPAIR_CONTRACT}` : "");
           estimatedInputTokens += estimateTokens(prompt);
-          const response = await invokeAgent(prompt, claimedTicket);
+          const response = await invokeAgent(prompt, { ...claimedTicket, request_id: id });
           await requireJiraFresh(root, { tickets: [claimedTicket] }, { env, fetchImpl });
           const owner = readJson(filePath, null)?.tickets.find((item) => item.ticket_id === claimedTicket.ticket_id);
           if (owner?.runner?.lease_id !== leaseId || Date.parse(owner.runner.lease_expires_at) <= now()) {
@@ -300,6 +306,14 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
           }
           estimatedOutputTokens += estimateTokens(response);
           const patch = extractUnifiedDiff(response);
+          const repair = repairRequired ? validateRepairResponse(response, patch, failedRepairHashes) : null;
+          const patchHash = crypto.createHash("sha256").update(patch.replace(/\r\n/g, "\n").trim()).digest("hex");
+          updateJsonLocked(filePath, null, (state) => {
+            const ticket = state.tickets.find(item => item.ticket_id === claimedTicket.ticket_id);
+            if (ticket?.runner?.lease_id !== leaseId) throw new Error("Runner lease changed before recording repair evidence");
+            Object.assign(ticket.runner.history.at(-1), { patch_sha256: patchHash, ...(repair ? { repair } : {}) });
+            return state;
+          });
           patchPath = path.join(local, "runner", id, `${claimedTicket.ticket_id}-${leaseId}-${attempt}.patch`);
           fs.mkdirSync(path.dirname(patchPath), { recursive: true });
           fs.writeFileSync(patchPath, patch, { mode: 0o600 });
@@ -316,9 +330,10 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
           const verification = claimedTicket.verification_commands.map((commandLine) => {
             const parts = tokenizeCommand(commandLine);
             const executable = parts[0] === "npm" && process.platform === "win32" ? "npm.cmd" : parts[0];
+            const started = now();
             const result = runCommand(executable, parts.slice(1), { cwd: claimedTicket.worktree, capture: true });
             if (result.error || result.status !== 0) throw new Error(`Verification failed: ${commandLine}\n${String(result.stderr || result.stdout || "").slice(-4000)}`);
-            return { command: commandLine, status: result.status, stdout: String(result.stdout || "").slice(-4000), stderr: String(result.stderr || "").slice(-4000) };
+            return { command: commandLine, status: result.status, duration_ms: Math.max(0, now() - started), stdout: String(result.stdout || "").slice(-4000), stderr: String(result.stderr || "").slice(-4000) };
           });
           const fingerprint = reviewFingerprint(claimedTicket.worktree);
           if (!fingerprint || fingerprint !== beforeVerification) throw new Error("Worktree changed during verification; reverify required");
@@ -348,6 +363,9 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
             break;
           }
           if (applied && patchPath) {
+            repairRequired = true;
+            const failed = readJson(filePath, null)?.tickets.find(item => item.ticket_id === claimedTicket.ticket_id)?.runner?.history.at(-1);
+            if (failed?.patch_sha256) failedRepairHashes.add(failed.patch_sha256);
             try {
               runChecked(runGit, ["apply", "--check", "-R", patchPath], claimedTicket.worktree);
               runChecked(runGit, ["apply", "-R", patchPath], claimedTicket.worktree);

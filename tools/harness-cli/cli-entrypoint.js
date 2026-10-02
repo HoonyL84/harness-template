@@ -21,6 +21,7 @@ const COMMAND_METADATA = Object.freeze({
   "complete-task": { requiresGit: true },
   "verify": { requiresGit: true },
   "run-agent": { requiresGit: true },
+  "context": { requiresGit: false },
   "provider": { requiresGit: false },
   "scan-drift": { requiresGit: true },
   "recover": { requiresGit: true },

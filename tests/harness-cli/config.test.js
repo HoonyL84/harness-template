@@ -11,6 +11,22 @@ function throwingFail(message) {
   throw new Error(message);
 }
 
+test("runtime smoke commands must be a list, not an implicit shell string", () => {
+  assert.throws(() => validateConfigSchema({ config_version: "1.0", verify: { smoke: "npm run smoke" } }, throwingFail), /verify.smoke/);
+  assert.throws(() => validateConfigSchema({ config_version: "1.0", verify: { smoke: [""] } }, throwingFail), /verify.smoke/);
+});
+
+test("config loader preserves explicit smoke commands and defaults to an empty list", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-config-"));
+  fs.mkdirSync(path.join(root, ".harness"));
+  const file = path.join(root, ".harness/config.json");
+  for (const smoke of [undefined, ["node test/smoke.js"]]) {
+    fs.writeFileSync(file, JSON.stringify({ config_version: "1.0", verify: { smoke } }));
+    const config = createConfigLoader({ root, argv: ["node", "index.js", "verify"], env: {}, fail: throwingFail })();
+    assert.deepEqual(config.verify.smoke, smoke || []);
+  }
+});
+
 test("config schema rejects invalid quick command mappings", () => {
   assert.throws(() => validateConfigSchema({
     config_version: "1.0",

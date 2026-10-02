@@ -21,7 +21,7 @@
 8. 커밋 근거가 연결되면 경력 기록을 `VERIFIED`로 확정한다.
 
 ## 로드맵
-- **운영 보강 진행 중**: [개인 다중 프로젝트 운영 보강](OPERATIONS_COMPLETENESS_PLAN.md), [Jira + Confluence 설계](CONFLUENCE_PERSONAL_OPERATIONS.md), [사용 가이드](../HARNESS_PERSONAL_OPERATIONS_GUIDE.md). Jira 입출력/승인, 중요도/기본 3회 시도, 이력/검색/컨텍스트 및 공급자 조회를 구현했다. Atlassian 연결 도우미와 3사 연결 진단, Gemini 요청 수 조회를 추가한다. 실제 계정·신규 환경 검증 및 사용자 최종 검수는 별도이며 전체 로드맵 완료를 뜻하지 않는다.
+- **운영 보강 구현 및 검증**: [개인 다중 프로젝트 운영 보강](OPERATIONS_COMPLETENESS_PLAN.md), [Jira + Confluence 설계](CONFLUENCE_PERSONAL_OPERATIONS.md), [사용 가이드](../HARNESS_PERSONAL_OPERATIONS_GUIDE.md). Jira 입출력/승인, 중요도/기본 3회 시도, 이력/검색/컨텍스트, Atlassian 연결 도우미, 3사 진단·관측/관리자 usage 및 Gemini 요청 수 조회를 구현했다. [운영 근거 보고서](../OPERATIONS_EVIDENCE_GUIDE.md)는 티켓별 지표·수용 기준 근거와 새 PC 절차를 제공한다. 실제 계정 리허설, 깨끗한 control-root 테스트, 새 기기 재현 및 사용자 최종 검수는 서로 다른 근거로 기록하며 전체 로드맵 완료를 뜻하지 않는다.
 - **Task 1: Multi-project Registry** - 프로젝트 등록, 조회, 제거, 경로 및 Git 상태 진단
 - **Task 2: Request Planning & Approval** - 자연어 요청의 프로젝트별 티켓 분해와 계획 승인 게이트
 - **Task 3: Project-scoped Execution** - 프로젝트별 상태, 잠금, worktree, 검증 격리

@@ -79,6 +79,8 @@ Full 검증은 완료 게이트이며 Quick 검증은 개발 중 피드백용입
 - [릴리스 안전 정책](docs/RELEASE_SAFETY.md): PR·필수 3개 OS CI·main 보호와 의존성 업데이트
 - [Atlassian MCP](docs/ATLASSIAN_MCP.md): 계정 연결, 도구 매핑, 읽기·쓰기 경계
 - [기록 백업과 컨텍스트 예산](docs/STATE_BACKUP.md): 암호화 백업, 승인형 증거 복원, 티켓별 문서 선별과 누락 확인
+- [컨텍스트·재수정·실행 검증](docs/LEAN_EVIDENCE_WORKFLOW.md): 호출 전 입력 확인, 실패 가설 기록, Full의 프로젝트별 smoke 검사
+- [운영 근거와 검수 보고서](docs/OPERATIONS_EVIDENCE_GUIDE.md): 티켓별 사용량·시간·수용 기준 근거, 상태 점검 및 새 PC 복원 절차
 - [에이전트 진입 규칙](AGENTS.md): 작업 원칙과 세부 문서 목차
 - [설계·제약](docs/design-docs/): 실행 모드, 자동 수정, L5 정책, 역할 분리
 
