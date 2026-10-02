@@ -78,7 +78,10 @@ test("main protection requires current verified checks and PRs without an admin 
   assert.equal(policy.required_linear_history, true);
   assert.equal(policy.required_conversation_resolution, true);
   assert.equal(policy.required_pull_request_reviews.required_approving_review_count, 0);
-  assert.deepEqual(policy.required_pull_request_reviews.bypass_pull_request_allowances, { users: [], teams: [], apps: [] });
+  // GitHub rejects organization-only bypass allowances on personal repositories.
+  assert.equal(Object.hasOwn(policy.required_pull_request_reviews, "bypass_pull_request_allowances"), false);
+  // Use app-bound checks alone; legacy contexts and checks conflict in the API schema.
+  assert.equal(Object.hasOwn(policy.required_status_checks, "contexts"), false);
   assert.deepEqual(policy.required_status_checks.checks.map(check => check.context), ["Release Gate",
     "Harness Cross-Platform (ubuntu-24.04)", "Harness Cross-Platform (macos-15)", "Harness Cross-Platform (windows-2025)", "Dependency Vulnerability Scan"]);
   assert.ok(policy.required_status_checks.checks.every(check => check.app_id === 15368));
