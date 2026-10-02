@@ -76,6 +76,7 @@ Full 검증은 완료 게이트이며 Quick 검증은 개발 중 피드백용입
 
 - [개인 운영 가이드](docs/HARNESS_PERSONAL_OPERATIONS_GUIDE.md): 설치, 프로젝트 등록, 티켓, 승인, 실패 복구, Jira/Confluence와 알림
 - [전체 CLI 가이드](docs/HARNESS_GUIDE.md): 명령과 기존 단일 프로젝트 흐름
+- [릴리스 안전 정책](docs/RELEASE_SAFETY.md): PR·필수 3개 OS CI·main 보호와 의존성 업데이트
 - [Atlassian MCP](docs/ATLASSIAN_MCP.md): 계정 연결, 도구 매핑, 읽기·쓰기 경계
 - [기록 백업과 컨텍스트 예산](docs/STATE_BACKUP.md): 암호화 백업, 승인형 증거 복원, 티켓별 문서 선별과 누락 확인
 - [에이전트 진입 규칙](AGENTS.md): 작업 원칙과 세부 문서 목차

@@ -5,6 +5,7 @@ require("./agent-runner.test");
 require("./backup-command.test");
 require("./cleanup-utils.test");
 require("./cli-entrypoint.test");
+require("./ci-release-gate.test");
 require("./cli-process.test");
 require("./config.test");
 require("./content-fingerprint.test");

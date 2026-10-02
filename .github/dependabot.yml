@@ -4,20 +4,24 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "automated"
+    groups:
+      npm-compatible:
+        update-types: ["minor", "patch"]
 
   # GitHub Actions 버전 자동 업데이트
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "automated"
+    groups:
+      actions-updates:
+        patterns: ["*"]
