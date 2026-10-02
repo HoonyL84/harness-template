@@ -60,6 +60,8 @@ test("workflow policy pins external actions and runner labels and cannot silentl
   assert.match(ci, /name: Release Gate/);
   assert.match(ci, /if: \$\{\{ always\(\) \}\}/);
   assert.match(ci, /CI_NEEDS_JSON: \$\{\{ toJSON\(needs\) \}\}/);
+  const envTemplate = fs.readFileSync(path.join(root, ".env.template"), "utf8");
+  assert.match(envTemplate, /^CI_NEEDS_JSON=$/m);
   assert.match(ci, /node tools\/harness-cli\/ci-release-gate\.js/);
   assert.match(ci, /os: \[ubuntu-24\.04, macos-15, windows-2025\]/);
   const jobs = [...ci.split("jobs:")[1].matchAll(/^  ([\w-]+):$/gm)].map(match => match[1]).filter(name => name !== "release-gate");
