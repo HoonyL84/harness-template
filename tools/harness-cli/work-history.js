@@ -6,6 +6,7 @@ const path = require("node:path");
 const { readJson, readJsonDirectory, updateJsonLocked } = require("./control-plane-state");
 const { validateProjectId } = require("./project-registry");
 const { safeCaptureFollowups } = require("./operations-followup");
+const { REPORT_ACTIONS, createOperationsReportCommand } = require("./operations-report");
 
 const digest = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const historyPath = root => path.join(root, ".harness", "local", "history", "ledger.json");
@@ -148,8 +149,10 @@ function withHistory(root, command, handler) {
 }
 
 function createHistoryCommand({ root, parseArgs, log, reviewFingerprint }) {
+  const report = createOperationsReportCommand({ root, appendHistory, collectHistory, reviewFingerprint });
   return args => {
     const { positional: [action], options } = parseArgs(args);
+    if (REPORT_ACTIONS.has(action)) { const result = report(action, options); log(JSON.stringify(result, null, 2)); return result; }
     if (action === "review") {
       if (![options.project, options.request, options.ticket].every(value => typeof value === "string" && value)) throw new Error("Review requires project, request and ticket");
       const events = filterHistory(collectHistory(root, { includeSaved: false }), { project: options.project, request: options.request, ticket: options.ticket, kind: "TICKET" });

@@ -14,6 +14,16 @@ const issue = () => ({ id: "30", key: "TEST-1", fields: { project: { key: "TEST"
 const statusList = () => ({ statuses: [{ id: "2", name: "Review", category: "indeterminate" }], workTypes: [{ id: "8", statusIds: ["2"] }] });
 const transitions = () => ({ transitions: [{ id: "21", to: { name: "Review", statusCategory: { key: "indeterminate" } } }] });
 
+test("native project workflow status envelope joins work types with verified status identities", async () => {
+  const value = { ...statusList(), mode: "project" };
+  const result = await normalize("listJiraStatuses", "jira.projectStatuses", value);
+  assert.equal(result[0].id, "8");
+  assert.equal(result[0].statuses[0].statusCategory.key, "indeterminate");
+  for (const change of [{ mode: "site" }, { workTypes: [] }, { workTypes: [{ id: "8", statusIds: ["999"] }] }, { workTypes: [{ id: "8", statusIds: ["2", "2"] }] }, { statuses: [...value.statuses, ...value.statuses] }]) {
+    await assert.rejects(normalize("listJiraStatuses", "jira.projectStatuses", { ...value, ...change }), /workflow|unknown|duplicate/i);
+  }
+});
+
 test("generated JSON descriptions compare across ADF/Markdown without accepting edits or arbitrary rich text", () => {
   const expected = adf({ goal: "A", nested: { max: 3 }, steps: ["one", "two"] });
   assert(publishedDescriptionMatches(expected, expected));

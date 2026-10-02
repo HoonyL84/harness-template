@@ -119,10 +119,12 @@ function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand
         results = claimedTicket.verification_commands.map((commandLine) => {
           const parts = tokenizeCommand(commandLine);
           const command = parts[0] === "npm" && process.platform === "win32" ? "npm.cmd" : parts[0];
+          const started = Date.now();
           const result = runCommand(command, parts.slice(1), { cwd: claimedTicket.worktree, capture: true });
           const record = {
             command: commandLine,
             status: result.status,
+            duration_ms: Math.max(0, Date.now() - started),
             stdout: String(result.stdout || "").slice(-4000),
             stderr: String(result.stderr || "").slice(-4000)
           };

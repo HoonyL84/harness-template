@@ -35,6 +35,8 @@
 
 ## 아직 남은 범위
 
+2026-10-02 추가 검증: [운영 고도화 리허설](OPERATIONS_REHEARSAL_VALIDATION.md)에서 개인 Jira 합성 티켓 2개의 생성·연결·상태 변경과 Confluence 결과 2개의 게시/재조회를 확인했다. 별도 임시 저장소에서 실제 Git/HTTP와 암호화 복원·새 경로 온보딩도 검사했다. AI 응답·사용자 승인 판단·알림 전달은 fixture이며, standing-consent 전체 실계정 흐름·독립 사용자/새 PC·실제 비용/시간 절감은 여전히 별도 검증이다.
+
 추가 보완: `operations-followup.test.js`의 16개 시나리오로 같은 DRAFT의 Jira 연결, 실행 결과 follow-up, 검수/완료 구분, 승인 후 변경 차단, 게시 실패 재시도 및 누락 복구를 모의 HTTP로 검증했다. 기본 건별 payload 승인 외에 최초 프로젝트 범위 승인 후 자동 게시를 지원한다.
 
 - 최초 승인 이후 티켓 생성/연결 → runner RUNNING → REVIEW_READY → 사용자 수락 → COMPLETED와 결과 페이지 기록을 모의 검증했다. 계획 승인/Git 승인으로 확대되지 않는다.
@@ -71,5 +73,5 @@
 }
 ```
 
-이는 측정용 기록 양식이지 자동 시간 측정 기능이 아니다. 게시할 때는 queue-result의 summary에 검토한 요약만 전달한다.
+시간은 자동 측정하지 않는다. 직접 측정값은 `history measure`로 기록하고 `history report`로 티켓별 관측 usage·검증 시간·수용 기준 근거와 함께 조회할 수 있다. [보고서 가이드](../OPERATIONS_EVIDENCE_GUIDE.md)를 참고한다. 게시할 때는 queue-result의 summary에 검토한 요약만 전달한다.
 전체 개입 시간 = 요구 설명 + 설정 + 검수 + 수습. 기준선과 비교 대상 작업의 범위를 맞춰야 하며 95% 절감은 아직 목표다.

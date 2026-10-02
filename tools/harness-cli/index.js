@@ -21,6 +21,8 @@ const { createBackupCommand } = require("./backup-command");
 const { createStateTransitionNotifier } = require("./transition-notifier");
 const { createProviderUsageService } = require("./provider-usage");
 const { createAgentRunnerCommand } = require("./agent-runner");
+const { buildAgentContext, resolveAgentTaskScope } = require("./agent-context");
+const { REPAIR_CONTRACT, validateRepairResponse } = require("./repair-evidence");
 const { createPublicationHook } = require("./operations-publish");
 const { repositoryContentFingerprint: calculateRepositoryContentFingerprint } = require("./content-fingerprint");
 const { runAutonomySoak } = require("./autonomy-utils");
@@ -118,7 +120,8 @@ function normalizeRepoPath(filePath) {
 }
 
 function extractUnifiedDiff(text) {
-  const fenced = text.match(/```(?:diff|patch)?\s*\n([\s\S]*?)```/i);
+  const fenced = text.match(/```(?:diff|patch)[ \t]*\r?\n([\s\S]*?)```/i)
+    || text.match(/```[ \t]*\r?\n([\s\S]*?)```/);
   const candidate = (fenced ? fenced[1] : text).trim();
   const diffIndex = candidate.indexOf("diff --git ");
   if (diffIndex === -1) {
@@ -471,7 +474,8 @@ const commandRunner = createAgentRunnerCommand({
   onProgress: id => publishManagedFollowups("runner", ["run", id]),
   root: ROOT,
   parseArgs,
-  invokeAgent: (prompt) => commandRunAgent(["--type", "code", "--role", "implementer", prompt]),
+  invokeAgent: (prompt, ticket) => commandRunAgent(["--type", "code", "--role", "implementer", prompt],
+    { project_id: ticket.project_id, request_id: ticket.request_id, ticket_id: ticket.ticket_id }),
   notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
   reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
   runCommand: run,
@@ -1923,6 +1927,8 @@ async function commandVerify(args) {
   let verifyPassed = false;
   let appliedPatchRel = "";
   let quickCacheRecord = null;
+  const failedRepairHashes = new Set();
+  let appliedRepairEvidence = null;
 
   ensureDir("observability/traces");
   ensureDir("observability/metrics");
@@ -2095,6 +2101,18 @@ async function commandVerify(args) {
           success = runStep(step.label, step.command, step.args);
         }
       }
+      if (success) {
+        const scripts = packageScripts();
+        const smokeCommands = cfg.verify.smoke.length ? cfg.verify.smoke
+          : scripts["test:smoke"] ? ["npm run test:smoke"] : scripts.smoke ? ["npm run smoke"] : [];
+        if (smokeCommands.length === 0) say("[Runtime Smoke] Not configured. Full test/build pass does not establish runtime behavior.");
+        for (const commandLine of [...new Set(smokeCommands)]) {
+          const [command, ...stepArgs] = tokenizeCommand(commandLine);
+          const resolved = command === "npm" && process.platform === "win32" ? "npm.cmd" : command;
+          success = runStep("Runtime Smoke", resolved, stepArgs);
+          if (!success) break;
+        }
+      }
       if (success && substantiveChecks === 0) {
         recordVerify("inconclusive", "No test, coverage, build, or configured full verification command was available.", null, "full");
         fail("Full verification is inconclusive because no test, coverage, build, or configured full command ran.");
@@ -2161,14 +2179,19 @@ async function commandVerify(args) {
     let failedPatchRel = "";
 
     if (appliedPatchRel) {
+      if (appliedRepairEvidence) failedRepairHashes.add(appliedRepairEvidence.patch_sha256);
       failedPatchRel = appliedPatchRel;
       try {
         applyGitPatch(appliedPatchRel, true);
         say(`[Auto-fix] Verification still failed. Applied patch was rolled back: ${appliedPatchRel}`);
       } catch (err) {
         say(`[Auto-fix] CRITICAL: Automatic rollback failed: ${err.message}`);
+        recordVerify("fail", "rollback-failed; human inspection required", null, mode);
+        writeText(logRel, lines.join(os.EOL));
+        fail("Auto-fix rollback failed; stopping without another patch or destructive cleanup.");
       }
       appliedPatchRel = "";
+      appliedRepairEvidence = null;
       autoFixExhausted = attempt + 1 >= maxAttempts;
     }
 
@@ -2193,7 +2216,7 @@ ${failedStep.stdout.slice(-2000)}
 
 Generate a minimal unified diff that fixes only the root cause.
 Safety contract:
-- Output only a unified diff, optionally inside a diff code fence.
+- ${REPAIR_CONTRACT}
 - Change at most 5 files.
 - Modify only existing low-risk source or test files in paths containing src/, app/, lib/, test/, tests/, or __tests__/.
 - Do not modify configuration, dependencies, lockfiles, CI, scripts, infrastructure, database migrations, secrets, or documentation.
@@ -2204,8 +2227,10 @@ Safety contract:
           say("[Auto-fix] Requesting one low-risk patch from the configured AI provider...");
           const response = await commandRunAgent(["--type", "fix", "--role", "implementer", autoFixPrompt]);
           const patch = extractUnifiedDiff(response);
+          appliedRepairEvidence = validateRepairResponse(response, patch, failedRepairHashes);
           const changedFiles = validateAutoFixPatch(patch);
           appliedPatchRel = `observability/traces/${fileTimestamp()}-auto-fix.patch`;
+          writeText(`${appliedPatchRel}.repair.json`, JSON.stringify(appliedRepairEvidence, null, 2));
           writeText(appliedPatchRel, patch);
           applyGitPatch(appliedPatchRel);
           say(`[Auto-fix] Patch applied to: ${changedFiles.join(", ")}`);
@@ -2234,7 +2259,7 @@ Safety contract:
         say(`------------------------------------------------------`);
         say(`👉 INSTRUCTION FOR ACTIVE AGENT:`);
         say(`1. Analyze the verification failure details above.`);
-        say(`2. Diagnose the root cause and propose recovery guidance.`);
+        say(`2. Record observed evidence, a root-cause hypothesis, and one minimal distinguishing test before another repair.`);
         say(`3. Use codebase search / file write tools to fix the issue.`);
         say(`4. Once fixed, execute verification again using: npm run harness -- verify`);
         say(`======================================================\n`);
@@ -2251,7 +2276,7 @@ ${failedStep.stderr.slice(-2500)}
 Stdout Output:
 ${failedStep.stdout.slice(-1500)}
 
-Please review the error logs, identify the root cause, and write a detailed recovery guide explaining which files to edit, what lines to change, and how to fix the issue.`;
+Please record observed evidence, one root-cause hypothesis, and a minimal test that distinguishes it. If a prior hypothesis failed, explain what evidence changes the next hypothesis. Do not recommend blindly rerunning an unchanged failing command. Then describe a minimal recovery within the approved scope.`;
 
         try {
           await commandRunAgent(["--type", "review", "--role", "reviewer", diagnosePrompt]);
@@ -2314,25 +2339,15 @@ function selectModel(provider, type) {
   fail(`Unsupported provider: ${provider}`);
 }
 
-function buildContextBundle(type, taskName) {
-  const blocks = [
-    ["Agent Rules", "AGENTS.md", 300],
-    ["Project Plan", "docs/project/PLANS.md", 250],
-    ["Core Beliefs", "docs/design-docs/core-beliefs.md", 250],
-    ["Tech Stack", "docs/design-docs/tech-stack.md", 200],
-    ["Agent Roles", "docs/design-docs/agent-roles.md", 220],
-    ["Execution Modes", "docs/design-docs/execution-modes.md", 220],
-    ["Auto-fix Policy", "docs/design-docs/auto-fix-policy.md", 220],
-    ["L5 Autonomy Policy", "docs/design-docs/l5-autonomy-policy.md", 260],
-  ];
-  const out = [`# Harness Context Bundle`, `GeneratedAt: ${currentTimestamp()}`, `TaskType: ${type}`, `TaskName: ${taskName || "unknown"}`, ""];
-  for (const [title, rel, maxLines] of blocks) {
-    const content = readText(rel, `[MISSING] ${rel}`).split(/\r?\n/).slice(0, maxLines).join("\n");
-    out.push(`=== ${title} (${rel}) ===`, content, "");
-  }
-  const activeRel = taskName ? `.harness/tasks/active/${taskName}.md` : "";
-  if (activeRel) out.push(`=== Active Task EXEC_PLAN (${activeRel}) ===`, readText(activeRel, `[MISSING] ${activeRel}`), "");
-  return out.join("\n");
+function commandContext(args) {
+  const { options } = parseArgs(args);
+  const bundle = buildAgentContext(ROOT, {
+    type: options.type || "code", taskName: options.task,
+    fullContext: Boolean(options["full-context"]),
+    ...(options["max-bytes"] ? { maxBytes: Number(options["max-bytes"]) } : {})
+  });
+  log(options.json ? JSON.stringify(bundle, null, 2) : bundle.content);
+  return bundle;
 }
 
 async function postJson(url, headers, body) {
@@ -2402,7 +2417,7 @@ async function postJson(url, headers, body) {
   fail("API request exhausted retry attempts.");
 }
 
-async function commandRunAgent(args) {
+async function commandRunAgent(args, attribution = null) {
   parseEnvFile();
   const { positional, options } = parseArgs(args);
   applyExplicitTaskOption(options);
@@ -2419,9 +2434,12 @@ async function commandRunAgent(args) {
 
   const provider = providerUsage.activeProvider();
   const model = selectModel(provider, type);
-  const taskName = resolveTaskId({ strict: true });
+  const { taskName, localTicket } = resolveAgentTaskScope(ROOT, attribution, () => resolveTaskId({ strict: true }));
   const rolePrompt = readText(`prompts/system/roles/${role}.md`);
-  const context = buildContextBundle(type, taskName);
+  const context = buildAgentContext(ROOT, {
+    type, taskName: localTicket,
+    fullContext: Boolean(options["full-context"])
+  }).content;
   const systemPrompt = renderPrompt("prompts/templates/agent-system.md", {
     CONTEXT: context,
     ROLE: role,
@@ -2475,7 +2493,7 @@ async function commandRunAgent(args) {
   }
 
   try {
-    providerUsage.record(provider, model, responseJson);
+    providerUsage.record(provider, model, responseJson, attribution);
   } catch (error) {
     log(`[WARN] Provider usage could not be recorded: ${error.message}`);
   }
@@ -2562,7 +2580,7 @@ Usage:
   node tools/harness-cli/index.js evidence export [--format json]
   node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
   node tools/harness-cli/index.js dashboard
-  node tools/harness-cli/index.js history <list|search|export|refresh|review|status> [--project id] [--query text] [--from ISO --to ISO]
+  node tools/harness-cli/index.js history <list|search|export|refresh|review|status|report|measure|map-check|audit-tasks> [--project id] [--request id] [--ticket id]
   node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|status>
   node tools/harness-cli/index.js atlassian connect --site https://your-site.atlassian.net [--cloud-id UUID] [--transport mcp|rest]
   node tools/harness-cli/index.js atlassian mcp-tools
@@ -2582,6 +2600,7 @@ Usage:
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name>
   node tools/harness-cli/index.js verify [--quick|--full] [--offline] [--diagnose] [--auto-fix]
+  node tools/harness-cli/index.js context [--task <ticket>] [--type code|architect|review] [--full-context] [--max-bytes <n>] [--json]
   node tools/harness-cli/index.js run-agent [--type type] [--role role] "prompt"
   node tools/harness-cli/index.js provider <status|list|usage> [--json]
   node tools/harness-cli/index.js provider use <openai|anthropic|gemini> [--json]
@@ -2693,6 +2712,7 @@ async function main(argv = process.argv.slice(2)) {
     "complete-task": commandCompleteTask,
     verify: commandVerify,
     "run-agent": commandRunAgent,
+    context: commandContext,
     provider: commandProvider,
     "scan-drift": commandScanDrift,
     recover: commandRecover,

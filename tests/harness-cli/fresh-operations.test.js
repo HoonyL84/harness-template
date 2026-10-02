@@ -1,0 +1,35 @@
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { runRehearsal, parseArgs, fingerprint, runGit } = require("./rehearsal-helper");
+const { createBackupCommand } = require("../../tools/harness-cli/backup-command");
+const { createProjectCommand } = require("../../tools/harness-cli/project-command");
+const { requireAcceptedReview, collectHistory } = require("../../tools/harness-cli/work-history");
+
+test("new control root runs real two-project Git and HTTP flow then restores evidence without approvals", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-fresh-source-"));
+  const rehearsal = await runRehearsal(root);
+  assert.equal(rehearsal.reports.length, 2);
+  assert.equal(rehearsal.reports[0].observed_api_tokens, null);
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), "harness-fresh-target-"));
+  const env = { HARNESS_BACKUP_PASSPHRASE: "fixture-only-passphrase-not-a-user-secret" };
+  const backup = createBackupCommand({ root, parseArgs, env, log: () => {} })(["create"]);
+  const restore = createBackupCommand({ root: target, parseArgs, env, log: () => {} });
+  const preview = restore(["restore", "--file", backup.file]);
+  const result = restore(["restore", "--file", backup.file, "--approve", preview.preview_id]);
+  assert.equal(result.live_state_restored, false);
+  assert.equal(fs.existsSync(path.join(target, ".harness/local/projects.json")), false);
+  assert.equal(fs.existsSync(path.join(target, ".harness/local/releases/rehearsal-commit.json")), false);
+  assert.throws(() => requireAcceptedReview(target, rehearsal.request_id, { project_id: "ad-server", ticket_id: "ad-server-test" }, [rehearsal.reports[0].content_fingerprint]), /accepted user review/);
+  assert.ok(collectHistory(target).some(event => event.kind === "RESTORED_USER_REVIEW"));
+  const newProject = createProjectCommand({ root: target, parseArgs, runGit, log: () => {} });
+  const relocated = path.join(target, "new-checkout");
+  assert.equal(runGit(["clone", "--quiet", path.join(root, "originals/ad-server"), relocated], target).status, 0);
+  newProject(["add", "ad-server", "--path", relocated]); newProject(["onboard", "ad-server"]); const profile = newProject(["onboard", "ad-server", "--approve"]);
+  assert.equal(profile.status, "APPROVED");
+  assert.ok(fingerprint(relocated));
+  assert.equal(fs.existsSync(path.join(target, ".harness/local/requests/harness-rehearsal.json")), false);
+});

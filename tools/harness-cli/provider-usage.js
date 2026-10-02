@@ -102,8 +102,9 @@ function createProviderUsageService({ root, env = process.env, now = () => new D
     return provider;
   }
 
-  function record(provider, model, response) {
+  function record(provider, model, response, attribution = null) {
     if (!PROVIDERS.includes(provider)) throw new Error(`Unsupported provider: ${provider}`);
+    if (attribution && !["project_id", "request_id", "ticket_id"].every(key => typeof attribution[key] === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(attribution[key]))) throw new Error("Invalid ticket usage attribution");
     const timestamp = now();
     const month = timestamp.toISOString().slice(0, 7);
     const normalized = normalizeUsage(provider, response);
@@ -126,6 +127,19 @@ function createProviderUsageService({ root, env = process.env, now = () => new D
       current.models[model] = (current.models[model] || 0) + normalized.total_tokens;
       current.last_used_at = timestamp.toISOString();
       state.months[month].providers[provider] = current;
+      if (attribution) {
+        const key = `${attribution.project_id}:${attribution.request_id}:${attribution.ticket_id}`;
+        state.months[month].tickets ||= {};
+        const ticket = state.months[month].tickets[key] || { responses: 0, total_tokens: 0, complete: true };
+        const usage = response?.usage || response?.usageMetadata;
+        const rawTotal = usage?.total_tokens ?? usage?.totalTokenCount;
+        const input = usage?.prompt_tokens ?? usage?.input_tokens ?? usage?.promptTokenCount;
+        const output = usage?.completion_tokens ?? usage?.output_tokens ?? usage?.candidatesTokenCount;
+        const known = value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+        ticket.complete &&= known(rawTotal) || known(input) && known(output);
+        ticket.responses++; ticket.total_tokens += normalized.total_tokens;
+        state.months[month].tickets[key] = ticket;
+      }
       return state;
     });
     return normalized;
