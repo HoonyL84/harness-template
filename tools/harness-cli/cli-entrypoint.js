@@ -17,6 +17,7 @@ const COMMAND_METADATA = Object.freeze({
   "atlassian": { requiresGit: false },
   "operations": { requiresGit: false },
   "backup": { requiresGit: false },
+  "eval": { requiresGit: false },
   "start-ticket": { requiresGit: true },
   "complete-task": { requiresGit: true },
   "verify": { requiresGit: true },

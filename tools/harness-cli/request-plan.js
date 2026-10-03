@@ -2,6 +2,9 @@
 
 const crypto = require("node:crypto");
 const { normalizeJiraSource } = require("./jira-input");
+const { isArtifactTicket, normalizeDeliverables, normalizeTicketKind } = require("./ticket-artifacts");
+
+const { normalizeContextRefs } = require("./context-references");
 
 const SCHEMA_VERSION = "1.0";
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -109,20 +112,26 @@ function createRequestPlan({ requestId, goal, projectIds = [], tickets = [], pro
     const acceptance = normalizeStringArray(ticket.acceptance_criteria, "Ticket acceptance_criteria");
     const steps = normalizeStringArray(ticket.implementation_steps, "Ticket implementation_steps");
     const tests = normalizeTestPlan(ticket.test_plan);
+    const ticketKind = normalizeTicketKind(ticket.ticket_kind);
+    const deliverables = normalizeDeliverables(ticket.deliverables, ticketKind);
+    if (ticketKind !== "development" && (!acceptance.length || !steps.length)) throw new Error("Planning/design tickets require explicit acceptance criteria and steps");
     return {
       ticket_id: ticketId,
       project_id: projectId,
+      ticket_kind: ticketKind,
+      deliverables,
       priority: normalizePriority(ticket.priority),
       ...(ticket.source ? {
         source: normalizeJiraSource(ticket.source),
         planning_status: steps.length > 0 && acceptance.length > 0
-          && TEST_PLAN_SECTIONS.some((section) => tests[section].length > 0)
+          && (ticketKind !== "development" || TEST_PLAN_SECTIONS.some((section) => tests[section].length > 0))
           ? "READY" : "NEEDS_PLAN"
       } : {}),
       goal: ticketGoal,
       scope: Array.isArray(ticket.scope) ? ticket.scope.map(String) : [ticketGoal],
       exclusions: Array.isArray(ticket.exclusions) ? ticket.exclusions.map(String) : [],
       context_summary: String(ticket.context_summary || "").trim(),
+      context_refs: normalizeContextRefs(ticket.context_refs),
       acceptance_criteria: acceptance.length ? acceptance : (ticket.source ? [] : [ticketGoal]),
       implementation_steps: steps.length ? steps : (ticket.source ? [] : [ticketGoal]),
       test_plan: tests,
@@ -130,7 +139,7 @@ function createRequestPlan({ requestId, goal, projectIds = [], tickets = [], pro
       retry_policy: normalizeRetryPolicy(ticket.retry_policy),
       verification: Array.isArray(ticket.verification) && ticket.verification.length > 0
         ? ticket.verification.map(String)
-        : [...profile.verify_commands],
+        : (ticketKind === "development" ? [...profile.verify_commands] : []),
       profile_fingerprint: profile.content_fingerprint
     };
   });
@@ -165,6 +174,11 @@ function validateRequestPlan(plan) {
     throw new Error(`Request plan must use schema_version ${SCHEMA_VERSION}`);
   }
   if (planFingerprint(plan) !== plan.content_fingerprint) throw new Error("Request plan fingerprint does not match its content");
+  for (const ticket of plan.tickets) {
+    normalizeContextRefs(ticket.context_refs);
+    normalizeDeliverables(ticket.deliverables, normalizeTicketKind(ticket.ticket_kind));
+    if (isArtifactTicket(ticket) && (!ticket.acceptance_criteria?.length || !ticket.implementation_steps?.length)) throw new Error("Artifact ticket requires explicit criteria and steps");
+  }
   return plan;
 }
 

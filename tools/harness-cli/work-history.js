@@ -7,6 +7,9 @@ const { readJson, readJsonDirectory, updateJsonLocked } = require("./control-pla
 const { validateProjectId } = require("./project-registry");
 const { safeCaptureFollowups } = require("./operations-followup");
 const { REPORT_ACTIONS, createOperationsReportCommand } = require("./operations-report");
+const { assertExecutionMatchesPlan } = require("./project-execution");
+const { readPlan } = require("./request-command");
+const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
 
 const digest = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const historyPath = root => path.join(root, ".harness", "local", "history", "ledger.json");
@@ -64,6 +67,7 @@ function collectHistory(root, { includeSaved = true } = {}) {
     const state = states.find(item => item.request_id === plan.request_id);
     const execution = state?.tickets?.find(item => item.ticket_id === ticket.ticket_id);
     const shared = { project_id: ticket.project_id, ticket_id: ticket.ticket_id, request_id: plan.request_id,
+      ticket_kind: ticket.ticket_kind || "development", deliverables: ticket.deliverables || [],
       priority: ticket.priority || "P2", title: ticket.goal, technologies: registry.projects[ticket.project_id]?.stacks || [],
       source: path.join(local, "requests", `${plan.request_id}.json`),
       remote_records: outbox.entries.filter(e => e.project_id === ticket.project_id &&
@@ -118,6 +122,7 @@ function filterHistory(events, options = {}) {
     && (!options.ticket || item.ticket_id === options.ticket) && (!options.request || item.request_id === options.request)
     && (!options.status || item.status === options.status) && (!options.priority || item.priority === options.priority)
     && (!options.kind || item.kind === options.kind)
+    && (!options["ticket-kind"] || item.ticket_kind === options["ticket-kind"])
     && (!options.technology || item.technologies?.some(t => t.toLowerCase() === options.technology.toLowerCase()))
     && (!options.from && !options.to || (Number.isFinite(Date.parse(item.timestamp)) && Date.parse(item.timestamp) >= from && Date.parse(item.timestamp) <= to))
     && terms.every(term => JSON.stringify(item).toLocaleLowerCase().includes(term)))
@@ -161,6 +166,9 @@ function createHistoryCommand({ root, parseArgs, log, reviewFingerprint }) {
       }
       const state = readJson(path.join(root, ".harness", "local", "executions", `${validateProjectId(options.request)}.json`), null);
       const ticket = state?.tickets?.find(item => item.ticket_id === options.ticket && item.project_id === options.project);
+      const planPath = path.join(root, ".harness/local/requests", `${validateProjectId(options.request)}.json`);
+      if (fs.existsSync(planPath)) assertExecutionMatchesPlan(state, readPlan(planPath), root);
+      if (ticket && isArtifactTicket(ticket)) assertArtifactEvidence(ticket);
       if (!reviewFingerprint || !ticket || reviewFingerprint(ticket.worktree) !== options.fingerprint) throw new Error("Review content changed; verify again");
       if (!["accepted", "changes-requested"].includes(options.result) || typeof options.reason !== "string") throw new Error("Review requires --result accepted|changes-requested and --reason");
       const event = { ...events[0], kind: "USER_REVIEW", status: options.result, reason: options.reason,

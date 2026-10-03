@@ -12,6 +12,7 @@ const { searchRemote, fetchProjectPages } = require("./atlassian-read");
 const { createConnectionCommand } = require("./atlassian-connection");
 const { consentCommand, assertConsentedEntry } = require("./atlassian-consent");
 const { ticketDraft, resultPayload } = require("./atlassian-payloads");
+const { isArtifactTicket } = require("./ticket-artifacts");
 const { publishedDescriptionMatches } = require("./atlassian-mcp-contracts");
 const { transport, connectionIdentity, matchesConnection, createMcpClient } = require("./atlassian-mcp");
 
@@ -144,7 +145,7 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
         const target = current.tickets.find(t => t.ticket_id === ticketId);
         target.source = source;
         target.planning_status = target.acceptance_criteria?.length && target.implementation_steps?.length
-          && Object.values(target.test_plan || {}).some(v => v.length) ? "READY" : "NEEDS_PLAN";
+          && (isArtifactTicket(target) || Object.values(target.test_plan || {}).some(v => v.length)) ? "READY" : "NEEDS_PLAN";
         current.content_fingerprint = planFingerprint(current);
         return validateRequestPlan(current);
       });

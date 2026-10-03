@@ -2,6 +2,7 @@
 
 const path = require("node:path");
 const { updateJsonLocked } = require("./control-plane-state");
+const { readPlan } = require("./request-command");
 const { buildProjectContextBundle, contextWarnings, discoverProjectContext } = require("./project-context");
 const {
   approveOnboardingProfile,
@@ -88,7 +89,14 @@ function createProjectCommand({ root, parseArgs, runGit, log }) {
         const profile = readOnboardingProfile(profilePath(id));
         const currentGit = diagnose(project);
         const maxFiles = options["max-files"] === undefined ? undefined : Number(options["max-files"]);
-        const bundle = buildProjectContextBundle(project, { maxBytes, maxFiles, query: options.query, profile, historyRoot: root, currentGit });
+        let ticket;
+        if (options.request || options.ticket) {
+          if (!options.request || !options.ticket) throw new Error("Context bundle requires both --request and --ticket");
+          const plan = readPlan(path.join(root, ".harness", "local", "requests", validateProjectId(options.request) + ".json"));
+          ticket = plan.tickets.find(item => item.ticket_id === options.ticket && item.project_id === id);
+          if (!ticket) throw new Error("Context ticket does not belong to this project");
+        }
+        const bundle = buildProjectContextBundle(project, { maxBytes, maxFiles, ticket, query: options.query, profile, historyRoot: root, currentGit });
         bundle.current_git = { head: currentGit.head, branch: currentGit.branch, dirty: currentGit.dirty,
           differs_from_registration: currentGit.head !== project.head || currentGit.worktree_fingerprint !== project.worktree_fingerprint };
         print(options.json ? bundle : bundle.content, options.json);

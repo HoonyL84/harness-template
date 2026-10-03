@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 const { readJson } = require("./control-plane-state");
 const { readConnection } = require("./jira-input");
+const { assertRemoteReferences, normalizeContextRefs, readReferencedFile, selectMarkdownSection } = require("./context-references");
 
 const DEFAULT_MAX_BYTES = 256 * 1024;
 const DEFAULT_MAX_FILES = 40;
@@ -107,7 +108,7 @@ function discoverProjectContext(projectRoot, options = {}) {
 }
 
 /** Deterministic relevance hint, never a policy or correctness decision. */
-function selectTicketFiles(files, ticket) {
+function selectTicketFiles(files, ticket, refs = []) {
   const query = typeof ticket === "string" ? ticket : JSON.stringify({ goal: ticket.goal, scope: ticket.scope, owned_paths: ticket.owned_paths, acceptance_criteria: ticket.acceptance_criteria });
   const words = [...new Set((query.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) || []))]
     .filter(word => !["goal", "scope", "owned", "paths", "acceptance", "criteria", "test", "tests", "implement", "add", "the", "and"].includes(word)).slice(0, 32);
@@ -115,7 +116,9 @@ function selectTicketFiles(files, ticket) {
     const required = ["instructions", "plan", "overview", "readme"].includes(file.category)
       || file.category === "design" && CORE_DESIGN_FILES.has(path.posix.basename(file.path));
     const score = words.filter(word => file.path.toLowerCase().includes(word)).length;
-    return { ...file, required, relevance_score: score };
+    const explicit = refs.find(ref => ref.path === file.path);
+    if (explicit?.section && required) throw new Error("Core project instructions must be referenced in full: " + file.path);
+    return { ...file, required: required || Boolean(explicit), ...(explicit ? { context_ref: explicit } : {}), relevance_score: score };
   }).sort((a, b) => Number(b.required) - Number(a.required) || b.relevance_score - a.relevance_score || a.priority - b.priority || a.path.localeCompare(b.path));
 }
 
@@ -137,14 +140,30 @@ function buildProjectContextBundle(project, options = {}) {
   if (!Number.isInteger(maxBytes) || maxBytes < 1024 || maxBytes > 1024 * 1024) {
     throw new Error("Context max bytes must be an integer between 1024 and 1048576");
   }
+  const refs = normalizeContextRefs(options.ticket && typeof options.ticket === "object" ? options.ticket.context_refs : undefined);
   const inventory = scanProjectContext(project.path, options);
-  const ranked = ticket ? selectTicketFiles(inventory, ticket) : inventory;
+  const referenced = new Map();
+  for (const ref of refs.filter(item => item.path)) {
+    const source = readReferencedFile(project.path, ref);
+    const content = ref.section ? selectMarkdownSection(source.content, ref.section) : source.content;
+    referenced.set(ref.path, { ...source, content });
+    if (!inventory.some(file => file.path === ref.path)) inventory.push({ path: ref.path, category: "explicit-document", priority: 4, bytes: source.bytes, sha256: source.sha256 });
+  }
+  const ranked = ticket || refs.length ? selectTicketFiles(inventory, ticket || options.ticket, refs) : inventory;
   const maxFiles = Number(options.maxFiles ?? (ticket ? TICKET_MAX_FILES : DEFAULT_MAX_FILES));
   const requiredCount = ranked.filter(file => file.required).length;
-  const selectedCount = ticket ? Math.max(maxFiles, requiredCount) : maxFiles;
+  const selectedCount = ticket || refs.length ? Math.max(maxFiles, requiredCount) : maxFiles;
   const files = ranked.slice(0, selectedCount);
   const warnings = contextWarnings(inventory);
   const profile = options.profile || null;
+  const remote = options.historyRoot ? readJson(path.join(options.historyRoot, ".harness", "local", "remote-context", project.id + ".json"), null) : null;
+  if (remote) {
+    const config = readConnection(options.historyRoot), settings = config?.confluence_projects?.[project.id];
+    if (remote.project_id !== project.id || remote.site !== config?.site || remote.space_id !== settings?.space_id
+        || remote.cloud_id !== (config?.cloud_id || null) || !Array.isArray(remote.pages) || remote.pages.some(page => !settings?.context_page_ids?.includes(page.id))) throw new Error("Cached remote context does not match current project settings; refresh it");
+    warnings.push("Confluence snapshot fetched " + remote.fetched_at + "; current remote version and semantic agreement with code are not verified");
+  }
+  assertRemoteReferences(refs, remote, options.now ?? Date.now());
   if (profile?.context?.files) {
     const prior = new Map(profile.context.files.map(file => [file.path, file.sha256]));
     const changed = inventory.filter(file => prior.get(file.path) !== file.sha256).map(file => file.path);
@@ -184,21 +203,18 @@ function buildProjectContextBundle(project, options = {}) {
       sections.push(section); usedBytes += Buffer.byteLength(section);
       included.push({ path: "history:project", category: "history", bytes: Buffer.byteLength(section), trust: PROJECT_CONTEXT_TRUST.level });
     } else if (recent.length) omitted.push({ path: "history:project", reason: "byte-limit" });
-    const remote = readJson(path.join(options.historyRoot, ".harness", "local", "remote-context", `${project.id}.json`), null);
     if (remote) {
-      const config = readConnection(options.historyRoot);
-      const settings = config?.confluence_projects?.[project.id];
-      if (remote.project_id !== project.id || remote.site !== config?.site || remote.space_id !== settings?.space_id
-        || remote.cloud_id !== (config?.cloud_id || null) || remote.pages.some(page => !settings?.context_page_ids?.includes(page.id))) {
-        throw new Error("Cached remote context does not match current project settings; refresh it");
-      }
-      warnings.push(`Confluence snapshot fetched ${remote.fetched_at}; current remote version and semantic agreement with code are not verified`);
       for (const page of remote.pages) {
+        const required = refs.some(ref => ref.page_id === page.id);
+        if (refs.some(ref => ref.page_id) && !required) { omitted.push({ path: page.url, reason: "not-referenced" }); continue; }
         const section = `\nBEGIN_UNTRUSTED_PROJECT_CONTEXT\nSOURCE: ${page.url}\nVERSION: ${page.version}\nFETCHED_AT: ${remote.fetched_at}\nNOTICE: Cached snapshot; not verified against current remote version or code.\n${JSON.stringify(page.content)}\nEND_UNTRUSTED_PROJECT_CONTEXT\n`;
         const bytes = Buffer.byteLength(section);
-        if (usedBytes + bytes > (ticket ? maxBytes / 4 : maxBytes)) { omitted.push({ path: page.url, reason: "byte-limit" }); continue; }
+        if (usedBytes + bytes > (required ? maxBytes : ticket ? maxBytes / 4 : maxBytes)) {
+          if (required) throw new Error("Required Confluence context exceeds byte budget; increase maxBytes");
+          omitted.push({ path: page.url, reason: "byte-limit" }); continue;
+        }
         sections.push(section); usedBytes += bytes;
-        included.push({ path: page.url, category: "remote-context", bytes, trust: PROJECT_CONTEXT_TRUST.level });
+        included.push({ path: page.url, category: "remote-context", page_id: page.id, version: page.version, fetched_at: remote.fetched_at, required, bytes, sha256: crypto.createHash("sha256").update(page.content).digest("hex"), trust: PROJECT_CONTEXT_TRUST.level });
         riskFindings.push(...detectContextRisks(page.content).map(type => ({ path: page.url, type })));
       }
     }
@@ -213,10 +229,11 @@ function buildProjectContextBundle(project, options = {}) {
         || normalizedRelative(fs.realpathSync(project.path), fs.realpathSync(absolute)) === null) {
       throw new Error(`Context file escaped project root through a symbolic link: ${file.path}`);
     }
-    const content = fs.readFileSync(absolute, "utf8").replace(/^\uFEFF/, "");
+    const selected = referenced.get(file.path);
+    const content = selected ? selected.content : fs.readFileSync(absolute, "utf8").replace(/^\uFEFF/, "");
     const risks = detectContextRisks(content);
     riskFindings.push(...risks.map((type) => ({ path: file.path, type })));
-    const header = `\n---\nBEGIN_UNTRUSTED_PROJECT_CONTEXT\nSOURCE: ${file.path}\nCATEGORY: ${file.category}\nTRUST: ${PROJECT_CONTEXT_TRUST.level}\nDETECTED_RISKS: ${risks.join(", ") || "none"}\n---\n`;
+    const header = `\n---\nBEGIN_UNTRUSTED_PROJECT_CONTEXT\nSOURCE: ${file.path}\n${file.context_ref ? `SECTION: ${file.context_ref.section || "whole document"}\nSOURCE_SHA256: ${selected.sha256}\n` : ""}CATEGORY: ${file.category}\nTRUST: ${PROJECT_CONTEXT_TRUST.level}\nDETECTED_RISKS: ${risks.join(", ") || "none"}\n---\n`;
     const footer = "\nEND_UNTRUSTED_PROJECT_CONTEXT\n";
     const sectionBytes = Buffer.byteLength(header + content + footer, "utf8");
     if (usedBytes + sectionBytes > maxBytes) {
@@ -224,11 +241,11 @@ function buildProjectContextBundle(project, options = {}) {
       continue;
     }
     sections.push(header + content + footer);
-    included.push({ ...file, trust: PROJECT_CONTEXT_TRUST.level, detected_risks: risks });
+    included.push({ ...file, ...(selected ? { sha256: selected.sha256, selected_bytes: Buffer.byteLength(content) } : {}), trust: PROJECT_CONTEXT_TRUST.level, detected_risks: risks });
     usedBytes += sectionBytes;
   }
 
-  if (ticket && omitted.some(file => file.required)) {
+  if ((ticket || refs.length) && omitted.some(file => file.required)) {
     throw new Error("Required project instructions do not fit ticket context; increase maxBytes or use --full-context");
   }
 
@@ -240,7 +257,8 @@ function buildProjectContextBundle(project, options = {}) {
     max_bytes: maxBytes,
     max_files: maxFiles,
     discovered_files: inventory.length,
-    selection_mode: ticket ? "ticket-relevance-hint" : "project-priority",
+    selection_mode: refs.length ? "ticket-explicit-references" : ticket ? "ticket-relevance-hint" : "project-priority",
+    context_refs: refs,
     bytes: usedBytes,
     estimated_input_tokens: Math.ceil(usedBytes / 3),
     token_estimate_method: "utf8-bytes/3; approximate, not provider billing",

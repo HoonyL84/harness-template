@@ -20,6 +20,9 @@ const { createFollowupCommand } = require("./operations-followup");
 const { createBackupCommand } = require("./backup-command");
 const { createStateTransitionNotifier } = require("./transition-notifier");
 const { createProviderUsageService } = require("./provider-usage");
+const { requestAgent } = require("./provider-request");
+const { observedUsage } = require("./model-eval-oracle");
+const { createModelEvalCommand } = require("./model-eval-command");
 const { createAgentRunnerCommand } = require("./agent-runner");
 const { buildAgentContext, resolveAgentTaskScope } = require("./agent-context");
 const { REPAIR_CONTRACT, validateRepairResponse } = require("./repair-evidence");
@@ -474,7 +477,7 @@ const commandRunner = createAgentRunnerCommand({
   onProgress: id => publishManagedFollowups("runner", ["run", id]),
   root: ROOT,
   parseArgs,
-  invokeAgent: (prompt, ticket) => commandRunAgent(["--type", "code", "--role", "implementer", prompt],
+  invokeAgent: (prompt, ticket) => commandRunAgent(["--type", ticket.ticket_kind === "development" || !ticket.ticket_kind ? "code" : "architect", "--role", ticket.ticket_kind === "planning" ? "planner" : ticket.ticket_kind === "design" ? "architect" : "implementer", prompt],
     { project_id: ticket.project_id, request_id: ticket.request_id, ticket_id: ticket.ticket_id }),
   notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
   reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
@@ -485,6 +488,16 @@ const commandRunner = createAgentRunnerCommand({
 });
 const commandDeployment = createDeploymentCommand({ root: ROOT, parseArgs, runGit: runExternalGit, log });
 const commandBackup = createBackupCommand({ root: ROOT, parseArgs, log });
+const commandModelEval = createModelEvalCommand({ root: ROOT, parseArgs, log,
+  invokeAgent: async ({ provider, model, systemPrompt, prompt, maxOutputTokens, maxRequests }) => {
+    const result = await requestAgent({ provider, model, systemPrompt, prompt, maxOutputTokens,
+      postJson: (url, headers, body) => postJson(url, headers, body, { maxRetries: 0, maxProviderRequests: maxRequests, timeoutMs: 60000 }) });
+    if (observedUsage(provider, result.response).total_tokens !== null) {
+      try { providerUsage.record(provider, model, result.response); } catch { log("[WARN] Eval provider usage ledger write failed; run evidence is retained separately."); }
+    }
+    return result;
+  }
+});
 const commandHistory = createHistoryCommand({ root: ROOT, parseArgs, log,
   reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) });
 const commandAtlassian = createAtlassianCommand({ root: ROOT, parseArgs, log,
@@ -2350,13 +2363,13 @@ function commandContext(args) {
   return bundle;
 }
 
-async function postJson(url, headers, body) {
+async function postJson(url, headers, body, requestOptions = {}) {
   if (typeof fetch !== "function") fail("Node fetch is unavailable. Use Node.js 18+.");
   const cfg = loadConfig().api;
-  const maxRetries = cfg.maxRetries;
+  const maxRetries = requestOptions.maxRetries ?? cfg.maxRetries;
   const baseDelayMs = cfg.retryBaseMs;
   const maxDelayMs = cfg.retryMaxMs;
-  const maxProviderRequests = cfg.maxProviderRequests;
+  const maxProviderRequests = Math.min(cfg.maxProviderRequests, requestOptions.maxProviderRequests ?? cfg.maxProviderRequests);
   if (![maxRetries, baseDelayMs, maxDelayMs].every((value) => Number.isFinite(value) && value >= 0)
       || !Number.isFinite(maxProviderRequests) || maxProviderRequests < 1) {
     fail("API retry settings must be non-negative, and HARNESS_MAX_PROVIDER_REQUESTS must be at least 1.");
@@ -2376,6 +2389,7 @@ async function postJson(url, headers, body) {
         method: "POST",
         headers: { "Content-Type": "application/json", ...headers },
         body: JSON.stringify(body),
+        ...(requestOptions.timeoutMs ? { signal: globalThis.AbortSignal.timeout(requestOptions.timeoutMs) } : {}),
       });
       const json = await response.json().catch(() => ({}));
       if (response.ok) return json;
@@ -2456,41 +2470,7 @@ async function commandRunAgent(args, attribution = null) {
   log(`   Task     : ${prompt}`);
   log(`   Log      : ${logRel}`);
 
-  let text = "";
-  let responseJson = {};
-  if (provider === "openai") {
-    if (isPlaceholder(process.env.OPENAI_API_KEY)) fail("OPENAI_API_KEY is missing or placeholder");
-    responseJson = await postJson("https://api.openai.com/v1/chat/completions", {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    }, {
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt },
-      ],
-    });
-    text = responseJson.choices?.[0]?.message?.content || "";
-  } else if (provider === "anthropic") {
-    if (isPlaceholder(process.env.ANTHROPIC_API_KEY)) fail("ANTHROPIC_API_KEY is missing or placeholder");
-    responseJson = await postJson("https://api.anthropic.com/v1/messages", {
-      "x-api-key": process.env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    }, {
-      model,
-      max_tokens: 8192,
-      system: systemPrompt,
-      messages: [{ role: "user", content: prompt }],
-    });
-    text = responseJson.content?.[0]?.text || "";
-  } else if (provider === "gemini") {
-    if (isPlaceholder(process.env.GEMINI_API_KEY)) fail("GEMINI_API_KEY is missing or placeholder");
-    responseJson = await postJson(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { "x-goog-api-key": process.env.GEMINI_API_KEY }, {
-      contents: [{ parts: [{ text: `${systemPrompt}\n\n---\n\n${prompt}` }] }],
-    });
-    text = responseJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  } else {
-    fail(`Unsupported provider: ${provider}`);
-  }
+  const { text, response: responseJson } = await requestAgent({ provider, model, systemPrompt, prompt, postJson });
 
   try {
     providerUsage.record(provider, model, responseJson, attribution);
@@ -2580,7 +2560,7 @@ Usage:
   node tools/harness-cli/index.js evidence export [--format json]
   node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
   node tools/harness-cli/index.js dashboard
-  node tools/harness-cli/index.js history <list|search|export|refresh|review|status|report|measure|map-check|audit-tasks> [--project id] [--request id] [--ticket id]
+  node tools/harness-cli/index.js history <list|search|export|refresh|review|status|report|measure|map-check|audit-tasks> [--project id] [--request id] [--ticket id] [--ticket-kind development|planning|design]
   node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|status>
   node tools/harness-cli/index.js atlassian connect --site https://your-site.atlassian.net [--cloud-id UUID] [--transport mcp|rest]
   node tools/harness-cli/index.js atlassian mcp-tools
@@ -2593,9 +2573,10 @@ Usage:
   node tools/harness-cli/index.js backup create [--output FILE]
   node tools/harness-cli/index.js backup inspect --file FILE
   node tools/harness-cli/index.js backup restore --file FILE [--approve PREVIEW_ID]
-  node tools/harness-cli/index.js project context ID --bundle [--query TEXT] [--max-files N] [--max-bytes N]
+  node tools/harness-cli/index.js project context ID --bundle [--request ID --ticket ID] [--query TEXT] [--max-files N] [--max-bytes N]
   node tools/harness-cli/index.js runner run REQUEST_ID [--full-context]
   node tools/harness-cli/index.js atlassian map --project ID --jira-project KEY --issue-type ID --space-id ID [--parent-id ID] [--context-pages ID,ID] [--priority-map ID:P0,ID:P1,ID:P2,ID:P3]
+  node tools/harness-cli/index.js eval <list|run|show|compare|review> [id] [--provider NAME --model NAME] [--cases ID,ID] [--live --max-requests N --max-attempts N]
   node tools/harness-cli/index.js provider check [--provider openai|anthropic|gemini]
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name>
@@ -2708,6 +2689,7 @@ async function main(argv = process.argv.slice(2)) {
     atlassian: commandAtlassian,
     operations: commandOperations,
     backup: commandBackup,
+    eval: commandModelEval,
     "start-ticket": commandStartTicket,
     "complete-task": commandCompleteTask,
     verify: commandVerify,
