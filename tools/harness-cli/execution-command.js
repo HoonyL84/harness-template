@@ -11,6 +11,8 @@ const { readPlan } = require("./request-command");
 const { requireRequestReady } = require("./request-plan");
 const { createVerificationOwner } = require("./verification-lease");
 const { requireJiraFresh } = require("./jira-input");
+const { buildProjectContextBundle } = require("./project-context");
+const { isArtifactTicket, verifyArtifactTicket } = require("./ticket-artifacts");
 
 function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand, runGit, tokenizeCommand, log, env = process.env, fetchImpl = globalThis.fetch }) {
   const local = path.join(root, ".harness", "local");
@@ -100,7 +102,7 @@ function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand
         if (ticket.status !== "PREPARED") throw new Error(`Ticket must be PREPARED before review: ${ticket.ticket_id}`);
         const incompleteDependencies = (ticket.depends_on || []).filter((dependency) => !state.tickets.find((item) => item.ticket_id === dependency)?.committed_sha);
         if (incompleteDependencies.length > 0) throw new Error(`Ticket dependencies are not committed: ${incompleteDependencies.join(", ")}`);
-        if (!Array.isArray(ticket.verification_commands) || ticket.verification_commands.length === 0) {
+        if (!isArtifactTicket(ticket) && (!Array.isArray(ticket.verification_commands) || ticket.verification_commands.length === 0)) {
           throw new Error(`Ticket has no verification commands: ${ticket.ticket_id}`);
         }
         ticket.status = "VERIFYING";
@@ -113,9 +115,12 @@ function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand
       const claimedTicket = claimed.tickets.find((item) => item.ticket_id === options.ticket);
       let results;
       let fingerprint;
+      let artifactVerification;
       try {
         const before = reviewFingerprint(claimedTicket.worktree);
         if (!before) throw new Error(`Could not fingerprint worktree: ${claimedTicket.worktree}`);
+        if (claimedTicket.context_refs?.length) buildProjectContextBundle({ id: claimedTicket.project_id, path: claimedTicket.worktree }, { ticket: claimedTicket, historyRoot: root });
+        if (isArtifactTicket(claimedTicket)) artifactVerification = verifyArtifactTicket(claimedTicket, runGit);
         results = claimedTicket.verification_commands.map((commandLine) => {
           const parts = tokenizeCommand(commandLine);
           const command = parts[0] === "npm" && process.platform === "win32" ? "npm.cmd" : parts[0];
@@ -158,7 +163,8 @@ function createExecutionCommand({ root, parseArgs, reviewFingerprint, runCommand
         delete ticket.verification_owner;
         ticket.error = null;
         ticket.verification = {
-          summary: `${results.length} verification command(s) passed`,
+          ...(artifactVerification || { mode: "commands" }),
+          summary: artifactVerification ? artifactVerification.summary : `${results.length} verification command(s) passed`,
           results,
           content_fingerprint: fingerprint,
           recorded_at: new Date().toISOString()

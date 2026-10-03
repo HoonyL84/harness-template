@@ -67,12 +67,16 @@ test("legacy tickets have unknown verification and project history is bounded an
 test("review uses current source not stale saved snapshots and rejects changed worktrees", t => {
   const f = setup(t);
   f.save("projects.json", { projects: { demo: { path: f.root, stacks: ["node"] } } });
-  f.save("requests/demo-work.json", { request_id: "demo-work", status: "APPROVED", generated_at: f.event.timestamp,
-    tickets: [{ ticket_id: "feature", project_id: "demo", goal: "Work" }] });
-  f.save("executions/demo-work.json", { request_id: "demo-work", updated_at: f.event.timestamp,
-    tickets: [{ ticket_id: "feature", project_id: "demo", status: "REVIEW_READY", worktree: f.root,
-      verification: { content_fingerprint: "verified" }, runner: { history: [{ status: "FAILED", attempt: 1 }] },
-      release_history: [{ operation: "commit", commit: "abc", recorded_at: f.event.timestamp }] }] });
+  const { createRequestPlan, approveRequestPlan } = require("../../tools/harness-cli/request-plan");
+  const { buildExecutionState } = require("../../tools/harness-cli/project-execution");
+  const plan = approveRequestPlan(createRequestPlan({ requestId: "demo-work", goal: "Work", projectIds: ["demo"],
+    profiles: { demo: { status: "APPROVED", content_fingerprint: "profile", verify_commands: ["npm test"] } },
+    tickets: [{ ticket_id: "feature", project_id: "demo", goal: "Work" }] }));
+  f.save("requests/demo-work.json", plan);
+  const execution = buildExecutionState(plan, f.root);
+  Object.assign(execution.tickets[0], { status: "REVIEW_READY", verification: { content_fingerprint: "verified" },
+    runner: { history: [{ status: "FAILED", attempt: 1 }] }, release_history: [{ operation: "commit", commit: "abc", recorded_at: f.event.timestamp }] });
+  f.save("executions/demo-work.json", execution);
   appendHistory(f.root, { ...f.event, status: "BLOCKED" }); refreshHistory(f.root);
   let fingerprint = "changed";
   const command = createHistoryCommand({ root: f.root, parseArgs, log: () => {}, reviewFingerprint: () => fingerprint });

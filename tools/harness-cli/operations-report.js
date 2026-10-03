@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { readJson } = require("./control-plane-state");
 const { validateProjectId } = require("./project-registry");
+const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
 
 const TIME_FIELDS = ["requirements", "setup", "review", "recovery"];
 const REPORT_ACTIONS = new Set(["report", "measure", "map-check", "audit-tasks"]);
@@ -46,7 +47,7 @@ function ticketReport(root, subject, events, reviewFingerprint) {
   const fingerprint = executed.verification?.content_fingerprint || null;
   let current = null;
   if (fingerprint && executed.worktree && reviewFingerprint) {
-    try { current = reviewFingerprint(executed.worktree) === fingerprint; } catch { current = false; }
+    try { current = reviewFingerprint(executed.worktree) === fingerprint; if (current && isArtifactTicket(executed)) assertArtifactEvidence(executed); } catch { current = false; }
   }
   const sameTicket = event => event.project_id === subject.project && event.request_id === subject.request && event.ticket_id === subject.ticket;
   const scoped = events.filter(sameTicket);
@@ -69,11 +70,13 @@ function ticketReport(root, subject, events, reviewFingerprint) {
     estimated_input_tokens: executed.runner?.estimated_input_tokens ?? null, estimated_output_tokens: executed.runner?.estimated_output_tokens ?? null,
     usage_boundary: "Attributed responses only; excludes host chat, failed responses without usage, account balance and subscriptions",
     human_measurement: measurement ? { ...summarizeMeasurement(measurement), note: measurement.note, measured_at: measurement.timestamp } : summarizeMeasurement(null),
+    ticket_kind: planned.ticket_kind || "development", artifacts: executed.verification?.artifacts || [],
+    verification_mode: executed.verification?.mode || "commands",
     acceptance: (planned.acceptance_criteria || []).map((criterion, index) => {
       const mapping = scopedCurrent.filter(event => event.kind === "ACCEPTANCE_EVIDENCE" && event.criterion_index === index + 1).at(-1);
       const result = mapping && results[mapping.command_index - 1];
       const valid = current === true && subject.plan_current && mapping && result?.command === mapping.command && result.status === 0;
-      return { index: index + 1, criterion, evidence_status: valid ? "mapped-command-passed; human-review-required" : "unmapped-or-stale",
+      return { index: index + 1, criterion, evidence_status: executed.verification?.mode === "artifact" ? (current === true && subject.plan_current ? "artifact-structure-checked; human-review-required" : "unmapped-or-stale") : valid ? "mapped-command-passed; human-review-required" : "unmapped-or-stale",
         command: mapping?.command || null, note: mapping?.note || null };
     }), test_plan: planned.test_plan || {}, verification_results: results,
     review: current === true && subject.plan_current ? scopedCurrent.filter(event => event.kind === "USER_REVIEW").at(-1)?.status || null : null,

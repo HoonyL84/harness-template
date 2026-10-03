@@ -5,6 +5,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { readJson, readJsonDirectory, updateJsonLocked, writeJsonAtomic } = require("./control-plane-state");
 const { connectionIdentity } = require("./atlassian-mcp");
+const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
+const { assertExecutionMatchesPlan } = require("./project-execution");
+const { validateRequestPlan } = require("./request-plan");
 
 const hash = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const store = root => path.join(root, ".harness/local/followups.json");
@@ -23,8 +26,9 @@ function currentFacts(root) {
       const status = ticket.status === "REVIEW_READY" && review
         ? review.status === "accepted" ? "COMPLETED" : "CHANGES_REQUESTED" : ticket.status;
       facts.push({ request_id: state.request_id, ticket_id: ticket.ticket_id, project_id: ticket.project_id, goal: ticket.goal,
-        status, attempts: ticket.runner?.attempts || 0, source: ticket.source || null, worktree: ticket.worktree,
+        status, attempts: ticket.runner?.attempts || 0, source: ticket.source || null, worktree: ticket.worktree, ticket_kind: ticket.ticket_kind || "development",
         verification: ticket.verification ? { fingerprint: ticket.verification.content_fingerprint,
+          ...(ticket.verification.mode === "artifact" ? { mode: "artifact", artifacts: ticket.verification.artifacts, acceptance_checklist: ticket.verification.acceptance_checklist } : {}),
           results: (ticket.verification.results || []).map(r => ({ command: r.command, status: r.status })) } : null,
         review_id: review?.event_id || null });
     }
@@ -78,6 +82,11 @@ function assertFollowup(root, binding, config, reviewFingerprint) {
   if (!binding) return;
   const entry = readIntent(root, binding.id);
   if (hash(bindFollowup(root, binding.id, config)) !== hash(binding)) throw new Error("Follow-up destination or draft changed; prepare and approve again");
+  const state = readJson(path.join(root, ".harness/local/executions", `${entry.fact.request_id}.json`), null);
+  const plan = readJson(path.join(root, ".harness/local/requests", `${entry.fact.request_id}.json`), null);
+  if (state && plan) assertExecutionMatchesPlan(state, validateRequestPlan(plan), root);
+  const ticket = state?.tickets?.find(t => t.ticket_id === entry.fact.ticket_id && t.project_id === entry.fact.project_id);
+  if (ticket && isArtifactTicket(ticket) && ticket.verification) assertArtifactEvidence(ticket);
   if (entry.fact.verification && (!reviewFingerprint || reviewFingerprint(entry.fact.worktree) !== entry.fact.verification.fingerprint)) {
     throw new Error("Follow-up verified files changed; reverify before publication");
   }
@@ -86,9 +95,11 @@ function assertFollowup(root, binding, config, reviewFingerprint) {
 function summaryInput(entry) {
   const f = entry.fact;
   const checks = f.verification?.results || [];
-  const lines = [`Status: ${f.status}`, `Attempts: ${f.attempts}`, `Verification: ${f.verification ? `${checks.length} checks, ${checks.filter(r => r.status === 0).length} passed` : "not passed"}`,
+  const verification = f.verification?.mode === "artifact" ? `artifact structure checked; ${checks.length} optional checks, ${checks.filter(r => r.status === 0).length} passed` : f.verification ? `${checks.length} checks, ${checks.filter(r => r.status === 0).length} passed` : "not passed";
+  const lines = [`Status: ${f.status}`, `Attempts: ${f.attempts}`, `Verification: ${verification}`,
     `Evidence fingerprint: ${f.verification?.fingerprint || "none"}`, `Human review: ${f.review_id ? f.status : "pending"}`,
     "Completion here means human acceptance, NOT Git commit, push or deployment."];
+  if (f.verification?.mode === "artifact") lines.push(`Ticket kind: ${f.ticket_kind}`, "Artifact checks validate structure only; criteria require human acceptance.", ...f.verification.artifacts.map(a => `Artifact: ${a.path} (SHA-256: ${a.sha256})\n${a.content}`));
   if (entry.annotation) lines.push("Reviewed agent/user explanation:", JSON.stringify(entry.annotation, null, 2));
   return { request_id: f.request_id, ticket_id: f.ticket_id, title: `${f.status}: ${f.goal || f.ticket_id}`.slice(0, 180), summary: lines.join("\n") };
 }

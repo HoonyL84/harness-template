@@ -47,3 +47,8 @@ require("./orchestration-utils.test");
 require("./verify-utils.test");
 require("./workflow-policy.test");
 require("./atlassian-mcp-contracts.test");
+
+require("./ticket-artifacts.test");
+
+require("./context-references.test");
+require("./model-eval-command.test");

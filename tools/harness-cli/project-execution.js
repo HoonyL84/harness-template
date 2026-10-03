@@ -2,17 +2,22 @@
 
 const crypto = require("node:crypto");
 const path = require("node:path");
+const { normalizeContextRefs } = require("./context-references");
+const { normalizeTicketKind } = require("./ticket-artifacts");
 
 function buildExecutionState(plan, root, now = new Date().toISOString()) {
   const tickets = plan.tickets.map((ticket) => ({
     ticket_id: ticket.ticket_id,
     project_id: ticket.project_id,
+    ticket_kind: normalizeTicketKind(ticket.ticket_kind),
+    deliverables: [...(ticket.deliverables || [])],
     ...(ticket.priority !== undefined ? { priority: ticket.priority } : {}),
     ...(ticket.source ? { source: { ...ticket.source }, planning_status: ticket.planning_status } : {}),
     goal: ticket.goal,
     scope: [...(ticket.scope || [])],
     exclusions: [...(ticket.exclusions || [])],
     context_summary: ticket.context_summary || "",
+    context_refs: normalizeContextRefs(ticket.context_refs),
     acceptance_criteria: [...(ticket.acceptance_criteria || [])],
     implementation_steps: [...(ticket.implementation_steps || [])],
     test_plan: Object.fromEntries(Object.entries(ticket.test_plan || {}).map(([key, values]) => [key, [...values]])),
@@ -90,6 +95,8 @@ function assertExecutionMatchesPlan(state, plan, root) {
   for (const expectedTicket of expected.tickets) {
     const ticket = state.tickets.find((item) => item.ticket_id === expectedTicket.ticket_id);
     if (!ticket) throw new Error(`Execution ticket changed after planning: ${expectedTicket.ticket_id}`);
+    if (normalizeTicketKind(ticket.ticket_kind) !== expectedTicket.ticket_kind || JSON.stringify(ticket.deliverables || []) !== JSON.stringify(expectedTicket.deliverables)) throw new Error(`Execution ticket kind/deliverables changed after planning: ${ticket.ticket_id}`);
+    if (JSON.stringify(normalizeContextRefs(ticket.context_refs)) !== JSON.stringify(expectedTicket.context_refs)) throw new Error(`Execution context_refs changed after planning: ${ticket.ticket_id}`);
     if (ticket.priority !== expectedTicket.priority) throw new Error(`Execution priority changed after planning: ${ticket.ticket_id}`);
     if (JSON.stringify(ticket.retry_policy) !== JSON.stringify(expectedTicket.retry_policy)) throw new Error(`Execution retry_policy changed after planning: ${ticket.ticket_id}`);
     if (JSON.stringify(ticket.source) !== JSON.stringify(expectedTicket.source)) throw new Error(`Execution source changed after planning: ${ticket.ticket_id}`);

@@ -10,6 +10,7 @@ const { assertExecutionMatchesPlan } = require("./project-execution");
 const { readPlan } = require("./request-command");
 const { requireJiraFresh } = require("./jira-input");
 const { requireAcceptedReview } = require("./work-history");
+const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
 
 function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint, runGit, log, env = process.env, fetchImpl = globalThis.fetch }) {
   if (typeof reviewFingerprint !== "function") throw new Error("reviewFingerprint is required");
@@ -131,6 +132,7 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
         if (ticket.status !== "REVIEW_READY" || !ticket.verification?.content_fingerprint) {
           throw new Error(`Ticket is not review-ready: ${ticket.ticket_id}`);
         }
+        if (isArtifactTicket(ticket)) assertArtifactEvidence(ticket);
         ticket.review_fingerprint = reviewFingerprint(ticket.worktree);
         if (!ticket.review_fingerprint) throw new Error(`Could not fingerprint worktree: ${ticket.worktree}`);
         if (ticket.review_fingerprint !== ticket.verification.content_fingerprint) {
@@ -172,6 +174,7 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
       for (const approved of record.tickets) {
         const ticket = execution?.tickets?.find((item) => item.ticket_id === approved.ticket_id && item.project_id === approved.project_id);
         if (!ticket || ticket.status !== "REVIEW_READY" || !approved.review_event_id) throw new Error(`Current accepted user review is required for ticket: ${approved.ticket_id}`);
+        if (isArtifactTicket(ticket)) assertArtifactEvidence(ticket);
         if (record.release.operation !== "commit" && ticket.committed_sha !== approved.committed_sha) throw new Error(`Managed commit changed after release request: ${approved.ticket_id}`);
         requireAcceptedReview(root, record.request_id, ticket,
           record.release.operation === "commit" ? [approved.review_fingerprint]
