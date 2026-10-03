@@ -16,8 +16,9 @@
 6. **`docs/design-docs/execution-modes.md`** — OS/CLI/API-key 실행 모드와 제한
 7. **`docs/design-docs/auto-fix-policy.md`** — L4.5 저위험 자동 수정 범위와 원복 규칙
 8. **`docs/design-docs/l5-autonomy-policy.md`** — 선택형 L5 반복·승인·체크포인트 규칙
-9. **`.harness/tasks/backlog/`** — PLANS.md와 사용자 피드백에서 분해된 티켓
-10. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
+9. **`.harness/tasks/review/`** — 구현 이후 별도 운영 검수 대기 (완료 아님)
+10. **`.harness/tasks/backlog/`** — PLANS.md와 사용자 피드백에서 분해된 티켓
+11. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
 
 > 필요한 스킬이 있으면 `skills/`의 `SKILL.md`를 우선 탐색하고, 긴 절차 문서는 `docs/skills/`를 참고하라.
 
@@ -106,6 +107,7 @@
 | `docs/project/PLANS.md` | 프로젝트 목표 및 로드맵 |
 | `.harness/tasks/backlog/` | 아직 시작하지 않은 티켓 |
 | `.harness/tasks/active/` | 현재 진행 중인 티켓 |
+| `.harness/tasks/review/` | 구현 이후 운영 검수 대기, from-review로 재개 후 정상 검증/마감 |
 | `.harness/tasks/archive/` | 완료된 티켓 기록 |
 
 ---
@@ -140,5 +142,5 @@ bash scripts/run-agent.sh --role reviewer --type review "현재 diff를 리뷰�
 
 1. **큰 목표를 먼저 정리:** 사용자가 큰 목표를 제시하면 즉시 하네스 명령을 실행하지 않는다. 먼저 `Dashboard.md` 또는 `docs/project/PLANS.md`에 목표와 TODO 후보를 정리하고 사용자에게 보여준다.
 2. **승인 후 티켓 발급:** 사용자가 TODO 목록을 확인하고 진행을 승인하면 `npm run harness -- create-ticket`으로 항목별 작업 티켓을 만든다.
-3. **상태 브리핑:** 사용자가 현재 진행 상황을 요청하면 `.harness/tasks/`의 `backlog`, `active`, `blocked`, `archive`를 확인해 전체 상태를 요약한다.
+3. **상태 브리핑:** 사용자가 현재 진행 상황을 요청하면 `.harness/tasks/`의 `backlog`, `active`, `review`, `blocked`, `archive`를 확인해 전체 상태를 요약한다.
 4. **Blocked 에스컬레이션:** `blocked/`에 티켓이 생기면 실패 원인과 필요한 사용자 결정을 알리고, 명시적 승인 없이 고위험 복구를 진행하지 않는다.

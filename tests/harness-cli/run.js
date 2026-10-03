@@ -52,3 +52,4 @@ require("./ticket-artifacts.test");
 
 require("./context-references.test");
 require("./model-eval-command.test");
+require("./operations-visibility.test");

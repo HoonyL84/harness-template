@@ -85,7 +85,7 @@ function ticketReport(root, subject, events, reviewFingerprint) {
 
 function auditTasks(root) {
   const tasks = [];
-  for (const state of ["backlog", "active", "blocked", "archive"]) {
+  for (const state of ["backlog", "active", "review", "blocked", "archive"]) {
     const directory = path.join(root, ".harness/tasks", state);
     if (!fs.existsSync(directory)) continue;
     const realRoot = fs.realpathSync(root), rel = path.relative(realRoot, fs.realpathSync(directory));
@@ -96,8 +96,10 @@ function auditTasks(root) {
       const content = fs.readFileSync(file, "utf8");
       const section = content.match(/^## Acceptance(?: Criteria)?\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] || "";
       const pending = (section.match(/^- \[ \]/gm) || []).length, checked = (section.match(/^- \[x\]/gim) || []).length;
-      tasks.push({ ticket_id: name.slice(0, -3), state, checked, pending,
-        disposition: state === "archive" ? "recorded-archive; not-reverified" : pending > 0 || checked === 0 ? "criteria-review-required" : "implementation-checked; completion-review-required" });
+      const operational = content.match(/^## Operational Review\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] || "";
+      const remaining_conditions = [...operational.matchAll(/^- \[ \] (.+)$/gm)].map(m => m[1].trim());
+      tasks.push({ remaining_conditions, ticket_id: name.slice(0, -3), state, checked, pending,
+        disposition: state === "review" ? "operational-review-required; not-completed" : state === "archive" ? "recorded-archive; not-reverified" : pending > 0 || checked === 0 ? "criteria-review-required" : "implementation-checked; completion-review-required" });
     }
   }
   return { tasks, notice: "Read-only audit; no automatic archive, inferred approval or historical re-verification" };

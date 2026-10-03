@@ -42,3 +42,8 @@
 - The earlier no-release-approval notes describe the authorization at the time of implementation. The user now explicitly requests completing the outstanding release checks, merging to main, and aligning the IntelliJ checkout with main.
 - Scope of this release: the live MCP contract correction, its tests, and accurate documentation. Full operational account rehearsal and AX time measurement remain separate, unverified work; this release does not mark those criteria complete.
 - Before merging: Full offline verification, clean diff review, and GitHub cross-platform/security checks must pass.
+
+## Operational Review
+- [ ] standing-consent 전체 실계정 운영과 최종 사용자 검수
+
+구현 병합과 운영 수락은 다르다. 원문과 과거 근거는 보존하며 현재 완료·사용자 승인으로 재해석하지 않는다.

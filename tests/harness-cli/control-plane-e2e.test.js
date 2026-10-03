@@ -38,15 +38,15 @@ test("two-project control plane gates release, deduplicates alerts, and exports 
   fs.writeFileSync(path.join(tickets[0].worktree, "source.txt"), "ads");
   commands.release(["consume", "multi-work", "--fingerprint", pending.fingerprint]); assert.throws(() => commands.release(["consume", "multi-work", "--fingerprint", pending.fingerprint]), /unconsumed/);
   const evidenceFile = path.join(root, "evidence.json"); fs.writeFileSync(evidenceFile, JSON.stringify({ project_id: "ads", ticket_id: "ads-ticket", title: "Ad cache", status: "VERIFIED", visibility: "public", commit: "abc1234", technologies: ["Redis"] })); commands.evidence(["add", "--file", evidenceFile]); assert.match(commands.evidence(["export"]), /abc1234/);
-  await commands.dashboard([]); await commands.dashboard([]); assert.equal(notices.length, 1);
+  await commands.dashboard(["--notify"]); await commands.dashboard(["--notify"]); assert.equal(notices.length, 1);
 });
 
 test("failed notifications remain retryable", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-control-notify-"));
   let attempts = 0;
   const commands = createControlPlaneCommands({ root, parseArgs, reviewFingerprint: () => "unused", runGit: () => ({ status: 0 }), notify: async () => { attempts += 1; return { configured: ["test"], sent: 0 }; }, log: () => {} });
-  await commands.dashboard([]);
-  await commands.dashboard([]);
+  await commands.dashboard(["--notify"]);
+  await commands.dashboard(["--notify"]);
   assert.equal(attempts, 2);
 });
 

@@ -10,9 +10,10 @@ const { assertExecutionMatchesPlan } = require("./project-execution");
 const { readPlan } = require("./request-command");
 const { requireJiraFresh } = require("./jira-input");
 const { requireAcceptedReview } = require("./work-history");
+const { dashboardOverview, overviewLines } = require("./dashboard-status");
 const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
 
-function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint, runGit, log, env = process.env, fetchImpl = globalThis.fetch }) {
+function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint, runGit, log, env = process.env, fetchImpl = globalThis.fetch, checkAtlassian }) {
   if (typeof reviewFingerprint !== "function") throw new Error("reviewFingerprint is required");
   if (typeof runGit !== "function") throw new Error("runGit is required");
   const local = path.join(root, ".harness", "local");
@@ -255,7 +256,9 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
     }
     throw new Error("Usage: evidence <add|search|export>");
   };
-  const dashboard = async () => {
+  const dashboard = async (args = []) => {
+    const { options } = parseArgs(args);
+    const overview = await dashboardOverview({ root, runGit, env, fetchImpl, options, checkAtlassian });
     const bootstraps = readJsonDirectory(path.join(local, "bootstraps"));
     const requests = readJsonDirectory(path.join(local, "requests"));
     const executions = readJsonDirectory(path.join(local, "executions"));
@@ -284,18 +287,19 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
       if (release.status === "APPROVED") return `${release.request_id}: RELEASE_APPROVED\nNext: apply the one-time approval immediately before the managed Git operation`;
       return `${release.request_id}: RELEASE_${release.status}`;
     }));
-    const summary = lines.join("\n\n") || "No active executions";
+    const summary = [...overviewLines(overview), ...lines].join("\n\n");
     const eventId = crypto.createHash("sha256").update(summary).digest("hex");
-    const duplicate = await withFileLockAsync(eventPath, async () => {
+    const duplicate = options.notify && !overview.offline ? await withFileLockAsync(eventPath, async () => {
       const sent = readJson(eventPath, []);
       if (sent.includes(eventId)) return true;
       const blocked = executions.some((state) => state.tickets.some((ticket) => ticket.status === "BLOCKED"));
       const result = await notify(blocked ? "fail" : "success", summary, "multi-project-dashboard");
       if (result?.sent > 0) writeJsonAtomic(eventPath, [...sent, eventId].slice(-100));
       return false;
-    }, { ttlMs: 120_000 });
-    log(summary);
-    return { bootstraps, requests, executions, releases, duplicate };
+    }, { ttlMs: 120_000 }) : false;
+    const result = { bootstraps, requests, executions, releases, overview, duplicate };
+    log(options.json ? JSON.stringify(result, null, 2) : summary);
+    return result;
   };
   const guardedRelease = (args) => {
     const { positional, options } = parseArgs(args);

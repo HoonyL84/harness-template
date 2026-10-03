@@ -46,3 +46,8 @@ feat
 - Added separate Jira and Confluence remote searches, bounded pagination and partial/error statuses.
 - Tests cover Korean query, UTC range validation, legacy unknown evidence, project isolation and remote cursor errors.
 - Added remote Jira status/priority and Jira/Confluence date filters with project boundaries preserved; see docs/project/PERSONAL_OPERATIONS_VALIDATION.md for live validation gaps.
+
+## Operational Review
+- [ ] 실제 업무 기록 누락 점검과 검색 결과 검수
+
+구현 병합과 운영 수락은 다르다. 원문과 과거 근거는 보존하며 현재 완료·사용자 승인으로 재해석하지 않는다.

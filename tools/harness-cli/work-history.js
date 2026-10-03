@@ -85,7 +85,7 @@ function collectHistory(root, { includeSaved = true } = {}) {
   const roots = new Map([["harness", root], ...Object.entries(registry.projects).map(([id, p]) => [id, p.path])]);
   for (const [projectId, projectRoot] of roots) {
     if (!fs.existsSync(projectRoot)) continue;
-    for (const status of ["backlog", "active", "blocked", "archive"]) {
+    for (const status of ["backlog", "active", "review", "blocked", "archive"]) {
       const dir = path.join(projectRoot, ".harness", "tasks", status);
       if (!fs.existsSync(dir)) continue;
       const realRoot = fs.realpathSync(projectRoot);

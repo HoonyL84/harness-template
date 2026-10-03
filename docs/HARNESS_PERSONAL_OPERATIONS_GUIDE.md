@@ -580,3 +580,7 @@ node tools/harness-cli/index.js atlassian consent revoke --project demo
 전송 직전에도 승인을 재확인한다. 이미 서버로 전송된 요청까지 취소하거나 되돌리지는 못한다. scope 밖의 수동 게시에는 기존 preview/sync 건별 승인이 필요하다.
 
 이번 확인은 사용자 요청에 따라 **모의 HTTP/임시 로컬 상태만 사용**했다. 실제 계정 권한, 사이트별 워크플로와 수신 화면은 아직 검증하지 않았다.
+
+## 운영 현황과 검수 대기
+
+`dashboard`는 기본적으로 로컬 읽기 전용이다. 외부 연결 진단은 `--check-connections`, 알림 전송은 `--notify`로 명시한다. 코드 반영과 운영 수락을 구분하는 `review` 티켓, 복구 안내, 선택형 관측 비용은 [운영 현황 가이드](OPERATIONS_STATUS.md)를 참고한다.

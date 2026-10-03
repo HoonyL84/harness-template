@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { recoveryAdvice } = require("./publication-recovery");
 const fs = require("node:fs");
 const path = require("node:path");
 const { readJson, updateJsonLocked, withFileLock } = require("./control-plane-state");
@@ -78,6 +79,11 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
     if (action === "consent") return print(consentCommand(root, subject, options, env, now));
     if (action === "mcp-tools") return print({ transport: "mcp", tools: await mcp.list(), notice: "Read-only schemas. Configure local bindings using these actual schemas; no remote writes or implicit approval." });
     if (["connect", "discover", "map", "check"].includes(action)) return print(await createConnectionCommand({ root, send, env })(action, options));
+    if (action === "recovery") {
+      const entries = read().entries.filter(e => !subject || e.id === subject);
+      if (subject && !entries.length) throw new Error("Unknown outbox entry");
+      return print(entries.map(recoveryAdvice));
+    }
     if (action === "status") return print(read());
     if (action === "preview") {
       if (read().entries.some(e => e.status === "PENDING" && e.followup)) {
@@ -306,7 +312,7 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
       update(state => { Object.assign(state.entries.find(e => e.id === subject), { status: "SYNCED", remote_id: id, reconciled_at: new Date(now()).toISOString() }); return state; });
       return print(read());
     }
-    throw new Error("Usage: atlassian <queue-ticket request --ticket id|queue-status --project id --issue KEY-1 --status-id id|queue-result --project id --file summary.json|preview|sync --approve digest|retry-rejected id --approve id|reconcile id --remote-id id|search --project id --query text|context project-id|status>");
+    throw new Error("Usage: atlassian <queue-ticket request --ticket id|queue-status --project id --issue KEY-1 --status-id id|queue-result --project id --file summary.json|preview|sync --approve digest|retry-rejected id --approve id|reconcile id --remote-id id|search --project id --query text|context project-id|recovery [id]|status>");
   };
 }
 
