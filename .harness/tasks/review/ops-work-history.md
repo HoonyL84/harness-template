@@ -51,3 +51,8 @@ feat
 - Added explicit approved Jira transition writes with source status/updated checks; no automatic polling or card-driven code execution.
 - Deliberate boundary: no existing Confluence page overwrite.
 - Remaining acceptance gaps are tracked in docs/project/PERSONAL_OPERATIONS_VALIDATION.md. Not archived or Git-approved.
+
+## Operational Review
+- [ ] 실제 업무 기록 누락 점검과 결과 검수
+
+구현 병합과 운영 수락은 다르다. 원문과 과거 근거는 보존하며 현재 완료·사용자 승인으로 재해석하지 않는다.

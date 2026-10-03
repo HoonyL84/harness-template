@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { recoveryAdvice } = require("./publication-recovery");
 const fs = require("node:fs");
 const path = require("node:path");
 const { readJson, readJsonDirectory, updateJsonLocked, writeJsonAtomic } = require("./control-plane-state");
@@ -115,7 +116,7 @@ function createFollowupCommand({ root, parseArgs, log, atlassian, reviewFingerpr
       return print(state.entries.filter(e => e.status !== "SUPERSEDED" && (!options.project || e.fact.project_id === options.project)).map(entry => {
         const publications = outbox.entries.filter(p => p.followup?.id === entry.id);
         const publication = publications.filter(p => p.status !== "SUPERSEDED").at(-1);
-        return { ...entry, publication_status: publication?.status || "MISSING", outbox_id: publication?.id || null,
+        return { ...entry, ...(publication ? { recovery: recoveryAdvice(publication) } : {}), publication_status: publication?.status || "MISSING", outbox_id: publication?.id || null,
           next: publication ? publication.status === "PENDING" ? "atlassian preview then approved sync"
             : publication.status === "SYNCED" ? "recorded" : "inspect outbox; reconcile uncertain writes or explicitly retry rejected delivery" : "operations prepare <id>" };
       }));

@@ -50,3 +50,8 @@ feat
 - No actual Jira/Confluence credentials used, no live account validation, no commit/push.
 - Follow-on implementation now includes Jira creation/Confluence outbox, history/search/context and OpenAI/Anthropic account usage. Remaining gaps: docs/project/PERSONAL_OPERATIONS_VALIDATION.md.
 - Interactive host-wide retry enforcement is not provided by the API runner; this limitation is documented.
+
+## Operational Review
+- [ ] 최종 사용자 결과 검수와 마감 기록 확인
+
+구현 병합과 운영 수락은 다르다. 원문과 과거 근거는 보존하며 현재 완료·사용자 승인으로 재해석하지 않는다.

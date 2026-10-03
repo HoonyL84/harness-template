@@ -48,3 +48,8 @@ feat
 - Current Git diagnosis is separate from registration data; local context hashes are compared with the approved profile.
 - Remote data stays untrusted and cached; changed connection/page allowlists reject stale snapshots.
 - No automatic semantic code/document consistency guarantee. Real remote freshness requires explicit context refresh.
+
+## Operational Review
+- [ ] 필요한 시점의 원격 refresh와 실제 운영 검수
+
+구현 병합과 운영 수락은 다르다. 원문과 과거 근거는 보존하며 현재 완료·사용자 승인으로 재해석하지 않는다.

@@ -58,3 +58,8 @@ feat
 - Added PERSONAL_OPERATIONS_VALIDATION.md with practical Q&A, evidence links, unsupported features and honest AX measurement template.
 - Added two-project fixture E2E covering request approval, retry, notification, user review, process reentry, search and explicit Confluence publication.
 - Fixture Git/AI/API adapters are not claimed as live operational validation. Independent new-user and macOS/Linux/live-account rehearsal remains.
+
+## Operational Review
+- [ ] 독립적인 새 사용자/새 기기 재현과 실제 사용자 시간 측정
+
+구현 병합과 운영 수락은 다르다. 원문과 과거 근거는 보존하며 현재 완료·사용자 승인으로 재해석하지 않는다.

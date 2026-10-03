@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("node:path");
+const { costMeter, loadPricing, estimateCost } = require("./observed-cost");
 const { readJson, updateJsonLocked, writeJsonAtomic } = require("./control-plane-state");
 
 const PROVIDERS = Object.freeze(["openai", "anthropic", "gemini"]);
@@ -119,6 +120,11 @@ function createProviderUsageService({ root, env = process.env, now = () => new D
         total_tokens: 0,
         models: {}
       };
+      current.cost_meters ||= {};
+      const sampled = costMeter(provider, response), meter = current.cost_meters[model] || { input_tokens: 0, output_tokens: 0, cached_tokens: 0, complete: !Object.hasOwn(current.models, model) };
+      for (const field of ["input_tokens", "output_tokens", "cached_tokens"]) meter[field] += sampled[field];
+      meter.complete &&= sampled.complete && ["input_tokens", "output_tokens", "cached_tokens"].every(field => Number.isSafeInteger(meter[field]) && meter[field] >= 0);
+      current.cost_meters[model] = meter;
       current.requests += 1;
       current.input_tokens += normalized.input_tokens;
       current.output_tokens += normalized.output_tokens;
@@ -145,7 +151,8 @@ function createProviderUsageService({ root, env = process.env, now = () => new D
     return normalized;
   }
 
-  function status() {
+  function status({ cost = false } = {}) {
+    const pricing = cost ? loadPricing(root) : null;
     const timestamp = now();
     const month = timestamp.toISOString().slice(0, 7);
     const state = readJson(usageFile, { schema_version: "1.0", months: {} });
@@ -173,6 +180,7 @@ function createProviderUsageService({ root, env = process.env, now = () => new D
           configured: isConfigured(provider),
           model: env[MODEL_ENV[provider]] || null,
           observed_usage: usage,
+          ...(cost ? { estimated_cost: estimateCost(provider, usage, pricing, month, timestamp) } : {}),
           monthly_token_budget: budget,
           remaining_tokens: remaining,
           remaining_percent: budget === null ? null : Number(((remaining / budget) * 100).toFixed(2)),

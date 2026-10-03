@@ -471,6 +471,7 @@ const controlPlane = createControlPlaneCommands({
   notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
   reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
   runGit: runExternalGit,
+  checkAtlassian: () => createAtlassianCommand({ root: ROOT, parseArgs, log: () => {}, reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) })(["check"]),
   log
 });
 const commandRunner = createAgentRunnerCommand({
@@ -802,6 +803,7 @@ function commandCreateTicket(args) {
   const ticketRel = `.harness/tasks/backlog/${name}.md`;
   if (exists(ticketRel)) fail(`Ticket already exists: ${ticketRel}`);
   if (exists(`.harness/tasks/active/${name}.md`)) fail(`Active ticket already exists: .harness/tasks/active/${name}.md`);
+  if (exists(`.harness/tasks/review/${name}.md`)) fail(`Review ticket already exists: .harness/tasks/review/${name}.md; resume with start-ticket --from-review`);
 
   const content = `# TICKET: ${name}
 
@@ -834,13 +836,13 @@ ${type}
 function commandStartTicket(args) {
   const { positional, options } = parseArgs(args);
   const [name] = positional;
-  if (!name) fail("Usage: node tools/harness-cli/index.js start-ticket <name> [--allow-parallel]");
+  if (!name) fail("Usage: node tools/harness-cli/index.js start-ticket <name> [--from-review] [--allow-parallel]");
 
-  const backlogRel = `.harness/tasks/backlog/${name}.md`;
+  const backlogRel = `.harness/tasks/${options["from-review"] ? "review" : "backlog"}/${name}.md`;
   const activeRel = `.harness/tasks/active/${name}.md`;
   const existingActive = listTaskNames("active");
 
-  if (!exists(backlogRel)) fail(`Backlog ticket not found: ${backlogRel}`);
+  if (!exists(backlogRel)) fail(`Source ticket not found: ${backlogRel}`);
   if (exists(activeRel)) fail(`Active task already exists: ${activeRel}`);
   if (existingActive.length > 0 && !options["allow-parallel"]) {
     fail(`Another ticket is already active: ${existingActive.join(", ")}. Complete it first or retry with --allow-parallel.`);
@@ -1352,7 +1354,7 @@ function createPlannedTickets(plan) {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || !VALID_TYPES.has(type) || !goal) {
       fail(`Planner returned an invalid ticket: ${JSON.stringify(task)}`);
     }
-    if (exists(`.harness/tasks/backlog/${name}.md`) || exists(`.harness/tasks/active/${name}.md`) || exists(`.harness/tasks/archive/${name}.md`)) {
+    if (exists(`.harness/tasks/backlog/${name}.md`) || exists(`.harness/tasks/active/${name}.md`) || exists(`.harness/tasks/archive/${name}.md`) || exists(`.harness/tasks/review/${name}.md`)) {
       continue;
     }
     commandCreateTicket([
@@ -2520,7 +2522,7 @@ function commandProvider(args) {
     fail("Usage: provider <status|list|usage|use|check|account-usage> [provider] [--provider openai|anthropic|gemini] [--json]");
   }
 
-  const report = providerUsage.status();
+  const report = providerUsage.status({ cost: Boolean(options.cost) });
   if (options.json) {
     log(JSON.stringify(report, null, 2));
     return report;
@@ -2536,6 +2538,7 @@ function commandProvider(args) {
       : `${item.remaining_tokens.toLocaleString()} (${item.remaining_percent}%)`;
     log(`${marker} ${item.provider.padEnd(10)} ${configured.padEnd(12)} used=${item.observed_usage.total_tokens.toLocaleString()} remaining=${remaining}`);
   }
+  if (options.cost) for (const item of report.providers) log(`[Cost] ${item.provider}: ${item.estimated_cost.usd === null ? "unknown" : "$" + item.estimated_cost.usd} (reference observed estimate, not invoice/balance)`);
   log("Remote account remaining is unknown without provider-specific admin billing credentials.");
   return report;
 }
@@ -2559,10 +2562,11 @@ Usage:
   node tools/harness-cli/index.js evidence search [--query <text>] [--project <id>] [--technology <name>] [--from <date>] [--to <date>] [--include-drafts]
   node tools/harness-cli/index.js evidence export [--format json]
   node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
-  node tools/harness-cli/index.js dashboard
+  node tools/harness-cli/index.js dashboard [--json] [--cost] [--check-connections] [--notify]
   node tools/harness-cli/index.js history <list|search|export|refresh|review|status|report|measure|map-check|audit-tasks> [--project id] [--request id] [--ticket id] [--ticket-kind development|planning|design]
   node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|status>
   node tools/harness-cli/index.js atlassian connect --site https://your-site.atlassian.net [--cloud-id UUID] [--transport mcp|rest]
+  node tools/harness-cli/index.js atlassian recovery [outbox-entry-id]
   node tools/harness-cli/index.js atlassian mcp-tools
   node tools/harness-cli/index.js atlassian discover [--jira-project KEY] [--space-id ID]
   node tools/harness-cli/index.js atlassian link <request-id> --ticket <ticket-id>
@@ -2579,11 +2583,11 @@ Usage:
   node tools/harness-cli/index.js eval <list|run|show|compare|review> [id] [--provider NAME --model NAME] [--cases ID,ID] [--live --max-requests N --max-attempts N]
   node tools/harness-cli/index.js provider check [--provider openai|anthropic|gemini]
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
-  node tools/harness-cli/index.js start-ticket <name>
+  node tools/harness-cli/index.js start-ticket <name> [--from-review]
   node tools/harness-cli/index.js verify [--quick|--full] [--offline] [--diagnose] [--auto-fix]
   node tools/harness-cli/index.js context [--task <ticket>] [--type code|architect|review] [--full-context] [--max-bytes <n>] [--json]
   node tools/harness-cli/index.js run-agent [--type type] [--role role] "prompt"
-  node tools/harness-cli/index.js provider <status|list|usage> [--json]
+  node tools/harness-cli/index.js provider <status|list|usage> [--json] [--cost]
   node tools/harness-cli/index.js provider use <openai|anthropic|gemini> [--json]
   node tools/harness-cli/index.js provider account-usage [--provider openai|anthropic|gemini] [--from YYYY-MM-DD --to YYYY-MM-DD] [--refresh]
   node tools/harness-cli/index.js complete-task <name> [--force]

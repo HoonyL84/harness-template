@@ -47,3 +47,8 @@ feat
 - Contract tests cover pagination loops, partial 403, cache/key change, malformed data and Anthropic cents conversion.
 - Added three-provider model catalog checks and the Gemini read-only Cloud Monitoring adapter with daily sums, bounded paging and credential-bound caching. Missing data/permissions never become zero balance.
 - No actual account credentials used. Gemini billing export/OAuth auto-refresh and live account validation remain.
+
+## Operational Review
+- [ ] 관리자 권한으로 실제 조회 검증; Gemini 비용/OAuth 자동 갱신은 지원 범위 밖으로 명시
+
+구현 병합과 운영 수락은 다르다. 원문과 과거 근거는 보존하며 현재 완료·사용자 승인으로 재해석하지 않는다.
