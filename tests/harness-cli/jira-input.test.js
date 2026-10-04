@@ -173,3 +173,31 @@ test("Jira import stays DRAFT until a detailed plan is provided and current inpu
     invokeAgent: () => { throw new Error("Must not reach agent"); } });
   await assert.rejects(runner(["run", "work"]), /inputs changed/);
 });
+
+test("multi-issue import and freshness validation each reuse one request-scoped MCP client", async t => {
+  const f = fixture(t), calls = [];
+  f.config.transport = "mcp";
+  f.config.mcp = { bindings: { "jira.getIssue": { tool: "getJiraIssue", arguments: {
+    cloudId: { $ref: "/cloudId" }, issueIdOrKey: { $ref: "/id" }
+  }, result: { $ref: "/data" } } } };
+  f.saveConfig();
+  const options = { env: f.options.env, fetchImpl: async (url, init) => {
+    const rpc = JSON.parse(init.body); calls.push(rpc);
+    if (rpc.method === "notifications/initialized") return new globalThis.Response(null, { status: 202 });
+    let result;
+    if (rpc.method === "initialize") result = { protocolVersion: "2025-06-18", capabilities: {} };
+    else if (rpc.method === "tools/list") result = { tools: [{ name: "getJiraIssue" }] };
+    else {
+      const index = ["DEMO-2", "10002"].includes(rpc.params.arguments.issueIdOrKey) ? 2 : 1;
+      result = { structuredContent: { data: { ...f.issue, key: `DEMO-${index}`, id: String(10000 + index) } } };
+    }
+    return new globalThis.Response(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }), { headers: { "mcp-session-id": "test-session" } });
+  } };
+  const tickets = await readJiraTickets(f.root, "demo", ["DEMO-1", "DEMO-2"], options);
+  assert.equal(tickets.length, 2); assert.equal(calls.filter(c => c.method === "initialize").length, 1);
+  assert.equal(calls.filter(c => c.method === "tools/list").length, 1);
+  calls.length = 0;
+  await requireJiraFresh(f.root, { request_id: "not-published", tickets }, options);
+  assert.equal(calls.filter(c => c.method === "initialize").length, 1);
+  assert.equal(calls.filter(c => c.method === "tools/call").length, 2);
+});

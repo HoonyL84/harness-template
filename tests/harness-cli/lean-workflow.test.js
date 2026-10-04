@@ -5,13 +5,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { buildAgentContext, POLICY_FILES, resolveAgentTaskScope } = require("../../tools/harness-cli/agent-context");
+const { buildAgentContext, POLICY_FILES, REVIEW_FILES, TECH_STACK_FILE, resolveAgentTaskScope } = require("../../tools/harness-cli/agent-context");
 const { validateRepairResponse } = require("../../tools/harness-cli/repair-evidence");
 const { extractUnifiedDiff } = require("../../tools/harness-cli/agent-runner");
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-lean-test-"));
-  for (const file of [...POLICY_FILES, "docs/project/PLANS.md", "docs/design-docs/tech-stack.md", "docs/design-docs/agent-roles.md", ".harness/tasks/active/demo.md"]) {
+  for (const file of [...POLICY_FILES, ...REVIEW_FILES, "docs/project/PLANS.md", "docs/design-docs/tech-stack.md", "docs/design-docs/agent-roles.md", ".harness/tasks/active/demo.md"]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), `# ${file}\nDo not bypass approvals.\n`);
   }
@@ -28,7 +28,10 @@ test("focused context retains complete policies and ticket, with deterministic o
   assert.ok(focused.bytes < full.bytes);
   assert.equal(focused.bytes, Buffer.byteLength(focused.content));
   assert.equal(focused.estimated_input_tokens, Math.ceil(focused.bytes / 3));
-  assert.equal(focused.omitted.length, 1);
+  assert.ok(focused.omitted.some(item => item.path === TECH_STACK_FILE));
+  assert.ok(!focused.files.includes(TECH_STACK_FILE));
+  assert.ok(full.files.includes(TECH_STACK_FILE));
+  assert.ok(REVIEW_FILES.every(file => !focused.files.includes(file)));
   assert.ok(buildAgentContext(root, { type: "architect" }).files.includes("docs/design-docs/agent-roles.md"));
   assert.ok(buildAgentContext(root, { type: "review" }).files.includes("docs/design-docs/agent-roles.md"));
 });
@@ -99,4 +102,39 @@ test("repair evidence is recorded separately from the diff and duplicate failed 
     value[field] = "a".repeat(2001);
     assert.throws(() => validateRepairResponse(`\`\`\`repair\n${JSON.stringify(value)}\n\`\`\``, diff), /missing or invalid/);
   }
+});
+
+test("review type and explicit reviewer role load skill instructions without a stack profile", () => {
+  const root = fixture();
+  for (const options of [{ type: "review" }, { type: "code", role: "reviewer" }]) {
+    const context = buildAgentContext(root, options);
+    for (const file of [...POLICY_FILES, ...REVIEW_FILES]) assert.ok(context.files.includes(file));
+    assert.ok(!context.files.includes(TECH_STACK_FILE));
+    assert.ok(!context.omitted.some(item => REVIEW_FILES.includes(item.path)));
+  }
+  assert.ok(buildAgentContext(root, { role: "architect" }).files.includes(TECH_STACK_FILE));
+  fs.unlinkSync(path.join(root, REVIEW_FILES[0]));
+  assert.throws(() => buildAgentContext(root, { type: "review" }), /Required context file missing/);
+  assert.doesNotThrow(() => buildAgentContext(root));
+});
+
+test("explicit optional references override omission metadata without automatic history loading", () => {
+  const root = fixture();
+  fs.writeFileSync(path.join(root, ".harness/tasks/active/demo.md"), "## Context Files\n- docs/design-docs/tech-stack.md\n");
+  const context = buildAgentContext(root, { taskName: "demo" });
+  assert.ok(context.files.includes(TECH_STACK_FILE));
+  assert.ok(!context.omitted.some(item => item.path === TECH_STACK_FILE));
+  for (const file of POLICY_FILES) {
+    const without = fixture(); fs.unlinkSync(path.join(without, file));
+    assert.throws(() => buildAgentContext(without), /Required context file missing/);
+  }
+});
+
+test("review skill junctions cannot bypass context root boundaries", () => {
+  const root = fixture(), outside = fs.mkdtempSync(path.join(os.tmpdir(), "review-skill-outside-"));
+  fs.writeFileSync(path.join(outside, "SKILL.md"), "outside policy");
+  fs.rmSync(path.join(root, "skills/code-review/SKILL.md"));
+  fs.rmdirSync(path.join(root, "skills/code-review"));
+  fs.symlinkSync(outside, path.join(root, "skills/code-review"), process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => buildAgentContext(root, { role: "reviewer" }), /symlink|junction/);
 });

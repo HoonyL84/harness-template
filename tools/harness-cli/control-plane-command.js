@@ -293,7 +293,10 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
       const sent = readJson(eventPath, []);
       if (sent.includes(eventId)) return true;
       const blocked = executions.some((state) => state.tickets.some((ticket) => ticket.status === "BLOCKED"));
-      const result = await notify(blocked ? "fail" : "success", summary, "multi-project-dashboard");
+      const projectIds = [...new Set([...overview.projects.map(project => project.project_id),
+        ...bootstraps.map(bootstrap => bootstrap.project_id),
+        ...[...requests, ...executions, ...releases].flatMap(record => (record.tickets || []).map(ticket => ticket.project_id))].filter(Boolean))];
+      const result = await notify(blocked ? "fail" : "success", summary, "multi-project-dashboard", projectIds);
       if (result?.sent > 0) writeJsonAtomic(eventPath, [...sent, eventId].slice(-100));
       return false;
     }, { ttlMs: 120_000 }) : false;
