@@ -38,10 +38,23 @@ function createStateTransitionNotifier({ root, parseArgs, notify, log = () => {}
     if (!event) return null;
     const eventId = crypto.createHash("sha256").update(event.key).digest("hex");
     try {
+      const { positional, options } = parseArgs(args);
+      let subject = result;
+      const id = positional[1];
+      // Failures may have no result; consult only the known local operation record.
+      if (!subject?.tickets && !subject?.project_id && typeof id === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
+        const folder = command === "release" && positional[0] !== "request" ? "releases"
+          : ["execution", "runner"].includes(command) ? "executions" : "requests";
+        subject = readJson(path.join(root, ".harness", "local", folder, id + ".json"), null);
+        if (!subject && ["execution", "runner"].includes(command)) subject = readJson(path.join(root, ".harness", "local", "requests", id + ".json"), null);
+      }
+      const selected = typeof options.ticket === "string" ? options.ticket.split(",") : null;
+      const tickets = (subject?.tickets || []).filter(ticket => event.status === "fail" || !selected || selected.includes(ticket.ticket_id));
+      const projectIds = [...new Set([subject?.project_id, ...tickets.map(ticket => ticket.project_id)].filter(Boolean))];
       return await withFileLockAsync(eventPath, async () => {
         const sent = readJson(eventPath, []);
         if (sent.includes(eventId)) return { duplicate: true, event_id: eventId };
-        const delivery = await notify(event.status, event.message, event.task);
+        const delivery = await notify(event.status, event.message, event.task, projectIds);
         if (delivery?.sent > 0) writeJsonAtomic(eventPath, [...sent, eventId].slice(-200));
         return { duplicate: false, event_id: eventId, delivery };
       }, { ttlMs: 120_000 });

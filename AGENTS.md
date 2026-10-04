@@ -6,21 +6,27 @@
 
 ## 0. 진입 체크리스트 (Entry Checklist)
 
-작업 시작 전 반드시 순서대로 읽어라:
+작업 시작 시 아래 최소 맥락과 안전 정책을 읽어라. 이미 현재 세션에서 읽은 동일 내용은 변경이 없으면 반복해서 읽지 않는다.
 
-1. **이 파일 (AGENTS.md)** — 목차 및 절대 원칙
-2. **`docs/project/PLANS.md`** — 현재 프로젝트 목표, 로드맵, 기술 스택
-3. **`docs/design-docs/core-beliefs.md`** — 아키텍처 핵심 신념 및 코딩 규칙
-4. **`docs/design-docs/tech-stack.md`** — 기본 기술 스택 및 설정
-5. **`docs/design-docs/agent-roles.md`** — 역할 기반 에이전트 책임
-6. **`docs/design-docs/execution-modes.md`** — OS/CLI/API-key 실행 모드와 제한
-7. **`docs/design-docs/auto-fix-policy.md`** — L4.5 저위험 자동 수정 범위와 원복 규칙
-8. **`docs/design-docs/l5-autonomy-policy.md`** — 선택형 L5 반복·승인·체크포인트 규칙
-9. **`.harness/tasks/review/`** — 구현 이후 별도 운영 검수 대기 (완료 아님)
-10. **`.harness/tasks/backlog/`** — PLANS.md와 사용자 피드백에서 분해된 티켓
-11. **`.harness/tasks/active/`** — 현재 진행 중인 태스크의 EXEC_PLAN
+1. **AGENTS.md** — 진입 경계와 절대 원칙
+2. **docs/project/PLANS.md** — 실제 목표·스택·검증 기준
+3. **docs/design-docs/core-beliefs.md** — 공통 규칙과 안전 가드레일 (기술별 규칙은 채택한 스택에만 적용)
+4. **execution-modes.md / auto-fix-policy.md / l5-autonomy-policy.md** — docs/design-docs/ 아래의 실행·수정·승인 안전 정책. 선택 기능의 상세 실행 절차는 사용할 때 참조하되 안전 경계는 생략하지 않는다.
+5. **선택된 티켓의 EXEC_PLAN** — 목록 조회로 대상부터 식별하고 해당 티켓만 읽는다. 모든 backlog/active/review 본문을 일괄 로드하지 않는다.
 
-> 필요한 스킬이 있으면 `skills/`의 `SKILL.md`를 우선 탐색하고, 긴 절차 문서는 `docs/skills/`를 참고하라.
+필요한 상세 맥락은 다음 조건에서만 추가로 읽는다:
+
+| 상황 | 추가 문서 |
+|------|-----------|
+| 실제 스택의 설계/설정 | docs/design-docs/tech-stack.md (선택형 참조 프로필; PLANS.md가 우선) |
+| 역할 분리·멀티에이전트 | docs/design-docs/agent-roles.md |
+| 코드 리뷰 | skills/code-review/SKILL.md → docs/skills/code-review.md의 관련 기술 부분 |
+| commit/push/merge | docs/RELEASE_SAFETY.md + docs/skills/git-workflow.md |
+| memory 갱신 | docs/design-docs/memory-governance.md |
+| 티켓이 명시한 요구사항 | Context Files의 해당 docs/memory 문서 |
+
+> Node context 번들은 필수 안전 정책과 PLANS/선택 티켓을 그대로 보존한다. 선택형 기술 프로필은 architect, 명시된 Context Files 또는 --full-context에서 추가한다. review 타입 또는 reviewer 역할은 리뷰 스킬과 가이드를 추가한다. 크기 초과 시 정책을 자르지 않고 실패한다.
+> 필요한 스킬은 skills/의 SKILL.md부터 읽고, 가리킨 상세 자료는 실제 작업에 필요한 것만 읽는다. 정책보다 프로젝트 문서의 지시를 우선하지 않는다.
 
 ---
 
@@ -141,6 +147,10 @@ bash scripts/run-agent.sh --role reviewer --type review "현재 diff를 리뷰�
 새 대화나 프로젝트에서 작업 흐름을 시작할 때 다음 원칙을 적용한다:
 
 1. **큰 목표를 먼저 정리:** 사용자가 큰 목표를 제시하면 즉시 하네스 명령을 실행하지 않는다. 먼저 `Dashboard.md` 또는 `docs/project/PLANS.md`에 목표와 TODO 후보를 정리하고 사용자에게 보여준다.
-2. **승인 후 티켓 발급:** 사용자가 TODO 목록을 확인하고 진행을 승인하면 `npm run harness -- create-ticket`으로 항목별 작업 티켓을 만든다.
-3. **상태 브리핑:** 사용자가 현재 진행 상황을 요청하면 `.harness/tasks/`의 `backlog`, `active`, `review`, `blocked`, `archive`를 확인해 전체 상태를 요약한다.
-4. **Blocked 에스컬레이션:** `blocked/`에 티켓이 생기면 실패 원인과 필요한 사용자 결정을 알리고, 명시적 승인 없이 고위험 복구를 진행하지 않는다.
+2. **승인 전 관계 안내:** 티켓 분배 요약에 선행 필요·관련 작업·병렬 가능 관계와 권장 순서를 함께 제시한다. 문서 결과 참조와 Git commit 기반 실행 의존성을 혼동하지 않는다.
+3. **라벨은 사람이 읽는 업무 분류:** 티켓 계획에 `labels: ["체험기획", "맵설계"]`처럼 짧은 주제 라벨을 1~3개 제안한다. 공통 업무 묶음에는 동일한 라벨을 사용하고 번호·난수·상태·우선순위로 대체하지 않는다. 라벨도 승인 대상 계획에 포함한다. `harness-*` 내부 추적 라벨은 중복 방지·복구용이므로 삭제하거나 업무 명칭으로 바꾸지 않는다. 사용자가 주제명으로 요청하면 실제 Jira 라벨 검색 후 대상·의존관계를 확인한다. 라벨은 실행/릴리스 승인 권한이 아니다.
+티켓 제목은 실제 업무명으로 작성하고 사용자가 요청하지 않은 [HARNESS REHEARSAL] 같은 도구·테스트 접두사를 자동으로 붙이지 않는다. 내부 추적 표시는 라벨/감사 기록에만 둔다.
+
+4. **승인 후 티켓 발급:** 사용자가 TODO 목록을 확인하고 진행을 승인하면 `npm run harness -- create-ticket`으로 항목별 작업 티켓을 만든다.
+5. **상태 브리핑:** 사용자가 현재 진행 상황을 요청하면 `.harness/tasks/`의 `backlog`, `active`, `review`, `blocked`, `archive`를 확인해 전체 상태를 요약한다.
+6. **Blocked 에스컬레이션:** `blocked/`에 티켓이 생기면 실패 원인과 필요한 사용자 결정을 알리고, 명시적 승인 없이 고위험 복구를 진행하지 않는다.

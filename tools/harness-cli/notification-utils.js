@@ -8,10 +8,16 @@ async function sendNotification({
   status,
   message,
   taskId,
+  projectIds = ["harness-template"],
   env = process.env,
   fetchImpl = globalThis.fetch,
   log = () => {}
 }) {
+  if (!Array.isArray(projectIds) || projectIds.length > 20
+      || projectIds.some(id => typeof id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))) {
+    throw new Error("Notification projects must be explicit kebab-case IDs");
+  }
+  const prefix = "[" + ([...new Set(projectIds)].join(", ") || "unknown-project") + "]";
   const slackWebhook = env.SLACK_WEBHOOK_URL;
   const telegramToken = env.TELEGRAM_BOT_TOKEN;
   const telegramChatId = env.TELEGRAM_CHAT_ID;
@@ -22,7 +28,7 @@ async function sendNotification({
       && isConfigured(telegramChatId, /your_|replace|example/i)) {
     providers.push("Telegram");
     const icon = status === "fail" ? "[FAIL]" : "[PASS]";
-    const text = `${icon} [Harness] Task: ${taskId}\n\n${message}`;
+    const text = `${prefix} ${icon} Task: ${taskId}\n\n${message}`;
     try {
       const response = await fetchImpl(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
         method: "POST",
@@ -41,9 +47,9 @@ async function sendNotification({
     const color = status === "fail" ? "#ff0000" : "#36a64f";
     const payload = {
       attachments: [{
-        fallback: `Harness: ${message}`,
+        fallback: `${prefix} ${message}`,
         color,
-        title: `[Harness] Task: ${taskId}`,
+        title: `${prefix} Task: ${taskId}`,
         text: message,
         footer: "Harness Engineering",
         ts: Math.floor(Date.now() / 1000)

@@ -14,6 +14,7 @@ const { createConnectionCommand } = require("./atlassian-connection");
 const { consentCommand, assertConsentedEntry } = require("./atlassian-consent");
 const { ticketDraft, resultPayload } = require("./atlassian-payloads");
 const { isArtifactTicket } = require("./ticket-artifacts");
+const { createPriorityBatchCommand } = require("./atlassian-priority-batch");
 const { publishedDescriptionMatches } = require("./atlassian-mcp-contracts");
 const { transport, connectionIdentity, matchesConnection, createMcpClient } = require("./atlassian-mcp");
 
@@ -51,6 +52,8 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
   const send = (config, service, endpoint, payload) => transport(config) === "mcp"
     ? mcp.send(config, service, endpoint, payload) : remote(config, service, endpoint, payload, { env, fetchImpl });
 
+  const priorityBatch = createPriorityBatchCommand({ root, send, now, stats: mcp.stats });
+
   function enqueue(config, projectId, service, input, build) {
     const previousTicket = service === "jira" && !input.operation ? read().entries.find(e => e.service === "jira" && e.operation === "create"
       && e.project_id === projectId && e.request_id === input.request_id && e.ticket_id === input.ticket_id) : null;
@@ -76,6 +79,7 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
 
   return async function command(args) {
     const { positional: [action, subject], options } = parseArgs(args);
+    if (["priority-plan", "priority-apply", "priority-show", "priority-reconcile"].includes(action)) return print(await priorityBatch(action, subject, options));
     if (action === "consent") return print(consentCommand(root, subject, options, env, now));
     if (action === "mcp-tools") return print({ transport: "mcp", tools: await mcp.list(), notice: "Read-only schemas. Configure local bindings using these actual schemas; no remote writes or implicit approval." });
     if (["connect", "discover", "map", "check"].includes(action)) return print(await createConnectionCommand({ root, send, env })(action, options));
@@ -157,7 +161,7 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
       });
       return print(linked);
     }
-    if (action === "search") return print(await searchRemote(config, options.project, options.query, send, options));
+    if (action === "search") return print({ ...await searchRemote(config, options.project, options.query, send, options), diagnostics: mcp.stats() });
     if (action === "context") return print(await fetchProjectPages(root, config, subject, send, now));
     if (action === "queue-status") {
       const projectId = validateProjectId(options.project), key = config.jira_projects[projectId];
@@ -312,7 +316,7 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
       update(state => { Object.assign(state.entries.find(e => e.id === subject), { status: "SYNCED", remote_id: id, reconciled_at: new Date(now()).toISOString() }); return state; });
       return print(read());
     }
-    throw new Error("Usage: atlassian <queue-ticket request --ticket id|queue-status --project id --issue KEY-1 --status-id id|queue-result --project id --file summary.json|preview|sync --approve digest|retry-rejected id --approve id|reconcile id --remote-id id|search --project id --query text|context project-id|recovery [id]|status>");
+    throw new Error("Usage: atlassian <queue-ticket request --ticket id|queue-status --project id --issue KEY-1 --status-id id|queue-result --project id --file summary.json|preview|sync --approve digest|retry-rejected id --approve id|reconcile id --remote-id id|search --project id --query text|context project-id|priority-plan --project id --file json|priority-apply id --approve digest|priority-show id|priority-reconcile id|recovery [id]|status>");
   };
 }
 

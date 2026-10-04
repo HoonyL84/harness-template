@@ -2,6 +2,7 @@
 
 const crypto = require("node:crypto");
 const { normalizeJiraSource } = require("./jira-input");
+const { normalizeReadableLabels } = require("./jira-labels");
 const { isArtifactTicket, normalizeDeliverables, normalizeTicketKind } = require("./ticket-artifacts");
 
 const { normalizeContextRefs } = require("./context-references");
@@ -121,6 +122,7 @@ function createRequestPlan({ requestId, goal, projectIds = [], tickets = [], pro
       ticket_kind: ticketKind,
       deliverables,
       priority: normalizePriority(ticket.priority),
+      ...(ticket.labels !== undefined ? { labels: normalizeReadableLabels(ticket.labels) } : {}),
       ...(ticket.source ? {
         source: normalizeJiraSource(ticket.source),
         planning_status: steps.length > 0 && acceptance.length > 0
@@ -176,6 +178,7 @@ function validateRequestPlan(plan) {
   if (planFingerprint(plan) !== plan.content_fingerprint) throw new Error("Request plan fingerprint does not match its content");
   for (const ticket of plan.tickets) {
     normalizeContextRefs(ticket.context_refs);
+    normalizeReadableLabels(ticket.labels);
     normalizeDeliverables(ticket.deliverables, normalizeTicketKind(ticket.ticket_kind));
     if (isArtifactTicket(ticket) && (!ticket.acceptance_criteria?.length || !ticket.implementation_steps?.length)) throw new Error("Artifact ticket requires explicit criteria and steps");
   }

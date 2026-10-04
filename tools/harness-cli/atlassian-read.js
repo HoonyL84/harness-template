@@ -1,12 +1,22 @@
 "use strict";
 const path = require("node:path");
+const { normalizeReadableLabels } = require("./jira-labels");
 const { writeJsonAtomic } = require("./control-plane-state");
 const { validateProjectId } = require("./project-registry");
 
 async function searchRemote(config, projectId, query, send, filters = {}) {
   validateProjectId(projectId);
-  if (typeof query !== "string" || !query.trim() || query.length > 200) throw new Error("Provide a nonempty search query up to 200 characters");
-  const quoted = JSON.stringify(query);
+  const selected = filters.service || "all";
+  if (!["all", "jira", "confluence"].includes(selected)) throw new Error("Search service must be jira, confluence or all");
+  if (query === undefined && selected === "jira") query = "";
+  if (typeof query !== "string" || (!query.trim() && selected !== "jira") || query.length > 200) throw new Error("Provide a nonempty search query up to 200 characters");
+  const quoted = JSON.stringify(query.trim());
+  const keys = filters["issue-keys"] === undefined ? [] : String(filters["issue-keys"]).split(",");
+  if (keys.length > 50 || new Set(keys).size !== keys.length || keys.some(key => !/^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/.test(key) || !key.startsWith(config.jira_projects[projectId] + "-"))) throw new Error("Issue keys must be unique and belong to the mapped project");
+  const label = filters["jira-label"] === undefined ? null : normalizeReadableLabels([filters["jira-label"]])[0];
+  const priorityName = filters["jira-priority-name"];
+  if (priorityName !== undefined && !["Highest", "High", "Medium", "Low", "Lowest"].includes(priorityName)) throw new Error("Invalid Jira priority name");
+  if (priorityName && filters["jira-priority"]) throw new Error("Choose priority name or mapped priority, not both");
   const date = value => {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value))
       || new Date(value).toISOString().slice(0, 10) !== value) throw new Error("Remote date filters require valid YYYY-MM-DD");
@@ -22,6 +32,7 @@ async function searchRemote(config, projectId, query, send, filters = {}) {
   if (priority && (!["P0", "P1", "P2", "P3"].includes(priority) || !priorityIds.length || priorityIds.some(id => !/^[0-9]+$/.test(id)))) throw new Error("Jira priority filter requires mapped numeric IDs");
   const output = { project_id: projectId, jira: null, confluence: null };
   for (const service of ["jira", "confluence"]) {
+    if (selected !== "all" && service !== selected) { output[service] = { status: "not-requested", results: [] }; continue; }
     const key = service === "jira" ? config.jira_projects[projectId] : config.confluence_projects?.[projectId]?.space_key;
     if (!/^[a-z0-9_~-]+$/i.test(key || "")) { output[service] = { status: "not-configured", results: [] }; continue; }
     const results = [], seen = new Set();
@@ -33,9 +44,12 @@ async function searchRemote(config, projectId, query, send, filters = {}) {
         const timeFilter = (from ? ` AND ${timeField} >= ${JSON.stringify(from)}` : "")
           + (endExclusive ? ` AND ${timeField} < ${JSON.stringify(endExclusive)}` : "");
         if (service === "jira") {
-          url.searchParams.set("jql", `project = ${JSON.stringify(key)} AND text ~ ${quoted}${timeFilter}`
+          url.searchParams.set("jql", `project = ${JSON.stringify(key)}${query.trim() ? ` AND text ~ ${quoted}` : ""}${timeFilter}`
             + (jiraStatus ? ` AND status = ${JSON.stringify(jiraStatus)}` : "")
-            + (priority ? ` AND priority in (${priorityIds.join(",")})` : "") + " ORDER BY key");
+            + (priority ? ` AND priority in (${priorityIds.join(",")})` : "")
+            + (priorityName ? ` AND priority = ${JSON.stringify(priorityName)}` : "")
+            + (label ? ` AND labels = ${JSON.stringify(label)}` : "")
+            + (keys.length ? ` AND key in (${keys.map(key => JSON.stringify(key)).join(",")})` : "") + " ORDER BY key");
           url.searchParams.set("fields", "summary,project,status,priority"); url.searchParams.set("maxResults", "25");
         } else {
           url.searchParams.set("cql", `type = page AND space = ${JSON.stringify(key)} AND text ~ ${quoted}${timeFilter}`);
@@ -48,7 +62,7 @@ async function searchRemote(config, projectId, query, send, filters = {}) {
         for (const item of items) {
           if (service === "jira") {
             if (item.fields?.project?.key !== key || !/^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/.test(item.key)) throw new Error("Search project mismatch");
-            results.push({ id: item.id, title: item.fields.summary, status: item.fields.status?.name, priority: item.fields.priority?.name,
+            results.push({ id: item.id, key: item.key, title: item.fields.summary, status: item.fields.status?.name, priority: item.fields.priority?.name,
               url: `${config.site}/browse/${item.key}` });
           } else {
             if (item.content?.space?.key !== key || !/^[0-9]+$/.test(item.content?.id || "")) throw new Error("Search space mismatch");

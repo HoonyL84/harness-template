@@ -93,3 +93,86 @@ REST는 호환용 명시적 선택이다. transport가 없는 오래된 설정�
 - 복구는 기존 connection/marker/공간/부모 검사를 유지한다. 연결 설정을 고쳐 옛 승인을 재사용하거나 outbox의 성공 상태를 수동 조작하지 않는다.
 - 새로운 익명화 계약 테스트는 생성/연결/상태 전이/응답 유실 복구, 본문 변조, 중복/오래된 승인, 잘못된 부모 및 모호한 상태를 검증한다. 실계정 증거는 `.harness/local/mcp-rehearsal/`에만 보관하고 저장소에 개인 ID나 자격증명을 넣지 않는다.
 - 회사 자료는 비공개 공간이어도 회사 정책 승인 없이 개인 Atlassian에 복제하지 않는다.
+
+## Jira 요청 단위 최적화
+
+연결을 계속 켜 두는 서비스가 아니라 **각 요청 안에서** 연결과 도구 스키마를 재사용한다. 다음 CLI 프로세스는 다시 초기화하며 티켓 결과는 캐시하지 않는다. 조회/변경 결과의 `diagnostics`는 해당 클라이언트의 요청 수와 누적 네트워크 소요 시간이며, 대화/모델 처리 시간이나 계정 토큰 사용량이 아니다.
+
+Jira만 조회하면 Confluence를 호출하지 않는다. 텍스트 없이 상태·중요도·티켓 키로도 조회할 수 있다:
+
+```sh
+node tools/harness-cli/index.js atlassian search --project demo --service jira --jira-status "To Do"
+node tools/harness-cli/index.js atlassian search --project demo --service jira --jira-priority-name High
+node tools/harness-cli/index.js atlassian search --project demo --service jira --issue-keys DEMO-1,DEMO-2
+```
+
+`jira-priority`는 기존 P0~P3 ID 매핑을 사용하고, `jira-priority-name`은 Highest/High/Medium/Low/Lowest 중 하나다. 두 옵션은 함께 사용하지 않는다. 상태 이름은 실제 프로젝트 워크플로 이름으로 지정한다.
+
+실제 공식 스키마를 확인한 후 다음 `jira.search` 매핑을 로컬에 설정한다. `optional: true`는 첫 페이지에 없는 pagination token을 생략하며, 다음 페이지에서는 받은 토큰을 그대로 전달한다. 다른 필수 `$ref` 검사는 그대로 유지한다.
+
+```json
+{
+  "tool": "searchJiraIssuesUsingJql",
+  "arguments": {
+    "cloudId": { "$ref": "/cloudId" },
+    "jql": { "$ref": "/query/jql" },
+    "nextPageToken": { "$ref": "/query/nextPageToken", "optional": true },
+    "maxResults": 50,
+    "fields": ["summary", "project", "status", "priority", "updated"],
+    "view": "full"
+  },
+  "result": { "$ref": "/data" }
+}
+```
+
+## 승인형 중요도 일괄 변경
+
+MCP 전용이며 REST로 fallback하지 않는다. 일반적인 티켓 본문·담당자·권한 편집을 허용하는 API가 아니라 **중요도 필드만** 수정한다. 로컬 `jira.updatePriority` 매핑은 실제 `editJiraIssue` 스키마 확인 후 다음과 같이 설정한다:
+
+```json
+{
+  "tool": "editJiraIssue",
+  "arguments": {
+    "cloudId": { "$ref": "/cloudId" },
+    "issueIdOrKey": { "$ref": "/id" },
+    "fields": { "$ref": "/payload/fields" }
+  },
+  "result": { "$ref": "/data" }
+}
+```
+
+변경 파일 예: `{"changes":[{"key":"DEMO-1","priority":"High"},{"key":"DEMO-2","priority":"Low"}]}`. 프로젝트당 한 번에 1~20개를 명시한다.
+
+```sh
+node tools/harness-cli/index.js atlassian priority-plan --project demo --file priority-changes.json
+# 사용자에게 변경 전/후 요약을 보여주고 승인받은 현재 digest만 사용한다.
+node tools/harness-cli/index.js atlassian priority-apply <id> --approve <approval_digest>
+node tools/harness-cli/index.js atlassian priority-show <id>
+node tools/harness-cli/index.js atlassian priority-reconcile <id>
+```
+
+- 미리보기는 연결/도구 매핑, 정확한 변경 목록과 원격 snapshot에 결속되며 10분 후 만료된다. 일회성 승인이고, 승인 전 Jira 상태가 바뀌면 새 계획이 필요하다.
+- `priority-apply`는 변경 전 일괄 조회 1회 + 필요한 개별 수정 + 변경 후 일괄 조회 1회다. 최대 50개 검색 결과를 넘는 페이지가 필요하면 조회 횟수는 늘어난다. 이미 목표 중요도인 항목은 쓰지 않는다.
+- 네 건을 변경하면 apply의 도구 호출은 6회(2회 조회+4회 수정)다. 미리보기 조회 1회와 MCP 초기화/스키마 조회는 별도 비용이다. 순차 개별 조회/수정/확인의 12회와 비교하되 전체 지연 감소율을 보장하지 않는다.
+- 각 쓰기 시도는 먼저 디스크에 기록한다. 응답 유실/부분 실패는 중단하며 같은 승인으로 재전송하지 않는다. `priority-reconcile`은 **읽기만** 해서 현재 목표 상태 도달 여부를 확인하고 자동으로 남은 항목을 수정하지 않는다. `OBSERVED_DESIRED`는 원격 상태 관측이지 원래 쓰기 성공 응답의 복원 또는 개발 완료가 아니다.
+- 배치 트랜잭션이나 Jira의 원자적 CAS가 아니다. 변경 전 검사 후 타 사용자가 수정할 수 있다. 중요도 외 필드를 덮어쓰지 않고, 수정 직전 스냅샷과 최종 관측 상태의 한계를 남긴다.
+- 본문에 포함된 JSON의 내용이 정확히 같은 경우 3개 이상 동일 길이의 backtick fence를 허용한다. 내용 변경, 닫는 fence 길이 불일치, 부가 설명은 여전히 거부한다.
+
+## 계획 승인 시 티켓 관계
+
+사용자에게 목표/업무 분배 요약과 함께 `선행 필요`, `관련 작업`, `병렬 가능`을 구분하여 제시한다. 문서 결과 참조를 코드 commit SHA 기반 `depends_on`에 그대로 넣지 않는다. Jira의 관련 링크는 관계 표시이며 하네스 실행 차단을 뜻하지 않는다. 진짜 차단 관계를 승인한 경우 Jira 방향과 하네스 실행 전제까지 함께 설계해야 한다. 관계 생성 자체는 현재 승인된 직접 MCP 작업으로 기록하며, 관리형 중요도 배치 기능으로 지원한다고 주장하지 않는다.
+
+## 사람이 읽는 Jira 라벨
+티켓 계획의 선택형 `labels` 배열에 업무 주제를 기록한다. 예: `"labels": ["체험기획", "체험리허설"]`.
+에이전트는 기본적으로 짧은 주제 라벨 1~3개를 제안하고 같은 작업 묶음에 같은 이름을 쓴다.
+코드는 최대 5개, 각 30자, 문자/숫자/밑줄/하이픈을 허용하며 공백·중복·예약된 harness-*·긴 hex ID를 거부한다.
+계획 fingerprint와 게시 payload에 포함되므로 승인 후 바꾸면 기존 승인을 재사용할 수 없다.
+기존 labels 없는 계획은 그대로 유효하다. 신규 게시에는 기획/기술설계/개발 유형 라벨도 붙는다.
+내부 marker와 harness-kind-*는 삭제하지 않는다. 라벨 변경은 작업 실행·Git 승인과 다르다.
+
+```bash
+node tools/harness-cli/index.js atlassian search --project steam-project --service jira --jira-label 체험기획
+```
+
+현재 GAME 리허설의 라벨 변경은 사용자 승인 아래 공식 MCP로 직접 수행하고 로컬 감사 근거를 남겼다.
+이것은 임의 라벨 편집이 관리형 priority API로 지원된다는 뜻은 아니다.

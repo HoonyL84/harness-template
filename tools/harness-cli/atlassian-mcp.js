@@ -8,7 +8,7 @@ const READ_TOOLS = new Set(["atlassianUserInfo", "getAccessibleAtlassianResource
   "listJiraProjectIssueTypesMetadata", "listJiraIssueTransitions", "listJiraStatuses", "getJiraCurrentUser",
   "searchJiraIssuesUsingJql", "getConfluenceContent", "listConfluenceContent", "listConfluenceSpaces", "getConfluenceSpace",
   "getConfluenceContentAncestors", "searchConfluence", "getTeamworkGraphContext", "getTeamworkGraphObject", "search", "executeRead"]);
-const WRITE_TOOLS = { "jira.createIssue": "createJiraIssue", "jira.transitionIssue": "transitionJiraIssue", "confluence.createPage": "createConfluenceContent" };
+const WRITE_TOOLS = { "jira.createIssue": "createJiraIssue", "jira.transitionIssue": "transitionJiraIssue", "confluence.createPage": "createConfluenceContent", "jira.updatePriority": "editJiraIssue" };
 
 function transport(config) {
   const mode = config.transport ?? "mcp";
@@ -45,7 +45,13 @@ function operationFor(service, endpoint, payload) {
   ] : [];
   const route = routes.find(([pattern]) => pattern.test(pathname));
   if (!route) throw new Error("Unsupported managed MCP operation");
-  const operation = `${service}.${route[1]}`;
+  let operation = `${service}.${route[1]}`;
+  if (payload && operation === "jira.getIssue") {
+    if (Object.keys(payload).join() !== "fields" || Object.keys(payload.fields || {}).join() !== "priority"
+        || Object.keys(payload.fields.priority || {}).join() !== "name"
+        || !["Highest", "High", "Medium", "Low", "Lowest"].includes(payload.fields.priority.name)) throw new Error("Only explicit Jira priority updates are supported");
+    operation = "jira.updatePriority";
+  }
   if (payload && !WRITE_TOOLS[operation]) throw new Error("Unsupported MCP write");
   return { operation, id: pathname.match(route[0])[1] || null, query: Object.fromEntries(url.searchParams), payload: payload || null };
 }
@@ -54,10 +60,14 @@ function operationFor(service, endpoint, payload) {
 function render(template, input, depth = 0) {
   if (depth > 30) throw new Error("MCP binding nesting too deep");
   if (template && typeof template === "object" && !Array.isArray(template) && Object.hasOwn(template, "$ref")) {
-    if (Object.keys(template).length !== 1 || typeof template.$ref !== "string" || !/^(\/[^\s]*)?$/.test(template.$ref)) throw new Error("Invalid MCP binding reference");
+    if (Object.keys(template).some(key => !["$ref", "optional"].includes(key)) || (Object.hasOwn(template, "optional") && template.optional !== true)
+        || typeof template.$ref !== "string" || !/^(\/[^\s]*)?$/.test(template.$ref)) throw new Error("Invalid MCP binding reference");
     let value = input;
     for (const key of template.$ref === "" ? [] : template.$ref.slice(1).split("/").map(k => k.replace(/~1/g, "/").replace(/~0/g, "~"))) {
-      if (!value || typeof value !== "object" || !Object.hasOwn(value, key)) throw new Error("MCP binding reference missing");
+      if (!value || typeof value !== "object" || !Object.hasOwn(value, key)) {
+        if (template.optional === true) return undefined;
+        throw new Error("MCP binding reference missing");
+      }
       value = value[key];
     }
     return value;
@@ -92,10 +102,16 @@ async function readRpc(response, id) {
 
 function createMcpClient({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
   let session, version = "2025-06-18", nextId = 0, ready;
+  const metrics = { requests: 0, initialize: 0, catalogs: 0, tool_calls: 0, elapsed_ms: 0 };
   const rpc = async (method, params, notification = false) => {
     if (["true", "1"].includes(env.HARNESS_OFFLINE)) throw new Error("MCP unavailable offline");
     if (!env.ATLASSIAN_EMAIL || !env.ATLASSIAN_API_TOKEN) throw new Error("Configure MCP API-token credentials locally, or use the host's connected MCP tools");
     const id = notification ? undefined : ++nextId;
+    metrics.requests++;
+    if (method === "initialize") metrics.initialize++;
+    if (method === "tools/list") metrics.catalogs++;
+    if (method === "tools/call") metrics.tool_calls++;
+    const started = Date.now();
     let response;
     try {
       response = await fetchImpl(ENDPOINT, { method: "POST", redirect: "error", signal: globalThis.AbortSignal.timeout(15000),
@@ -114,12 +130,13 @@ function createMcpClient({ env = process.env, fetchImpl = globalThis.fetch } = {
       }
       return message.result;
     } catch { throw new Error("MCP request failed; no REST fallback. A submitted write may require reconciliation."); }
+    finally { metrics.elapsed_ms += Date.now() - started; }
   };
   const initialize = () => ready ||= (async () => {
     await rpc("initialize", { protocolVersion: version, capabilities: {}, clientInfo: { name: "harness", version: "1.0.0" } });
     await rpc("notifications/initialized", {}, true);
   })();
-  const list = async () => {
+  const loadList = async () => {
     await initialize();
     const tools = [], seen = new Set(); let cursor;
     for (let page = 0; page < 20; page++) {
@@ -132,7 +149,12 @@ function createMcpClient({ env = process.env, fetchImpl = globalThis.fetch } = {
     }
     throw new Error("MCP catalog truncated");
   };
-  let catalog;
+  let catalog, listing;
+  const list = async () => {
+    if (catalog) return catalog;
+    listing ||= loadList().then(value => { catalog = value; return value; }).finally(() => { listing = null; });
+    return listing;
+  };
   const prepare = async (config, service, endpoint, payload) => {
     const input = { ...operationFor(service, endpoint, payload), site: config.site, cloudId: config.cloud_id || null };
     const binding = config.mcp?.bindings?.[input.operation];
@@ -141,6 +163,10 @@ function createMcpClient({ env = process.env, fetchImpl = globalThis.fetch } = {
     catalog ||= await list();
     if (!catalog.some(t => t.name === binding.tool)) throw new Error("Configured MCP tool unavailable; inspect permissions and current catalog");
     const args = render(binding.arguments, input);
+    if (input.operation === "jira.updatePriority"
+        && (JSON.stringify(Object.keys(args).sort()) !== JSON.stringify(["cloudId", "fields", "issueIdOrKey"])
+          || args.cloudId !== input.cloudId || args.issueIdOrKey !== input.id
+          || JSON.stringify(args.fields) !== JSON.stringify(payload.fields))) throw new Error("Priority binding must preserve exact approved destination and fields");
     if (input.operation === "jira.createIssue" && binding.tool === "createJiraIssue" && ticketDescriptionJson(payload?.fields?.description)
         && args.description === payload.fields.description.content[0].content[0].text) {
       args.description = "```json\n" + args.description + "\n```";
@@ -158,7 +184,7 @@ function createMcpClient({ env = process.env, fetchImpl = globalThis.fetch } = {
     }
     return data;
   };
-  return { list, prepare, async send(config, service, endpoint, payload) {
+  return { list, prepare, stats: () => ({ ...metrics }), async send(config, service, endpoint, payload) {
     const { binding, input, call } = await prepare(config, service, endpoint, payload);
     const raw = await invoke(call);
     const mapped = binding.result === undefined ? raw : render(binding.result, raw);

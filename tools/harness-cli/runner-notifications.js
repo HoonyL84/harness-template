@@ -33,7 +33,7 @@ async function flushRunnerOutcomes(filePath, notify, log, now) {
         if (!event || event.status === "SENT") continue;
         let sent = false;
         try {
-          const delivery = await notify(event.kind, `${event.message}\nEvent: ${event.event_id}`, snapshot.ticket_id);
+          const delivery = await notify(event.kind, `${event.message}\nEvent: ${event.event_id}`, snapshot.ticket_id, [snapshot.project_id]);
           sent = delivery?.sent > 0;
         } catch {
           log(`[WARN] Outcome notification pending for ${snapshot.ticket_id}; use runner notify to retry`);

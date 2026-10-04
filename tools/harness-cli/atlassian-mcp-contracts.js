@@ -19,8 +19,8 @@ function publishedDescriptionMatches(actual, expected) {
   if (isDeepStrictEqual(actual, expected)) return true;
   const object = ticketDescriptionJson(expected);
   if (!object || typeof actual !== "string") return false;
-  const value = actual.trim(), fence = /^```(?:json)?\r?\n([\s\S]*?)\r?\n```$/.exec(value);
-  try { return isDeepStrictEqual(JSON.parse(fence ? fence[1] : value), object); }
+  const value = actual.trim(), fence = /^(`{3,})(?:json)?\r?\n([\s\S]*?)\r?\n\1$/.exec(value);
+  try { return isDeepStrictEqual(JSON.parse(fence ? fence[2] : value), object); }
   catch { return false; }
 }
 
