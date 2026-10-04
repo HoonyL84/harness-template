@@ -468,7 +468,7 @@ const commandExecution = createExecutionCommand({
 const controlPlane = createControlPlaneCommands({
   root: ROOT,
   parseArgs,
-  notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
+  notify: (status, message, taskId, projectIds) => deliverNotification({ status, message, taskId, projectIds, env: process.env, fetchImpl: globalThis.fetch, log }),
   reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
   runGit: runExternalGit,
   checkAtlassian: () => createAtlassianCommand({ root: ROOT, parseArgs, log: () => {}, reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) })(["check"]),
@@ -480,7 +480,7 @@ const commandRunner = createAgentRunnerCommand({
   parseArgs,
   invokeAgent: (prompt, ticket) => commandRunAgent(["--type", ticket.ticket_kind === "development" || !ticket.ticket_kind ? "code" : "architect", "--role", ticket.ticket_kind === "planning" ? "planner" : ticket.ticket_kind === "design" ? "architect" : "implementer", prompt],
     { project_id: ticket.project_id, request_id: ticket.request_id, ticket_id: ticket.ticket_id }),
-  notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
+  notify: (status, message, taskId, projectIds) => deliverNotification({ status, message, taskId, projectIds, env: process.env, fetchImpl: globalThis.fetch, log }),
   reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
   runCommand: run,
   runGit: runExternalGit,
@@ -513,7 +513,7 @@ const publishManagedFollowups = createPublicationHook({ parseArgs, log,
 const notifyStateTransition = createStateTransitionNotifier({
   root: ROOT,
   parseArgs,
-  notify: (status, message, taskId) => deliverNotification({ status, message, taskId, env: process.env, fetchImpl: globalThis.fetch, log }),
+  notify: (status, message, taskId, projectIds) => deliverNotification({ status, message, taskId, projectIds, env: process.env, fetchImpl: globalThis.fetch, log }),
   log
 });
 

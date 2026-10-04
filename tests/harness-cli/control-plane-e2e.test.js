@@ -39,6 +39,7 @@ test("two-project control plane gates release, deduplicates alerts, and exports 
   commands.release(["consume", "multi-work", "--fingerprint", pending.fingerprint]); assert.throws(() => commands.release(["consume", "multi-work", "--fingerprint", pending.fingerprint]), /unconsumed/);
   const evidenceFile = path.join(root, "evidence.json"); fs.writeFileSync(evidenceFile, JSON.stringify({ project_id: "ads", ticket_id: "ads-ticket", title: "Ad cache", status: "VERIFIED", visibility: "public", commit: "abc1234", technologies: ["Redis"] })); commands.evidence(["add", "--file", evidenceFile]); assert.match(commands.evidence(["export"]), /abc1234/);
   await commands.dashboard(["--notify"]); await commands.dashboard(["--notify"]); assert.equal(notices.length, 1);
+  assert.deepEqual(notices[0][3], ["ads", "payments"]);
 });
 
 test("failed notifications remain retryable", async () => {

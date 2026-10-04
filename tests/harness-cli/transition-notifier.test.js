@@ -51,3 +51,60 @@ test("notification exceptions never replace the completed command result", async
   assert.equal(result.error, "network down");
   assert.match(logs[0], /notification failed/);
 });
+
+
+test("selected tickets identify the project without parsing request names", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-transition-project-"));
+  const delivered = [];
+  const notifier = createStateTransitionNotifier({ root,
+    parseArgs: () => ({ positional: ["review-ready", "unrelated-name"], options: { ticket: "t2" } }),
+    notify: async (...args) => { delivered.push(args); return { sent: 1 }; } });
+  await notifier("execution", [], { execution_id: "e", request_id: "unrelated-name", updated_at: "now",
+    tickets: [{ ticket_id: "t1", project_id: "ad-server" }, { ticket_id: "t2", project_id: "steam-project" }] });
+  assert.deepEqual(delivered[0][3], ["steam-project"]);
+});
+
+test("failure project comes from the local release record and survives delivery retry", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-transition-release-project-"));
+  const folder = path.join(root, ".harness", "local", "releases"); fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, "approval.json"), JSON.stringify({ tickets: [{ project_id: "steam-project" }] }));
+  const projects = [];
+  const notifier = createStateTransitionNotifier({ root, parseArgs,
+    notify: async (_status, _message, _task, ids) => { projects.push(ids); return { sent: projects.length === 2 ? 1 : 0 }; } });
+  await notifier("release", ["apply", "approval"], null, new Error("stale"));
+  await notifier("release", ["apply", "approval"], null, new Error("stale"));
+  assert.deepEqual(projects, [["steam-project"], ["steam-project"]]);
+});
+
+test("deployment and missing failure context do not guess another project", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-transition-project-missing-")); const projects = [];
+  const notifier = createStateTransitionNotifier({ root, parseArgs,
+    notify: async (_status, _message, _task, ids) => { projects.push(ids); return { sent: 1 }; } });
+  await notifier("deployment", ["record"], { project_id: "steam-project", deployment_id: "d", status: "SUCCEEDED", environment: "dev" });
+  await notifier("request", ["create", "work"], { request_id: "work", content_fingerprint: "fp", tickets: [{ project_id: "ad-server" }, { project_id: "payments-server" }] });
+  await notifier("release", ["apply", "../../outside"], null, new Error("invalid"));
+  assert.deepEqual(projects, [["steam-project"], ["ad-server", "payments-server"], []]);
+});
+
+
+test("failed execution preparation uses the existing request without guessing", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-transition-prepare-project-"));
+  const folder = path.join(root, ".harness", "local", "requests"); fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, "work.json"), JSON.stringify({ tickets: [{ project_id: "steam-project" }] }));
+  let projects;
+  const notifier = createStateTransitionNotifier({ root, parseArgs,
+    notify: async (_status, _message, _task, ids) => { projects = ids; return { sent: 1 }; } });
+  await notifier("execution", ["prepare", "work"], null, new Error("dirty repository"));
+  assert.deepEqual(projects, ["steam-project"]);
+});
+
+test("aggregate BLOCKED alerts retain every mentioned project despite a ticket filter", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-transition-blocked-project-")); let projects;
+  const notifier = createStateTransitionNotifier({ root,
+    parseArgs: () => ({ positional: ["advance", "work"], options: { ticket: "t1" } }),
+    notify: async (_status, _message, _task, ids) => { projects = ids; return { sent: 1 }; } });
+  await notifier("execution", [], { execution_id: "e", request_id: "work",
+    tickets: [{ ticket_id: "t1", project_id: "ad-server", status: "BLOCKED", error: "failed" },
+      { ticket_id: "t2", project_id: "steam-project", status: "BLOCKED", error: "failed" }] });
+  assert.deepEqual(projects, ["ad-server", "steam-project"]);
+});

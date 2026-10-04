@@ -584,3 +584,13 @@ node tools/harness-cli/index.js atlassian consent revoke --project demo
 ## 운영 현황과 검수 대기
 
 `dashboard`는 기본적으로 로컬 읽기 전용이다. 외부 연결 진단은 `--check-connections`, 알림 전송은 `--notify`로 명시한다. 코드 반영과 운영 수락을 구분하는 `review` 티켓, 복구 안내, 선택형 관측 비용은 [운영 현황 가이드](OPERATIONS_STATUS.md)를 참고한다.
+
+
+## Project-scoped notification headers
+
+Telegram messages and Slack titles begin with the explicit project ID, for example
+`[steam-project] [PASS] Task: jira-10074` or `[harness-template] [FAIL] Task: notification-project-prefix`.
+Managed request/execution/release notifications use their ticket project IDs; runner outcome
+retries retain the ticket project. Combined operations list all relevant IDs. If managed
+operation context cannot be resolved, the header is `[unknown-project]`, not an inferred project.
+These headers identify the project; PASS/REVIEW_READY does not grant user acceptance or Git approval.

@@ -131,6 +131,7 @@ test("runner records all three attempts before effects and emits one exhausted o
   assert.equal(result.tickets[0].status, "BLOCKED");
   assert.equal(notifications.length, 1);
   assert.match(notifications[0][1], /3\/3 attempts/);
+  assert.deepEqual(notifications[0][3], ["demo"]);
   await command(["notify", "work"]);
   await command(["run", "work"]);
   assert.equal(calls, 3); assert.equal(notifications.length, 1);
@@ -138,12 +139,12 @@ test("runner records all three attempts before effects and emits one exhausted o
 
 test("runner retains intermediate failure and retries notifications without rerunning code", async () => {
   const { root } = fixture();
-  let calls = 0, deliveries = 0;
+  let calls = 0, deliveries = 0; const projects = [];
   const command = runnerFor(root, {
     invokeAgent: async () => {
       if (++calls === 1) throw new Error("temporary failure");
       return "diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n";
-    }, notify: async () => { deliveries++; if (deliveries === 1) throw new Error("network unavailable"); return { sent: 1 }; }
+    }, notify: async (_status, _message, _task, ids) => { projects.push(ids); deliveries++; if (deliveries === 1) throw new Error("network unavailable"); return { sent: 1 }; }
   });
   const result = await command(["run", "work"]);
   assert.equal(result.status, "REVIEW_READY");
@@ -154,6 +155,7 @@ test("runner retains intermediate failure and retries notifications without reru
   assert.equal(delivered.tickets[0].outcome_notification.status, "SENT");
   await command(["notify", "work"]);
   assert.equal(deliveries, 2); assert.equal(calls, 2);
+  assert.deepEqual(projects, [["demo"], ["demo"]]);
 });
 
 test("runner stops immediately for permission, quota and protected-path failures", async () => {
@@ -250,6 +252,7 @@ test("runner applies an approved patch, verifies it, and stops at REVIEW_READY",
   assert.ok(state.tickets[0].runner.estimated_input_tokens > 0);
   assert.ok(state.tickets[0].runner.estimated_output_tokens > 0);
   assert.equal(notifications[0][0], "success");
+  assert.deepEqual(notifications[0][3], ["demo"]);
 });
 
 test("runner rejects unapproved plans before invoking an agent", async () => {
