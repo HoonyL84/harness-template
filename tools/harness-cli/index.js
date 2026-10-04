@@ -2357,7 +2357,7 @@ function selectModel(provider, type) {
 function commandContext(args) {
   const { options } = parseArgs(args);
   const bundle = buildAgentContext(ROOT, {
-    type: options.type || "code", taskName: options.task,
+    type: options.type || "code", role: options.role, taskName: options.task,
     fullContext: Boolean(options["full-context"]),
     ...(options["max-bytes"] ? { maxBytes: Number(options["max-bytes"]) } : {})
   });
@@ -2453,7 +2453,7 @@ async function commandRunAgent(args, attribution = null) {
   const { taskName, localTicket } = resolveAgentTaskScope(ROOT, attribution, () => resolveTaskId({ strict: true }));
   const rolePrompt = readText(`prompts/system/roles/${role}.md`);
   const context = buildAgentContext(ROOT, {
-    type, taskName: localTicket,
+    type, role, taskName: localTicket,
     fullContext: Boolean(options["full-context"])
   }).content;
   const systemPrompt = renderPrompt("prompts/templates/agent-system.md", {
@@ -2564,7 +2564,7 @@ Usage:
   node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
   node tools/harness-cli/index.js dashboard [--json] [--cost] [--check-connections] [--notify]
   node tools/harness-cli/index.js history <list|search|export|refresh|review|status|report|measure|map-check|audit-tasks> [--project id] [--request id] [--ticket id] [--ticket-kind development|planning|design]
-  node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|status>
+  node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|priority-plan|priority-apply|priority-show|priority-reconcile|status>
   node tools/harness-cli/index.js atlassian connect --site https://your-site.atlassian.net [--cloud-id UUID] [--transport mcp|rest]
   node tools/harness-cli/index.js atlassian recovery [outbox-entry-id]
   node tools/harness-cli/index.js atlassian mcp-tools
@@ -2585,7 +2585,7 @@ Usage:
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name> [--from-review]
   node tools/harness-cli/index.js verify [--quick|--full] [--offline] [--diagnose] [--auto-fix]
-  node tools/harness-cli/index.js context [--task <ticket>] [--type code|architect|review] [--full-context] [--max-bytes <n>] [--json]
+  node tools/harness-cli/index.js context [--task <ticket>] [--type code|architect|review] [--role reviewer|architect] [--full-context] [--max-bytes <n>] [--json]
   node tools/harness-cli/index.js run-agent [--type type] [--role role] "prompt"
   node tools/harness-cli/index.js provider <status|list|usage> [--json] [--cost]
   node tools/harness-cli/index.js provider use <openai|anthropic|gemini> [--json]

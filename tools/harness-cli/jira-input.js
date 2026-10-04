@@ -70,9 +70,9 @@ async function readBoundedJson(response) {
 }
 
 /** Read a single issue with fixed endpoints, no redirects, and no secret-bearing error output. */
-async function getIssue(config, issue, { env = process.env, fetchImpl = globalThis.fetch } = {}) {
+async function getIssue(config, issue, { env = process.env, fetchImpl = globalThis.fetch, mcpClient } = {}) {
   if (!ISSUE_KEY.test(issue) && !/^[0-9]+$/.test(issue)) throw new Error("Invalid Jira issue id or key");
-  if (transport(config) === "mcp") return createMcpClient({ env, fetchImpl }).send(config, "jira", `/rest/api/3/issue/${issue}?fields=summary,description,priority,project,updated`);
+  if (transport(config) === "mcp") return (mcpClient || createMcpClient({ env, fetchImpl })).send(config, "jira", `/rest/api/3/issue/${issue}?fields=summary,description,priority,project,updated`);
   if (["true", "1"].includes(env.HARNESS_OFFLINE)) throw new Error("Jira is unavailable in HARNESS_OFFLINE mode");
   const email = env.ATLASSIAN_EMAIL;
   const token = env.ATLASSIAN_API_TOKEN;
@@ -116,8 +116,9 @@ async function readJiraTickets(root, projectId, keys, options = {}) {
     throw new Error("Provide 1-20 unique issue keys from the mapped Jira project");
   }
   const tickets = [];
+  const requestOptions = transport(config) === "mcp" ? { ...options, mcpClient: createMcpClient(options) } : options;
   for (const key of keys) {
-    const issue = await getIssue(config, key, options);
+    const issue = await getIssue(config, key, requestOptions);
     if (issue.key !== key) throw new Error("Jira returned a different issue key; check the current key before importing");
     const source = snapshot(config, issue, projectKey);
     const priority = config.priority_map?.[issue.fields.priority?.id];
@@ -146,12 +147,13 @@ async function requireJiraFresh(root, plan, options = {}) {
   if (!tickets.length) return;
   try {
     const config = readConnection(root);
+    const requestOptions = transport(config) === "mcp" ? { ...options, mcpClient: createMcpClient(options) } : options;
     for (const ticket of tickets) {
       const source = normalizeJiraSource(ticket.source);
       if (source.site !== config.site || config.jira_projects[ticket.project_id] !== source.project_key) {
         throw new Error(`Jira connection mapping changed: ${ticket.ticket_id}`);
       }
-      const issue = await getIssue(config, source.issue_id, options);
+      const issue = await getIssue(config, source.issue_id, requestOptions);
       const current = snapshot(config, issue, source.project_key);
       if (current.issue_id !== source.issue_id || current.input_fingerprint !== source.input_fingerprint) {
         throw new Error(`Jira inputs changed: ${source.issue_key}; import a new draft and review it before execution`);

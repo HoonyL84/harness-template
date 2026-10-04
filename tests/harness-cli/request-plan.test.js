@@ -90,3 +90,29 @@ test("request plan validation rejects tampering, duplicate tickets, and unapprov
   assert.deepEqual(detailed.tickets[0].test_plan.integration, []);
   assert.throws(() => createRequestPlan({ requestId: "bad-tests", goal: "x", tickets: [{ ticket_id: "one", project_id: "demo", goal: "a", test_plan: [] }], profiles }), /test_plan must be an object/);
 });
+
+test("readable labels survive planning and publication without replacing tracking markers", () => {
+  const { ticketDraft } = require("../../tools/harness-cli/atlassian-payloads");
+  const plan = createRequestPlan({ requestId: "labels", goal: "map", profiles: { demo: profile("demo") },
+    tickets: [{ ticket_id: "map", project_id: "demo", goal: "map", labels: ["맵설계", "체험리허설"] }] });
+  const ticket = plan.tickets[0];
+  assert.deepEqual(ticket.labels, ["맵설계", "체험리허설"]);
+  const draft = ticketDraft({ jira_projects: { demo: "DEMO" }, jira_issue_types: { demo: "10001" } }, plan, ticket);
+  const fields = draft.build("harness-marker").fields;
+  assert.deepEqual(fields.labels, ["harness-marker", "harness-kind-development", "개발", "맵설계", "체험리허설"]);
+  assert.deepEqual(JSON.parse(fields.description.content[0].content[0].text).labels, ticket.labels);
+  const changed = globalThis.structuredClone(approveRequestPlan(plan));
+  changed.tickets[0].labels = ["다른업무"];
+  assert.throws(() => validateRequestPlan(changed), /fingerprint/);
+});
+
+test("readable label validation rejects reserved IDs, whitespace, duplicates and oversized input", () => {
+  const { normalizeReadableLabels } = require("../../tools/harness-cli/jira-labels");
+  for (const labels of [null, "map", [1], ["맵 설계"], ["harness-marker"], ["0123456789abcdef"], ["a", "a"], ["x".repeat(31)], ["a","b","c","d","e","f"]]) {
+    assert.throws(() => normalizeReadableLabels(labels));
+  }
+  assert.deepEqual(normalizeReadableLabels(), []);
+  const plan = createRequestPlan({ requestId: "legacy", goal: "work", profiles: { demo: profile("demo") }, projectIds: ["demo"] });
+  assert.equal(Object.hasOwn(plan.tickets[0], "labels"), false);
+  assert.doesNotThrow(() => validateRequestPlan(approveRequestPlan(plan)));
+});

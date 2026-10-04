@@ -166,3 +166,16 @@ test("edited ticket JSON, changed transition evidence and false transition ackno
   await assert.rejects(g.command(["sync", "--approve", (await g.command(["preview"])).approval_digest]), /incomplete/);
   assert.equal((await g.command(["status"])).entries[0].status, "NEEDS_RECONCILIATION");
 });
+
+test("variable-length JSON fences accept exact content only and reject mismatched delimiters", () => {
+  const { publishedDescriptionMatches } = require("../../tools/harness-cli/atlassian-mcp-contracts");
+  const text = JSON.stringify({ request_id: "work", nested: "```example```" });
+  const expected = { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text }] }] };
+  for (const length of [3, 4, 5]) {
+    const fence = "`".repeat(length);
+    assert.equal(publishedDescriptionMatches(`${fence}json\n${text}\n${fence}`, expected), true);
+  }
+  assert.equal(publishedDescriptionMatches("````json\n" + text + "\n```", expected), false);
+  assert.equal(publishedDescriptionMatches("````json\n" + JSON.stringify({ request_id: "changed" }) + "\n````", expected), false);
+  assert.equal(publishedDescriptionMatches("prefix\n````json\n" + text + "\n````", expected), false);
+});

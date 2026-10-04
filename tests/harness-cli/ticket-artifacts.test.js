@@ -111,7 +111,7 @@ test("API artifact ticket cannot apply code or out-of-scope Markdown", async t =
 test("Jira kind is structured metadata and a filterable label; work types stay unchanged", () => {
   const config = { jira_projects: { demo: "GAME" }, jira_issue_types: { demo: "10048" } }, ticket = { ticket_id: "concept", project_id: "demo", ticket_kind: "planning", goal: "Choose concept", deliverables: ["docs/concept.md"] };
   const payload = ticketDraft(config, { request_id: "work", status: "DRAFT" }, ticket).build("marker"); assert.equal(payload.fields.issuetype.id, "10048"); assert.match(payload.fields.summary, /Choose concept$/);
-  assert.deepEqual(payload.fields.labels, ["marker", "harness-kind-planning"]); assert.equal(JSON.parse(payload.fields.description.content[0].content[0].text).ticket_kind, "planning");
+  assert.deepEqual(payload.fields.labels, ["marker", "harness-kind-planning", "기획"]); assert.equal(JSON.parse(payload.fields.description.content[0].content[0].text).ticket_kind, "planning");
 });
 
 

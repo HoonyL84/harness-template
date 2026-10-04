@@ -57,3 +57,31 @@ test("project page snapshots preserve version and never grant policy authority o
   writeJsonAtomic(path.join(root, ".harness/local/atlassian.json"), changed);
   assert.throws(() => buildProjectContextBundle({ id: "demo", path: root }, { historyRoot: root }), /does not match/);
 });
+
+test("Jira-only empty-text structured filters avoid Confluence and return fresh keys", async () => {
+  const urls = [];
+  const result = await searchRemote(config, "demo", undefined, async (cfg, service, endpoint) => {
+    assert.equal(service, "jira"); const url = new URL(endpoint, cfg.site); urls.push(url);
+    return { issues: [{ id: "1", key: "DEMO-1", fields: { project: { key: "DEMO" }, summary: "First", priority: { name: "High" } } }], isLast: true };
+  }, { service: "jira", "jira-status": "To Do", "jira-priority-name": "High", "issue-keys": "DEMO-1" });
+  assert.equal(urls.length, 1); assert.equal(result.confluence.status, "not-requested"); assert.equal(result.jira.results[0].key, "DEMO-1");
+  assert.match(urls[0].searchParams.get("jql"), /priority = "High"/); assert.match(urls[0].searchParams.get("jql"), /key in \("DEMO-1"\)/);
+  assert.doesNotMatch(urls[0].searchParams.get("jql"), /text ~/);
+  for (const filters of [{ service: "bad" }, { service: "jira", "issue-keys": "OTHER-1" }, { service: "jira", "jira-priority-name": 'High" OR project=OTHER' }]) {
+    await assert.rejects(searchRemote(config, "demo", "test", () => {}, filters));
+  }
+});
+
+test("readable label search uses exact scoped JQL and rejects injection before remote calls", async () => {
+  let calls = 0;
+  await searchRemote(config, "demo", undefined, async (cfg, service, endpoint) => {
+    calls++;
+    assert.equal(service, "jira");
+    const jql = new URL(endpoint, cfg.site).searchParams.get("jql");
+    assert.match(jql, /project = "DEMO"/); assert.match(jql, /labels = "체험기획"/);
+    return { issues: [], isLast: true };
+  }, { service: "jira", "jira-label": "체험기획" });
+  assert.equal(calls, 1);
+  await assert.rejects(searchRemote(config, "demo", "", () => { throw Error("must not call"); },
+    { service: "jira", "jira-label": 'x" OR project=OTHER' }), /readable/);
+});

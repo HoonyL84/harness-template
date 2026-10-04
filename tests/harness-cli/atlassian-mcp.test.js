@@ -79,3 +79,39 @@ test("offline, credential absence, untrusted endpoint and response limits fail c
   const repeated = fixture({ catalog: { tools: [], nextCursor: "repeat" } });
   await assert.rejects(repeated.client.list(), /cursor/);
 });
+
+test("concurrent reads and explicit catalog inspection share one catalog per client", async () => {
+  const f = fixture();
+  await Promise.all([f.client.list(), f.client.list(), f.client.send(f.config, "confluence", "/api/v2/pages/12"), f.client.send(f.config, "confluence", "/api/v2/pages/13")]);
+  await f.client.list();
+  assert.equal(f.calls.filter(call => call.method === "initialize").length, 1);
+  assert.equal(f.calls.filter(call => call.method === "tools/list").length, 1);
+  assert.equal(f.client.stats().tool_calls, 2); assert.equal(f.client.stats().requests, 5);
+  assert.doesNotMatch(JSON.stringify(f.client.stats()), /secret|test@example/);
+});
+
+test("priority writes preserve only the approved issue and priority fields", async () => {
+  const f = fixture({ catalog: { tools: [{ name: "editJiraIssue" }] }, result: { structuredContent: { id: "12" } } });
+  f.config.mcp.bindings["jira.updatePriority"] = { tool: "editJiraIssue", arguments: {
+    cloudId: { $ref: "/cloudId" }, issueIdOrKey: { $ref: "/id" }, fields: { $ref: "/payload/fields" }
+  } };
+  const payload = { fields: { priority: { name: "High" } } };
+  await f.client.send(f.config, "jira", "/rest/api/3/issue/DEMO-1", payload);
+  assert.deepEqual(f.calls.at(-1).params.arguments.fields, payload.fields);
+  f.config.mcp.bindings["jira.updatePriority"].arguments.issueIdOrKey = "OTHER-1";
+  await assert.rejects(f.client.send(f.config, "jira", "/rest/api/3/issue/DEMO-1", payload), /exact approved/);
+  assert.throws(() => operationFor("jira", "/rest/api/3/issue/DEMO-1", { fields: { description: "unsafe" } }), /priority/);
+  assert.throws(() => operationFor("jira", "/rest/api/3/issue/DEMO-1", { fields: { priority: { name: "High", id: "1" } } }), /priority/);
+  const count = f.calls.length;
+  f.config.mcp.bindings["jira.updatePriority"].arguments.fields = { priority: { name: "Low" } };
+  await assert.rejects(f.client.send(f.config, "jira", "/rest/api/3/issue/DEMO-1", payload), /exact approved/);
+  assert.equal(f.calls.length, count);
+});
+
+test("optional pagination references omit absent tokens without weakening required bindings", () => {
+  const value = render({ cursor: { $ref: "/query/nextPageToken", optional: true } }, { query: {} });
+  assert.equal(JSON.stringify(value), "{}");
+  assert.equal(render({ $ref: "/query/nextPageToken", optional: true }, { query: { nextPageToken: "next" } }), "next");
+  assert.throws(() => render({ $ref: "/missing" }, {}), /missing/);
+  assert.throws(() => render({ $ref: "/missing", optional: false }, {}), /Invalid/);
+});
