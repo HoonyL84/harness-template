@@ -120,15 +120,15 @@
 
 ## 5. 고급 에이전트 시스템 구조 (Agent OS)
 
-새로 도입된 에이전트 시스템 아키텍처입니다. (현재 점진적 도입 중)
+현재 하네스의 Agent OS 레이어와 실제 CLI 컨트롤 플레인의 매핑 구조입니다.
 
-| 폴더명 | 역할 및 목적 |
-|--------|--------------|
+| 폴더명 | 역할 및 실제 구현 연결 |
+|--------|------------------------|
 | `observability/` | 에이전트 수행 로그(`traces`), 이벤트, 성과 지표(`metrics`/rework_count 등) 수집 |
-| `evals/` | 에이전트 스킬 고립 테스트(`per_skill`), 복합 테스트(`compositional`), 회귀 테스트(`regression`) |
-| `memory/` | 단기 컨텍스트(`working`), 도메인 지식(`semantic`), 과거 결정(`episodic`), 절차적 노하우(`procedural`) 관리 |
+| `evals/` | 모델·스킬 비교 평가(`tools/harness-cli/model-eval-command.js`, `skill-eval.js --skill <name>`), 회귀(`regression`) 및 복합 워크플로(`compositional`) |
+| `memory/` | 작업기억·도메인·의사결정·절차 마크다운 노트(`memory-governance.js` 검증, 티켓 `Context Files`로 명시 주입) 및 컨트롤 플레인 원장(`.harness/local/`) |
 | `prompts/` | 프롬프트 시스템 관리 (`system`, `templates`, `fragments`) |
-| `tools/` | Model Context Protocol (`mcp`) 및 로컬 함수 도구 등 레지스트리 관리 |
+| `tools/` | `tools/harness-cli/` 컨트롤 플레인·작업별 모델 라우터(`model-router.js`)·Atlassian MCP/REST 어댑터(`atlassian-mcp.js`) 및 프로젝트 확장용 `tools/registry.yaml` |
 
 ### 5-1. 역할 기반 실행
 

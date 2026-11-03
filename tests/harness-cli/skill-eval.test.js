@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
-const { gradeReviewCases, loadCases } = require("../../tools/harness-cli/skill-eval");
+const { gradeReviewCases, listSkills, loadCases, main, resolveSkillCaseFile } = require("../../tools/harness-cli/skill-eval");
 
 // Synthetic responses test the oracle, not an AI's review quality.
 function responses() {
@@ -78,4 +78,41 @@ test("offline CLI hides expected answers and fails incomplete responses without 
   fs.writeFileSync(file, "x".repeat(256 * 1024 + 1));
   assert.match(spawnSync(process.execPath, [cli, "--responses", file], { encoding: "utf8" }).stderr, /256KB/);
   assert.equal(spawnSync(process.execPath, [cli, "--unknown"], { encoding: "utf8" }).status, 1);
+});
+
+test("multi-skill loader supports --skill, --list-skills, and rejects traversal or symlinks", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "multi-skill-eval-"));
+  const skillDir = path.join(tempRoot, "skills", "policy-audit");
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(path.join(skillDir, "SKILL.md"), "# Policy Audit Skill\n");
+  const sampleCase = {
+    id: "case-1",
+    input: "Audit this diff",
+    diff: "@@ -1 +1 @@\n-old\n+new",
+    locations: [{ file: "src/app.js", start: 1, end: 5 }],
+    expected: {
+      selected_skill: "policy-audit",
+      status: "reviewed",
+      findings: [{ file: "src/app.js", line: 2, severities: ["P1"] }]
+    }
+  };
+  fs.writeFileSync(path.join(skillDir, "examples.jsonl"), JSON.stringify(sampleCase) + "\n");
+
+  assert.deepEqual(listSkills(tempRoot), ["policy-audit"]);
+  const loaded = loadCases("policy-audit", tempRoot);
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].id, "case-1");
+  assert.equal(main(["--list-skills"], tempRoot), 0);
+  assert.equal(main(["--skill", "policy-audit", "--cases"], tempRoot), 0);
+
+  assert.throws(() => resolveSkillCaseFile("../secret", tempRoot), /Invalid skill name/);
+  assert.throws(() => resolveSkillCaseFile("unknown-skill", tempRoot), /not found/);
+  assert.throws(() => main(["--skill"], tempRoot), /Usage/);
+
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "skill-eval-outside-"));
+  fs.writeFileSync(path.join(outside, "SKILL.md"), "# Outside\n");
+  fs.writeFileSync(path.join(outside, "examples.jsonl"), JSON.stringify(sampleCase) + "\n");
+  fs.symlinkSync(outside, path.join(tempRoot, "skills", "linked-skill"), process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => resolveSkillCaseFile("linked-skill", tempRoot), /symlink|junction/);
+  assert.deepEqual(listSkills(tempRoot), ["policy-audit"]);
 });

@@ -23,6 +23,7 @@ const { createProviderUsageService } = require("./provider-usage");
 const { requestAgent } = require("./provider-request");
 const { observedUsage } = require("./model-eval-oracle");
 const { createModelEvalCommand } = require("./model-eval-command");
+const { selectModelRoute } = require("./model-router");
 const { createAgentRunnerCommand } = require("./agent-runner");
 const { buildAgentContext, resolveAgentTaskScope } = require("./agent-context");
 const { REPAIR_CONTRACT, validateRepairResponse } = require("./repair-evidence");
@@ -479,7 +480,17 @@ const commandRunner = createAgentRunnerCommand({
   root: ROOT,
   parseArgs,
   invokeAgent: (prompt, ticket) => commandRunAgent(["--type", ticket.ticket_kind === "development" || !ticket.ticket_kind ? "code" : "architect", "--role", ticket.ticket_kind === "planning" ? "planner" : ticket.ticket_kind === "design" ? "architect" : "implementer", prompt],
-    { project_id: ticket.project_id, request_id: ticket.request_id, ticket_id: ticket.ticket_id }),
+    {
+      project_id: ticket.project_id,
+      request_id: ticket.request_id,
+      ticket_id: ticket.ticket_id,
+      priority: ticket.priority,
+      risk: ticket.risk,
+      ticket_kind: ticket.ticket_kind,
+      scope: ticket.scope,
+      attempt: ticket.attempt,
+      repair_required: ticket.repair_required
+    }),
   notify: (status, message, taskId, projectIds) => deliverNotification({ status, message, taskId, projectIds, env: process.env, fetchImpl: globalThis.fetch, log }),
   reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
   runCommand: run,
@@ -2335,25 +2346,6 @@ function inferRole(type) {
   return "implementer";
 }
 
-function selectModel(provider, type) {
-  if (provider === "openai") {
-    if (type === "code" || type === "docs") return process.env.OPENAI_MODEL_FAST || "gpt-5-mini";
-    if (type === "architect") return process.env.OPENAI_MODEL_STRONG || "gpt-5.2";
-    return process.env.OPENAI_MODEL || "gpt-5.2";
-  }
-  if (provider === "anthropic") {
-    if (type === "code" || type === "docs") return process.env.ANTHROPIC_MODEL_FAST || "claude-haiku-4-5";
-    if (type === "architect") return process.env.ANTHROPIC_MODEL_STRONG || "claude-opus-4-7";
-    return process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
-  }
-  if (provider === "gemini") {
-    if (type === "architect") return process.env.GEMINI_MODEL_STRONG || "gemini-3-1-pro";
-    if (type === "code" || type === "docs") return process.env.GEMINI_MODEL_FAST || "gemini-3-flash";
-    return process.env.GEMINI_MODEL || "gemini-3-flash";
-  }
-  fail(`Unsupported provider: ${provider}`);
-}
-
 function commandContext(args) {
   const { options } = parseArgs(args);
   const bundle = buildAgentContext(ROOT, {
@@ -2449,8 +2441,29 @@ async function commandRunAgent(args, attribution = null) {
   if (!VALID_ROLES.has(role)) fail(`Unsupported role: ${role}`);
 
   const provider = providerUsage.activeProvider();
-  const model = selectModel(provider, type);
   const { taskName, localTicket } = resolveAgentTaskScope(ROOT, attribution, () => resolveTaskId({ strict: true }));
+  let ticketRisk = attribution?.risk || options.risk || null;
+  if (!ticketRisk && localTicket && exists(`.harness/tasks/active/${localTicket}.md`)) {
+    const match = readText(`.harness/tasks/active/${localTicket}.md`).match(/^## Risk\r?\n-\s*([^\r\n]+)/m);
+    if (match) ticketRisk = match[1].trim();
+  }
+  let route;
+  try {
+    route = selectModelRoute(provider, {
+      type,
+      role,
+      priority: attribution?.priority || options.priority,
+      risk: ticketRisk,
+      ticketKind: attribution?.ticket_kind,
+      scopeCount: Array.isArray(attribution?.scope) ? attribution.scope.length : 0,
+      attempt: options.attempt ?? attribution?.attempt ?? 1,
+      repairRequired: Boolean(options.repair || attribution?.repair_required),
+      tierOverride: options["model-tier"]
+    }, process.env);
+  } catch (error) {
+    fail(error.message);
+  }
+  const model = route.model;
   const rolePrompt = readText(`prompts/system/roles/${role}.md`);
   const context = buildAgentContext(ROOT, {
     type, role, taskName: localTicket,
@@ -2467,7 +2480,7 @@ async function commandRunAgent(args, attribution = null) {
   const logRel = `observability/traces/${fileTimestamp()}-${type}.log`;
   log("🤖 [Harness Agent]");
   log(`   Provider : ${provider}`);
-  log(`   Model    : ${model}`);
+  log(`   Model    : ${model} (tier=${route.tier}, reason=${route.reason})`);
   log(`   Role     : ${role}`);
   log(`   Task     : ${prompt}`);
   log(`   Log      : ${logRel}`);
@@ -2488,6 +2501,7 @@ async function commandRunAgent(args, attribution = null) {
     `Timestamp : ${currentTimestamp()}`,
     `Provider  : ${provider}`,
     `Model     : ${model}`,
+    `Tier      : ${route.tier} (${route.reason})`,
     `Task-Type : ${type}`,
     `Role      : ${role}`,
     `Task      : ${prompt}`,
@@ -2546,68 +2560,58 @@ function commandProvider(args) {
 function usage() {
   log(`Harness CLI
 
-Usage:
-  node tools/harness-cli/index.js check
+[Multi-Project Control Plane]
+  node tools/harness-cli/index.js dashboard [--json] [--cost] [--check-connections] [--notify]
   node tools/harness-cli/index.js bootstrap <request|approve|apply|status> <id> [--path <project-root>] [--summary <text>] [--message <commit-message>]
   node tools/harness-cli/index.js project <add|list|show|check|context|onboard|profile|remove> [id] [--path <git-root>] [--bundle] [--approve] [--json]
+  node tools/harness-cli/index.js project context ID --bundle [--request ID --ticket ID] [--query TEXT] [--max-files N] [--max-bytes N]
   node tools/harness-cli/index.js request <create|revise|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]
   node tools/harness-cli/index.js request import-jira <id> --project <id> --issues <KEY-1,KEY-2>
   node tools/harness-cli/index.js request priority <id> --ticket <id> --value <P0|P1|P2|P3>
   node tools/harness-cli/index.js execution <prepare|advance|review-ready|status> <request-id>
-  node tools/harness-cli/index.js runner <run|reconcile|status|notify> <request-id> [--ticket <ticket-id>] [--max-attempts N] [--max-tickets N]
+  node tools/harness-cli/index.js runner <run|reconcile|status|notify> <request-id> [--ticket <ticket-id>] [--max-attempts N] [--max-tickets N] [--full-context]
   node tools/harness-cli/index.js release request <request-id> [--ticket <id>] [--approval <id>] --summary "..." [--operation record|commit|push|merge]
   node tools/harness-cli/index.js release <approve|apply|consume> <request-id> --fingerprint <sha256>
   node tools/harness-cli/index.js release status <request-id>
+  node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
+  node tools/harness-cli/index.js history <list|search|export|refresh|review|status|report|measure|map-check|audit-tasks> [--project id] [--request id] [--ticket id] [--ticket-kind development|planning|design]
   node tools/harness-cli/index.js evidence add --file <json>
   node tools/harness-cli/index.js evidence search [--query <text>] [--project <id>] [--technology <name>] [--from <date>] [--to <date>] [--include-drafts]
   node tools/harness-cli/index.js evidence export [--format json]
-  node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
-  node tools/harness-cli/index.js dashboard [--json] [--cost] [--check-connections] [--notify]
-  node tools/harness-cli/index.js history <list|search|export|refresh|review|status|report|measure|map-check|audit-tasks> [--project id] [--request id] [--ticket id] [--ticket-kind development|planning|design]
-  node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|priority-plan|priority-apply|priority-show|priority-reconcile|status>
-  node tools/harness-cli/index.js atlassian connect --site https://your-site.atlassian.net [--cloud-id UUID] [--transport mcp|rest]
-  node tools/harness-cli/index.js atlassian recovery [outbox-entry-id]
-  node tools/harness-cli/index.js atlassian mcp-tools
-  node tools/harness-cli/index.js atlassian discover [--jira-project KEY] [--space-id ID]
-  node tools/harness-cli/index.js atlassian link <request-id> --ticket <ticket-id>
-  node tools/harness-cli/index.js atlassian workflow --project ID --running ID --blocked ID --review-ready ID --completed ID
-  node tools/harness-cli/index.js atlassian consent <preview|grant|status|revoke> --project ID [--approve SCOPE_DIGEST]
-  node tools/harness-cli/index.js operations flush <--request ID|--project ID>
-  node tools/harness-cli/index.js operations <audit|repair|prepare ID|annotate ID --file JSON> [--project ID]
-  node tools/harness-cli/index.js backup create [--output FILE]
-  node tools/harness-cli/index.js backup inspect --file FILE
-  node tools/harness-cli/index.js backup restore --file FILE [--approve PREVIEW_ID]
-  node tools/harness-cli/index.js project context ID --bundle [--request ID --ticket ID] [--query TEXT] [--max-files N] [--max-bytes N]
-  node tools/harness-cli/index.js runner run REQUEST_ID [--full-context]
-  node tools/harness-cli/index.js atlassian map --project ID --jira-project KEY --issue-type ID --space-id ID [--parent-id ID] [--context-pages ID,ID] [--priority-map ID:P0,ID:P1,ID:P2,ID:P3]
-  node tools/harness-cli/index.js eval <list|run|show|compare|review> [id] [--provider NAME --model NAME] [--cases ID,ID] [--live --max-requests N --max-attempts N]
-  node tools/harness-cli/index.js provider check [--provider openai|anthropic|gemini]
+
+[Single-Repo Mode]
+  node tools/harness-cli/index.js check
   node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
   node tools/harness-cli/index.js start-ticket <name> [--from-review]
   node tools/harness-cli/index.js verify [--quick|--full] [--offline] [--diagnose] [--auto-fix]
-  node tools/harness-cli/index.js context [--task <ticket>] [--type code|architect|review] [--role reviewer|architect] [--full-context] [--max-bytes <n>] [--json]
-  node tools/harness-cli/index.js run-agent [--type type] [--role role] "prompt"
-  node tools/harness-cli/index.js provider <status|list|usage> [--json] [--cost]
-  node tools/harness-cli/index.js provider use <openai|anthropic|gemini> [--json]
-  node tools/harness-cli/index.js provider account-usage [--provider openai|anthropic|gemini] [--from YYYY-MM-DD --to YYYY-MM-DD] [--refresh]
   node tools/harness-cli/index.js complete-task <name> [--force]
+  node tools/harness-cli/index.js context [--task <ticket>] [--type code|architect|review] [--role reviewer|architect] [--full-context] [--max-bytes <n>] [--json]
+  node tools/harness-cli/index.js run-agent [--type type] [--role role] [--model-tier fast|standard|strong] "prompt"
+  node tools/harness-cli/index.js orchestrate <ticket> [--mode auto|native|api|sequential]
+  node tools/harness-cli/index.js orchestrate <--capabilities|--status <run-id>|--resume <run-id>|--begin-review <run-id>|--promote <run-id> --approve-risk|--finish <run-id>>
+  node tools/harness-cli/index.js autonomy [--status] [--verify-current] [--approve-risk] [--iterations N]
+
+[Integrations & Recovery]
+  node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|priority-plan|priority-apply|priority-show|priority-reconcile|status>
+  node tools/harness-cli/index.js atlassian connect --site https://your-site.atlassian.net [--cloud-id UUID] [--transport mcp|rest]
+  node tools/harness-cli/index.js atlassian map --project ID --jira-project KEY --issue-type ID --space-id ID [--parent-id ID] [--context-pages ID,ID] [--priority-map ID:P0,ID:P1,ID:P2,ID:P3]
+  node tools/harness-cli/index.js atlassian workflow --project ID --running ID --blocked ID --review-ready ID --completed ID
+  node tools/harness-cli/index.js atlassian consent <preview|grant|status|revoke> --project ID [--approve SCOPE_DIGEST]
+  node tools/harness-cli/index.js atlassian <recovery [outbox-entry-id]|mcp-tools|discover [--jira-project KEY] [--space-id ID]|link <request-id> --ticket <ticket-id>>
+  node tools/harness-cli/index.js operations flush <--request ID|--project ID>
+  node tools/harness-cli/index.js operations <audit|repair|prepare ID|annotate ID --file JSON> [--project ID]
+  node tools/harness-cli/index.js backup <create [--output FILE]|inspect --file FILE|restore --file FILE [--approve PREVIEW_ID]>
+  node tools/harness-cli/index.js cleanup [--dry-run] [--approve <id>]
   node tools/harness-cli/index.js scan-drift
   node tools/harness-cli/index.js recover
-  node tools/harness-cli/index.js autonomy [--status] [--verify-current] [--approve-risk] [--iterations N]
-  node tools/harness-cli/index.js orchestrate <ticket> [--mode auto|native|api|sequential]
-  node tools/harness-cli/index.js orchestrate --capabilities
-  node tools/harness-cli/index.js orchestrate --status <run-id>
-  node tools/harness-cli/index.js orchestrate --resume <run-id>
-  node tools/harness-cli/index.js orchestrate --begin-review <run-id>
-  node tools/harness-cli/index.js orchestrate --promote <run-id> --approve-risk
-  node tools/harness-cli/index.js orchestrate --finish <run-id>
-  node tools/harness-cli/index.js cleanup [--dry-run] [--approve <id>]
-  node tools/harness-cli/index.js validate-auto-fix <patch-file>
-  node tools/harness-cli/index.js validate-l5-patch <patch-file>
-  node tools/harness-cli/index.js validate-prompts
-  node tools/harness-cli/index.js validate-api-retry
-  node tools/harness-cli/index.js validate-recovery
-  node tools/harness-cli/index.js validate-l5-soak [--cycles N]
+
+[Evals, Provider & Diagnostics]
+  node tools/harness-cli/index.js eval <list|run|show|compare|review> [id] [--provider NAME --model NAME] [--cases ID,ID] [--live --max-requests N --max-attempts N]
+  node tools/harness-cli/skill-eval.js [--skill <name>] <--cases|--responses <json-file>|--list-skills>
+  node tools/harness-cli/index.js provider <status|list|usage|check> [--provider openai|anthropic|gemini] [--json] [--cost]
+  node tools/harness-cli/index.js provider use <openai|anthropic|gemini> [--json]
+  node tools/harness-cli/index.js provider account-usage [--provider openai|anthropic|gemini] [--from YYYY-MM-DD --to YYYY-MM-DD] [--refresh]
+  node tools/harness-cli/index.js <validate-auto-fix <patch-file>|validate-l5-patch <patch-file>|validate-prompts|validate-api-retry|validate-recovery|validate-l5-soak [--cycles N]>
 `);
 }
 

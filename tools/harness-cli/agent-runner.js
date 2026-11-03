@@ -303,7 +303,13 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
           const prompt = buildRunnerPrompt(claimedTicket, context, retryFeedback)
             + (repairRequired ? `\nREPAIR_CONTRACT (TRUSTED)\n${REPAIR_CONTRACT}` : "");
           estimatedInputTokens += estimateTokens(prompt);
-          const response = await invokeAgent(prompt, { ...claimedTicket, request_id: id });
+          const currentAttempt = Number(claimedTicket.runner.attempts || 0) + attempt;
+          const response = await invokeAgent(prompt, {
+            ...claimedTicket,
+            request_id: id,
+            attempt: currentAttempt,
+            repair_required: repairRequired
+          });
           await requireJiraFresh(root, { tickets: [claimedTicket] }, { env, fetchImpl });
           const owner = readJson(filePath, null)?.tickets.find((item) => item.ticket_id === claimedTicket.ticket_id);
           if (owner?.runner?.lease_id !== leaseId || Date.parse(owner.runner.lease_expires_at) <= now()) {

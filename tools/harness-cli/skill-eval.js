@@ -3,7 +3,67 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const MAX_BYTES = 256 * 1024;
-const CASE_FILE = path.resolve(__dirname, "../../skills/code-review/examples.jsonl");
+const DEFAULT_SKILL = "code-review";
+const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const DEFAULT_ROOT = path.resolve(__dirname, "../..");
+
+function assertNoSymlink(targetPath, label) {
+  if (!fs.existsSync(targetPath)) {
+    throw new Error(`${label} not found: ${path.basename(targetPath)}`);
+  }
+  const stat = fs.lstatSync(targetPath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Unsafe symlink or junction rejected for ${label}`);
+  }
+  return stat;
+}
+
+/**
+ * Resolve and validate the case file path for a named skill under `skills/<skillName>/examples.jsonl`.
+ * @param {string} [skillName]
+ * @param {string} [rootDir]
+ * @returns {string}
+ */
+function resolveSkillCaseFile(skillName = DEFAULT_SKILL, rootDir = DEFAULT_ROOT) {
+  const normalized = String(skillName || DEFAULT_SKILL).trim();
+  if (!SKILL_NAME_RE.test(normalized)) {
+    throw new Error(`Invalid skill name: ${normalized}`);
+  }
+  const skillsRoot = path.join(rootDir, "skills");
+  const skillDir = path.join(skillsRoot, normalized);
+  const caseFile = path.join(skillDir, "examples.jsonl");
+  assertNoSymlink(skillsRoot, "skills root");
+  assertNoSymlink(skillDir, `skill directory (${normalized})`);
+  assertNoSymlink(caseFile, `skill cases (${normalized})`);
+  return caseFile;
+}
+
+/**
+ * List available skills that define both `SKILL.md` and `examples.jsonl` without symlinks.
+ * @param {string} [rootDir]
+ * @returns {string[]}
+ */
+function listSkills(rootDir = DEFAULT_ROOT) {
+  const skillsRoot = path.join(rootDir, "skills");
+  if (!fs.existsSync(skillsRoot)) return [];
+  assertNoSymlink(skillsRoot, "skills root");
+  return fs.readdirSync(skillsRoot)
+    .filter(name => SKILL_NAME_RE.test(name))
+    .filter(name => {
+      const dir = path.join(skillsRoot, name);
+      const skillMd = path.join(dir, "SKILL.md");
+      const casesFile = path.join(dir, "examples.jsonl");
+      try {
+        return fs.lstatSync(dir).isDirectory()
+          && !fs.lstatSync(dir).isSymbolicLink()
+          && fs.existsSync(skillMd) && !fs.lstatSync(skillMd).isSymbolicLink()
+          && fs.existsSync(casesFile) && !fs.lstatSync(casesFile).isSymbolicLink();
+      } catch {
+        return false;
+      }
+    })
+    .sort();
+}
 
 function readBounded(file) {
   const stat = fs.statSync(file);
@@ -46,24 +106,53 @@ function gradeReviewCases(cases, responses) {
   });
 }
 
-function loadCases() {
-  const cases = readBounded(CASE_FILE).trim().split(/\r?\n/).map(line => JSON.parse(line));
+/**
+ * Load and validate JSONL evaluation fixtures for a skill.
+ * @param {string} [skillName]
+ * @param {string} [rootDir]
+ * @returns {Array<object>}
+ */
+function loadCases(skillName = DEFAULT_SKILL, rootDir = DEFAULT_ROOT) {
+  const caseFile = resolveSkillCaseFile(skillName, rootDir);
+  const cases = readBounded(caseFile).trim().split(/\r?\n/).map(line => JSON.parse(line));
   if (!cases.length || cases.some(c => !c.id || typeof c.input !== "string" || typeof c.diff !== "string"
       || !Array.isArray(c.locations) || !Array.isArray(c.expected?.findings))
       || new Set(cases.map(c => c.id)).size !== cases.length) throw new Error("Invalid skill case bank");
   return cases;
 }
 
+function parseSkillArgs(args) {
+  let skill = DEFAULT_SKILL;
+  const rest = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "--skill") {
+      if (!args[i + 1]) throw new Error("Usage: skill-eval.js [--skill <name>] (--cases | --responses <json-file> | --list-skills)");
+      skill = args[i + 1];
+      i += 1;
+    } else {
+      rest.push(args[i]);
+    }
+  }
+  return { skill, rest };
+}
+
 /** Run offline evaluation against separately captured responses, never model calls. */
-function main(args = process.argv.slice(2)) {
-  const cases = loadCases();
-  if (args.length === 1 && args[0] === "--cases") {
+function main(args = process.argv.slice(2), rootDir = DEFAULT_ROOT) {
+  const { skill, rest } = parseSkillArgs(args);
+  if (rest.length === 1 && rest[0] === "--list-skills") {
+    process.stdout.write(JSON.stringify({ skills: listSkills(rootDir) }, null, 2) + "\n");
+    return 0;
+  }
+  const cases = loadCases(skill, rootDir);
+  if (rest.length === 1 && rest[0] === "--cases") {
     process.stdout.write(JSON.stringify(cases.map(({ expected: _expected, ...input }) => input), null, 2) + "\n");
     return 0;
   }
-  if (args.length !== 2 || args[0] !== "--responses") throw new Error("Usage: skill-eval.js --cases | --responses <json-file>");
-  const results = gradeReviewCases(cases, JSON.parse(readBounded(args[1])));
-  process.stdout.write(JSON.stringify({ results, limitation: "Fixture location/severity and response contracts only; human semantic review required." }, null, 2) + "\n");
+  if (rest.length !== 2 || rest[0] !== "--responses") {
+    throw new Error("Usage: skill-eval.js [--skill <name>] (--cases | --responses <json-file> | --list-skills)");
+  }
+  const results = gradeReviewCases(cases, JSON.parse(readBounded(rest[1])));
+  process.stdout.write(JSON.stringify({ skill, results, limitation: "Fixture location/severity and response contracts only; human semantic review required." }, null, 2) + "\n");
   return results.every(r => r.result === "PASS") ? 0 : 1;
 }
 
@@ -71,4 +160,4 @@ if (require.main === module) {
   try { process.exitCode = main(); }
   catch (error) { process.stderr.write(error.message + "\n"); process.exitCode = 1; }
 }
-module.exports = { gradeReviewCases, loadCases, main };
+module.exports = { DEFAULT_SKILL, gradeReviewCases, listSkills, loadCases, main, resolveSkillCaseFile };
