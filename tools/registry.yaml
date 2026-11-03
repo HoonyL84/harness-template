@@ -1,18 +1,27 @@
-# Tool Registry Template
-# This file is intentionally scaffolded for template repositories.
-# Fill entries when a real project binds actual tools.
-#
-# version: 1
-# tools:
-#   - id: "mcp.example.search"
-#     kind: "mcp"          # mcp | local
-#     owner: "platform"
-#     description: "Example MCP tool"
-#     entrypoint: "tools/mcp/example.yaml"
-#     enabled: true
-#   - id: "local.verify"
-#     kind: "local"
-#     owner: "devx"
-#     description: "Local verification helper"
-#     entrypoint: "tools/local/verify.sh"
-#     enabled: false
+# Tool Registry & Control Plane Mapping
+# Built-in Harness tools execute directly via `tools/harness-cli/`.
+# Additional project-specific MCP or local tools can be declared below.
+
+version: 1
+builtin_modules:
+  - id: "harness.control-plane"
+    kind: "local"
+    entrypoint: "tools/harness-cli/index.js"
+    description: "Multi-project control plane, ticket workflow, verification, and release safety gates"
+  - id: "harness.model-router"
+    kind: "local"
+    entrypoint: "tools/harness-cli/model-router.js"
+    description: "Deterministic 3-tier (fast/standard/strong) task-aware model router with retry escalation"
+  - id: "harness.atlassian"
+    kind: "mcp"
+    entrypoint: "tools/harness-cli/atlassian-mcp.js"
+    description: "Atlassian Rovo MCP and REST adapter with transactional outbox and consent gates"
+  - id: "harness.skill-eval"
+    kind: "local"
+    entrypoint: "tools/harness-cli/skill-eval.js"
+    description: "Offline multi-skill fixture contract evaluator (--skill <name>)"
+  - id: "harness.memory-governance"
+    kind: "local"
+    entrypoint: "tools/harness-cli/memory-governance.js"
+    description: "Markdown memory frontmatter and layer governance validator"
+tools: []

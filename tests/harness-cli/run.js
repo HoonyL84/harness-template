@@ -55,3 +55,5 @@ require("./ticket-artifacts.test");
 require("./context-references.test");
 require("./model-eval-command.test");
 require("./operations-visibility.test");
+require("./model-router.test");
+require("./memory-governance.test");
