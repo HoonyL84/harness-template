@@ -57,3 +57,5 @@ require("./model-eval-command.test");
 require("./operations-visibility.test");
 require("./model-router.test");
 require("./memory-governance.test");
+require("./memory-cli.test");
+require("./planning-quality.test");

@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { ticketRiskMetadata } = require("./model-router");
 const path = require("node:path");
 const { normalizeContextRefs } = require("./context-references");
 const { normalizeTicketKind } = require("./ticket-artifacts");
@@ -10,6 +11,7 @@ function buildExecutionState(plan, root, now = new Date().toISOString()) {
     ticket_id: ticket.ticket_id,
     project_id: ticket.project_id,
     ticket_kind: normalizeTicketKind(ticket.ticket_kind),
+    ...ticketRiskMetadata(ticket),
     deliverables: [...(ticket.deliverables || [])],
     ...(ticket.priority !== undefined ? { priority: ticket.priority } : {}),
     ...(ticket.source ? { source: { ...ticket.source }, planning_status: ticket.planning_status } : {}),
@@ -95,6 +97,7 @@ function assertExecutionMatchesPlan(state, plan, root) {
   for (const expectedTicket of expected.tickets) {
     const ticket = state.tickets.find((item) => item.ticket_id === expectedTicket.ticket_id);
     if (!ticket) throw new Error(`Execution ticket changed after planning: ${expectedTicket.ticket_id}`);
+    if (JSON.stringify(ticketRiskMetadata(ticket)) !== JSON.stringify(ticketRiskMetadata(expectedTicket))) throw new Error(`Execution risk changed after planning: ${ticket.ticket_id}`);
     if (normalizeTicketKind(ticket.ticket_kind) !== expectedTicket.ticket_kind || JSON.stringify(ticket.deliverables || []) !== JSON.stringify(expectedTicket.deliverables)) throw new Error(`Execution ticket kind/deliverables changed after planning: ${ticket.ticket_id}`);
     if (JSON.stringify(normalizeContextRefs(ticket.context_refs)) !== JSON.stringify(expectedTicket.context_refs)) throw new Error(`Execution context_refs changed after planning: ${ticket.ticket_id}`);
     if (ticket.priority !== expectedTicket.priority) throw new Error(`Execution priority changed after planning: ${ticket.ticket_id}`);

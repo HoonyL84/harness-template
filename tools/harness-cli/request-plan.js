@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { ticketRiskMetadata } = require("./model-router");
 const { normalizeJiraSource } = require("./jira-input");
 const { normalizeReadableLabels } = require("./jira-labels");
 const { isArtifactTicket, normalizeDeliverables, normalizeTicketKind } = require("./ticket-artifacts");
@@ -31,6 +32,7 @@ function planFingerprint(plan) {
     tickets: plan.tickets,
     notification_policy: plan.notification_policy
   };
+  if (plan.planning_evidence !== undefined) stable.planning_evidence = plan.planning_evidence;
   return crypto.createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
 
@@ -122,6 +124,7 @@ function createRequestPlan({ requestId, goal, projectIds = [], tickets = [], pro
       ticket_kind: ticketKind,
       deliverables,
       priority: normalizePriority(ticket.priority),
+      ...ticketRiskMetadata(ticket),
       ...(ticket.labels !== undefined ? { labels: normalizeReadableLabels(ticket.labels) } : {}),
       ...(ticket.source ? {
         source: normalizeJiraSource(ticket.source),
@@ -176,7 +179,10 @@ function validateRequestPlan(plan) {
     throw new Error(`Request plan must use schema_version ${SCHEMA_VERSION}`);
   }
   if (planFingerprint(plan) !== plan.content_fingerprint) throw new Error("Request plan fingerprint does not match its content");
+  if (plan.planning_evidence !== undefined && (!plan.planning_evidence || typeof plan.planning_evidence.ready !== "boolean"
+    || !/^planning-[a-f0-9-]{36}$/.test(plan.planning_evidence.id) || !/^[a-f0-9]{64}$/.test(plan.planning_evidence.fingerprint))) throw new Error("Invalid planning evidence binding");
   for (const ticket of plan.tickets) {
+    ticketRiskMetadata(ticket);
     normalizeContextRefs(ticket.context_refs);
     normalizeReadableLabels(ticket.labels);
     normalizeDeliverables(ticket.deliverables, normalizeTicketKind(ticket.ticket_kind));
@@ -188,6 +194,7 @@ function validateRequestPlan(plan) {
 function approveRequestPlan(plan, now = new Date().toISOString()) {
   validateRequestPlan(plan);
   if (plan.status !== "DRAFT") throw new Error("Only a DRAFT request plan can be approved");
+  if (plan.planning_evidence?.ready === false) throw new Error("Planning questions or missing context require resolution before approval");
   if (plan.tickets.some((ticket) => ticket.source?.kind === "jira" && ticket.planning_status !== "READY")) {
     throw new Error("Imported Jira tickets require explicit acceptance criteria, implementation steps and a test plan before approval");
   }

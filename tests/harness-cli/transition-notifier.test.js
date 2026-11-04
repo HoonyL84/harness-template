@@ -48,7 +48,7 @@ test("notification exceptions never replace the completed command result", async
   const logs = [];
   const notifier = createStateTransitionNotifier({ root, parseArgs, notify: async () => { throw new Error("network down"); }, log: (value) => logs.push(value) });
   const result = await notifier("request", ["create", "work"], { request_id: "work", tickets: [{}], content_fingerprint: "abc" });
-  assert.equal(result.error, "network down");
+  assert.match(result.error, /Notification transport failed/);
   assert.match(logs[0], /notification failed/);
 });
 
@@ -107,4 +107,78 @@ test("aggregate BLOCKED alerts retain every mentioned project despite a ticket f
     tickets: [{ ticket_id: "t1", project_id: "ad-server", status: "BLOCKED", error: "failed" },
       { ticket_id: "t2", project_id: "steam-project", status: "BLOCKED", error: "failed" }] });
   assert.deepEqual(projects, ["ad-server", "steam-project"]);
+});
+
+test("failed release alert survives notifier restart and retries without a release operation", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-alert-restart-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const result = { approval_id: "approval", request_id: "work", status: "APPLIED", applied_at: "now",
+    release: { operation: "commit" }, tickets: [{ project_id: "steam-project" }] };
+  const first = createStateTransitionNotifier({ root, parseArgs, notify: async () => { throw new Error("offline"); } });
+  const failed = await first("release", ["apply", "approval"], result);
+  assert.equal(first.list()[0].event_id, failed.event_id);
+  assert.equal(first.list()[0].delivery_attempts, 1);
+  const delivered = [];
+  const restarted = createStateTransitionNotifier({ root, parseArgs,
+    notify: async (...args) => { delivered.push(args); return { configured: ["Telegram"], sent: 1, channels: { Telegram: "SENT" } }; } });
+  assert.deepEqual(restarted.list()[0].project_ids, ["steam-project"]);
+  assert.equal((await restarted.retry(failed.event_id)).status, "SENT");
+  assert.match(delivered[0][1], /APPLIED/);
+  assert.deepEqual(delivered[0][3], ["steam-project"]);
+  assert.equal((await restarted.retry(failed.event_id)).duplicate, true);
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(restarted.list(), []);
+  assert.throws(() => restarted.retry("../escape"), /event ID/);
+  await assert.rejects(restarted.retry("a".repeat(64)), /Unknown notification/);
+});
+
+test("partial transition delivery retries only the failed provider", async t => {
+  const { sendNotification } = require("../../tools/harness-cli/notification-utils");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-alert-partial-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const calls = []; let online = false;
+  const notify = (status, message, taskId, projectIds, deliveryState) => sendNotification({
+    status, message, taskId, projectIds, deliveryState,
+    env: { TELEGRAM_BOT_TOKEN: "123:token", TELEGRAM_CHAT_ID: "456", SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/valid" },
+    fetchImpl: async url => { const name = url.includes("telegram") ? "Telegram" : "Slack"; calls.push(name); return { ok: name === "Slack" || online, status: 503 }; }
+  });
+  const notifier = createStateTransitionNotifier({ root, parseArgs, notify });
+  const response = await notifier("request", ["create", "work"], { request_id: "work", tickets: [{}], content_fingerprint: "fp" });
+  assert.equal(response.status, "PENDING");
+  assert.deepEqual(notifier.list()[0].channels, { Telegram: "PENDING", Slack: "SENT" });
+  online = true;
+  const fresh = createStateTransitionNotifier({ root, parseArgs, notify });
+  assert.equal((await fresh.retry(response.event_id)).status, "SENT");
+  assert.deepEqual(calls, ["Telegram", "Slack", "Telegram"]);
+});
+
+test("outbox is durable before transport and honors legacy successes", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-alert-legacy-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const result = { request_id: "work", tickets: [{}], content_fingerprint: "fp" };
+  let notifier;
+  notifier = createStateTransitionNotifier({ root, parseArgs, notify: async () => {
+    assert.equal(notifier.list().length, 1);
+    return { sent: 0 };
+  } });
+  const pending = await notifier("request", ["create", "work"], result);
+  const legacy = path.join(root, ".harness/local/notifications/transitions.json");
+  fs.writeFileSync(legacy, JSON.stringify([pending.event_id]));
+  const old = createStateTransitionNotifier({ root, parseArgs, notify: async () => { throw new Error("must not send"); } });
+  assert.equal((await old("request", ["create", "work"], result)).duplicate, true);
+});
+
+test("concurrent retries for the same event cannot both send", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-alert-lock-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const queue = createStateTransitionNotifier({ root, parseArgs, notify: async () => ({ sent: 0 }) });
+  const pending = await queue("request", ["create", "work"], { request_id: "work", tickets: [{}], content_fingerprint: "fp" });
+  let unblock, started; const entered = new Promise(resolve => { started = resolve; });
+  const retry = createStateTransitionNotifier({ root, parseArgs, notify: () => { started(); return new Promise(resolve => { unblock = resolve; }); } });
+  const sending = retry.retry(pending.event_id);
+  await entered;
+  await assert.rejects(retry.retry(pending.event_id), /locked/);
+  unblock({ sent: 1 });
+  await sending;
+  assert.deepEqual(retry.list(), []);
 });

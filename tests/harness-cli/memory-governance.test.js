@@ -26,6 +26,20 @@ source: agent
 Selected 3-tier deterministic routing with retry escalation.
 `;
 
+test("memory scan rejects unknown layers and checks nested notes", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-nested-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "memory/episodic/nested"), { recursive: true });
+  fs.writeFileSync(path.join(root, "memory/episodic/nested/note.MD"), VALID_NOTE);
+  assert.equal(validateMemoryDirectory(root).ok, true);
+  assert.equal(validateMemoryDirectory(root).checked, 1);
+  fs.writeFileSync(path.join(root, "memory/episodic/nested/note.MD"), "invalid");
+  assert.equal(validateMemoryDirectory(root).ok, false);
+  fs.mkdirSync(path.join(root, "memory/unknown"));
+  fs.writeFileSync(path.join(root, "memory/orphan.md"), VALID_NOTE);
+  assert.equal(validateMemoryDirectory(root).files.filter(item => !item.ok).length, 3);
+});
+
 test("validateMemoryContent accepts valid frontmatter and catches governance violations", () => {
   assert.deepEqual(validateMemoryContent(VALID_NOTE, "episodic"), []);
   assert.equal(parseFrontmatter("no frontmatter"), null);

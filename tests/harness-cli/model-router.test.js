@@ -2,6 +2,8 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const { approveRequestPlan, createRequestPlan, planFingerprint, validateRequestPlan } = require("../../tools/harness-cli/request-plan");
+const { buildExecutionState, assertExecutionMatchesPlan } = require("../../tools/harness-cli/project-execution");
 const {
   DEFAULT_MODELS,
   normalizeRisk,
@@ -112,11 +114,44 @@ test("model router respects explicit tier override, environment variables, and r
   assert.equal(overridden.source, "env");
   assert.equal(selectModel("openai", "code", {}, env), "custom-fast");
 
-  assert.equal(normalizeRisk("고위험 변경"), "high");
+  assert.equal(normalizeRisk("높음"), "high");
+  for (const risk of ["고위험 변경", "unknown", null, 1, ""]) assert.throws(() => normalizeRisk(risk), /Risk must/);
+  assert.throws(() => resolveModelTier({ risk: "high", tierOverride: "fast" }), /High-risk/);
+  assert.equal(resolveModelTier({ risk: "high", tierOverride: "standard" }).tier, "standard");
   assert.equal(normalizeRisk("보통"), "medium");
   assert.equal(normalizeRisk("낮음"), "low");
 
   assert.throws(() => selectModelRoute("unknown-provider", {}), /Unsupported provider/);
   assert.throws(() => resolveModelTier({ tierOverride: "ultra" }), /Unsupported model tier/);
   assert.throws(() => resolveModelTier({ attempt: 0 }), /positive integer/);
+});
+
+test("risk and rationale bind approval; legacy plans and executions load without fingerprint rewriting", () => {
+  const profiles = { demo: { status: "APPROVED", content_fingerprint: "profile", verify_commands: ["node --test"] } };
+  const draft = createRequestPlan({ requestId: "risk-test", goal: "Feature", profiles,
+    tickets: [{ ticket_id: "task", project_id: "demo", goal: "Feature", risk: "높음", risk_reason: "Auth boundary" }] });
+  const approved = approveRequestPlan(draft);
+  for (const field of ["risk", "risk_reason", "risk_source"]) {
+    const changed = JSON.parse(JSON.stringify(approved));
+    changed.tickets[0][field] = field === "risk" ? "low" : "changed";
+    assert.notEqual(planFingerprint(changed), approved.content_fingerprint);
+    assert.throws(() => validateRequestPlan(changed), /fingerprint/);
+  }
+  const execution = buildExecutionState(approved, process.cwd());
+  delete execution.tickets[0].risk;
+  assert.throws(() => assertExecutionMatchesPlan(execution, approved, process.cwd()), /risk/);
+
+  const legacy = JSON.parse(JSON.stringify(draft));
+  for (const field of ["risk", "risk_reason", "risk_source"]) delete legacy.tickets[0][field];
+  legacy.content_fingerprint = planFingerprint(legacy);
+  const oldApproved = approveRequestPlan(legacy);
+  const snapshot = JSON.stringify(oldApproved);
+  validateRequestPlan(oldApproved);
+  const oldState = buildExecutionState(oldApproved, process.cwd());
+  assert.equal(oldState.tickets[0].risk_source, "legacy-default");
+  for (const field of ["risk", "risk_reason", "risk_source"]) delete oldState.tickets[0][field];
+  assertExecutionMatchesPlan(oldState, oldApproved, process.cwd());
+  assert.equal(JSON.stringify(oldApproved), snapshot);
+  assert.throws(() => createRequestPlan({ requestId: "invalid", goal: "Feature", profiles,
+    tickets: [{ ticket_id: "task", project_id: "demo", goal: "Feature", risk: "bogus" }] }), /Risk must/);
 });

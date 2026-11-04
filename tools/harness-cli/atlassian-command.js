@@ -7,6 +7,7 @@ const path = require("node:path");
 const { readJson, updateJsonLocked, withFileLock } = require("./control-plane-state");
 const { readConnection, readBoundedJson, snapshot, requireJiraFresh } = require("./jira-input");
 const { planFingerprint, validateRequestPlan } = require("./request-plan");
+const { assertPlanningEvidence, bindLinkedPlanningEvidence } = require("./planning-command");
 const { readIntent, bindFollowup, assertFollowup, summaryInput } = require("./operations-followup");
 const { validateProjectId } = require("./project-registry");
 const { searchRemote, fetchProjectPages } = require("./atlassian-read");
@@ -140,6 +141,7 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
       const requestId = validateProjectId(subject), ticketId = validateProjectId(options.ticket);
       const planFile = path.join(root, ".harness/local/requests", `${requestId}.json`);
       const plan = validateRequestPlan(readJson(planFile, null)), ticket = plan.tickets.find(t => t.ticket_id === ticketId);
+      assertPlanningEvidence(root, plan);
       const entry = read().entries.find(e => e.service === "jira" && e.operation === "create" && e.request_id === requestId && e.ticket_id === ticketId);
       if (plan.status !== "DRAFT" || !ticket || !entry || entry.status !== "SYNCED" || !entry.ticket_snapshot || ticket.source) throw new Error("Link requires an unlinked DRAFT and its acknowledged queue-ticket publication");
       if (entry.ticket_snapshot !== hash(ticket) || !matchesConnection(entry.connection, config)
@@ -157,7 +159,7 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
         target.planning_status = target.acceptance_criteria?.length && target.implementation_steps?.length
           && (isArtifactTicket(target) || Object.values(target.test_plan || {}).some(v => v.length)) ? "READY" : "NEEDS_PLAN";
         current.content_fingerprint = planFingerprint(current);
-        return validateRequestPlan(current);
+        return validateRequestPlan(bindLinkedPlanningEvidence(root, plan, current));
       });
       return print(linked);
     }
@@ -198,6 +200,7 @@ function createAtlassianCommand({ root, parseArgs, log, env = process.env, fetch
       const requestFile = path.join(root, ".harness", "local", "requests", `${requestId}.json`);
       return withFileLock(requestFile, () => {
       const plan = readJson(requestFile, null);
+      if (plan?.planning_evidence) { validateRequestPlan(plan); assertPlanningEvidence(root, plan); }
       const ticket = plan?.tickets?.find(t => t.ticket_id === ticketId);
       const draft = ticketDraft(config, plan, ticket, requestId);
       return enqueue(config, ticket.project_id, "jira", draft.input, draft.build);

@@ -37,3 +37,11 @@ source: manual|agent|postmortem
 - 하나의 문서에는 하나의 핵심 주제만 담는다.
 - 근거 링크(파일 경로/PR/이슈)를 명시한다.
 - 오래된 working 메모는 weekly 정리하거나 episodic/procedural로 이동한다.
+
+## 실행 경로와 보장 범위
+
+- `node tools/harness-cli/index.js memory check`: frontmatter와 경로 규칙을 독립 검사한다. 위반 시 파일·원인·이 가이드 경로를 출력하고 실패한다.
+- `check`에도 같은 진단을 표시한다. `verify --full`은 검증 명령 실행 전과 성공 기록 직전에 검사하며, 위반 시 `last_full`을 실패로 기록하고 성공 지문을 발급하지 않는다.
+- Quick 결과는 Full 실패를 덮어쓰지 않는다. 일반 `complete-task`의 현재 콘텐츠 검사에도 연결되어 Git ignored 메모리의 형식 오류를 과거 성공 기록으로 우회하지 못한다.
+- 네 레이어 안의 중첩 폴더도 검사하며 알 수 없는 루트 레이어, 레이어 밖 Markdown, symlink/junction은 거부한다. `README.md`, `MEMORY_TEMPLATE.md`는 메모리 노트 검사에서 제외한다.
+- 이 검사는 **파일 형식과 경로 검사(Linter)**다. 내용의 사실성, 최신성, 요구사항 충족을 보증하지 않는다. OS 수준 쓰기/명령 차단이 아니며 raw Git 및 기존 명시적 `complete-task --force` 우회까지 통제한다는 뜻도 아니다.

@@ -14,6 +14,7 @@ const {
 } = require("./request-plan");
 const { readRegistry, validateProjectId } = require("./project-registry");
 const { readJiraTickets, requireJiraFresh, requirePublishedDraftImported } = require("./jira-input");
+const { assertPlanningEvidence, createPlanningCommand } = require("./planning-command");
 
 function readPlan(filePath) {
   if (!fs.existsSync(filePath)) throw new Error(`Unknown request plan: ${path.basename(filePath, ".json")}`);
@@ -23,10 +24,13 @@ function readPlan(filePath) {
   } catch (error) {
     throw new Error(`Request plan is invalid JSON: ${error.message}`);
   }
-  return validateRequestPlan(plan);
+  validateRequestPlan(plan);
+  if (plan.planning_evidence) assertPlanningEvidence(path.resolve(path.dirname(filePath), "../../.."), plan);
+  return plan;
 }
 
-function createRequestCommand({ root, parseArgs, log, env = process.env, fetchImpl = globalThis.fetch }) {
+function createRequestCommand({ root, parseArgs, log, invokeAgent, env = process.env, fetchImpl = globalThis.fetch }) {
+  const planning = createPlanningCommand({ root, log, invokeAgent, env });
   const localRoot = path.join(root, ".harness", "local");
   const registryPath = path.join(localRoot, "projects.json");
   const requestPath = (id) => path.join(localRoot, "requests", `${validateProjectId(id)}.json`);
@@ -37,6 +41,10 @@ function createRequestCommand({ root, parseArgs, log, env = process.env, fetchIm
     const { positional, options } = parseArgs(args);
     const [action, rawId] = positional;
     const id = validateProjectId(rawId);
+    if (["capture", "draft", "planning", "planning-review", "generate"].includes(action)) {
+      if (positional.length !== 2) throw new Error("Planning actions require one request ID");
+      return planning(action, id, options);
+    }
 
     if (action === "import-jira") {
       const projectId = validateProjectId(options.project);
@@ -62,6 +70,7 @@ function createRequestCommand({ root, parseArgs, log, env = process.env, fetchIm
         input = JSON.parse(fs.readFileSync(path.resolve(options["plan-file"]), "utf8"));
       }
       const previous = action === "revise" ? readPlan(requestPath(id)) : null;
+      if (previous?.planning_evidence) throw new Error("Quality plans must be revised through request draft to preserve evidence");
       if (previous) {
         for (const ticket of input.tickets || []) {
           const source = previous.tickets.find((item) => item.ticket_id === ticket.ticket_id)?.source;
@@ -106,6 +115,7 @@ function createRequestCommand({ root, parseArgs, log, env = process.env, fetchIm
       const plan = updateJsonLocked(requestPath(id), null, (current) => {
         if (!current) throw new Error(`Unknown request plan: ${id}`);
         validateRequestPlan(current);
+        if (current.planning_evidence) throw new Error("Quality plans must change priority through a revalidated request draft");
         if (current.status !== "DRAFT") throw new Error("Only a DRAFT request plan can be revised");
         const ticket = current.tickets.find((item) => item.ticket_id === ticketId);
         if (!ticket) throw new Error(`Unknown request ticket: ${ticketId}`);
@@ -124,6 +134,7 @@ function createRequestCommand({ root, parseArgs, log, env = process.env, fetchIm
           if (!current) throw new Error(`Unknown request plan: ${id}`);
           if (current.content_fingerprint !== snapshot.content_fingerprint) throw new Error("Request changed while checking Jira; review the new draft");
           requirePublishedDraftImported(root, current);
+          assertPlanningEvidence(root, current);
           return approveRequestPlan(validateRequestPlan(current));
         });
         log(`[APPROVED] Request plan ${id} (${plan.content_fingerprint.slice(0, 12)})`);
@@ -146,7 +157,7 @@ function createRequestCommand({ root, parseArgs, log, env = process.env, fetchIm
         ? requireJiraFresh(root, plan, { env, fetchImpl }).then(ready) : ready();
     }
 
-    throw new Error("Usage: request <create|revise|show|approve|ready|priority|import-jira> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>] [--ticket <id> --value <P0|P1|P2|P3>] [--issues <KEY-1,KEY-2>]");
+    throw new Error("Usage: request <create|revise|show|approve|ready|priority|import-jira|capture|draft|planning|planning-review|generate> <id>; see help and docs/PLANNING_QUALITY_GUIDE.md for action options");
   };
 }
 

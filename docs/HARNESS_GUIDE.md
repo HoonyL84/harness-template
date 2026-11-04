@@ -2,6 +2,13 @@
 
 > AI 에이전트와 인간 개발자가 함께 일하기 위한 범용 개발 OS 사용 설명서
 
+운영 경로 보강: [모델 라우팅·위험도 승인 계약](design-docs/model-routing-contract.md),
+[알림 실패 복구](OPERATIONS_EVIDENCE_GUIDE.md#7-알림-전달-실패-복구),
+[메모리 형식 검사와 Full 게이트](design-docs/memory-governance.md#실행-경로와-보장-범위).
+
+계획 생성 보강: [계획 품질 가이드](PLANNING_QUALITY_GUIDE.md).
+새 요청의 capture/draft는 입력·출처·질문을 승인에 결속한다. 품질 계획 수정은 기존 revise/priority 대신 draft를 사용한다.
+
 ---
 
 ## 📐 전체 구조 한눈에 보기

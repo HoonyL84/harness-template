@@ -66,3 +66,27 @@ HARNESS REHEARSAL 표시의 합성 티켓과 결과 페이지만 승인받아 �
 MCP가 `listJiraStatuses`를 제공하면 워크플로 조회에는 `jira.projectStatuses`(mode=project), 단일 상태 조회에는 `jira.getStatus`(mode=status) 매핑이 필요하다. 읽기·쓰기 도구의 실제 스키마를 먼저 조회한다. native 응답의 `statuses`와 `workTypes.statusIds`는 확인된 ID·category로 결합하며, 누락·중복 상태는 거부한다. REST로 몰래 전환하거나 상태 ID를 추측하지 않는다.
 
 실제 개인 계정의 Jira/Confluence 성공과 실제 AI 개발 성공은 다르다. 테스트 결과, 모델 응답 fixture, 실제 실행, 사용자 검수, 측정되지 않은 성과를 나누어 보고한다.
+
+## 7. 알림 전달 실패 복구
+
+개발/Git 작업 성공과 알림 도착은 별개다. 알림만 실패했다면 release apply나 runner run을 다시 실행하지 않는다.
+
+~~~bash
+# 계획·승인 요청·Git 반영·배포 등 상태 전환 알림의 대기 목록 (읽기 전용)
+node tools/harness-cli/index.js notifications list
+# 지정한 알림 하나만 재전송; 개발/Git 작업은 실행하지 않음
+node tools/harness-cli/index.js notifications retry EVENT_ID
+# 개발 실행 결과 알림은 기존 실행 기록에서 재전송
+node tools/harness-cli/index.js runner notify REQUEST_ID
+~~~
+
+- Telegram/Slack 요청은 채널당 최대 10초로 제한한다. 별도 백그라운드 스케줄러나 무제한 자동 재시도는 없다.
+- 전환 알림은 전송 전에 .harness/local/notifications/transitions/EVENT_ID.json에 PENDING으로 저장한다. 개발 실행 결과는 기존 execution의 outcome_notification을 유지한다.
+- 실패한 채널만 재시도하고, 성공이 기록된 채널은 건너뛴다. 일부 성공은 전체 SENT로 바꾸지 않는다. 채널 설정이 사라지면 해당 채널은 PENDING을 유지한다.
+- 최초 전송 시 설정된 채널을 추적한다. 이후 새로 추가한 채널에 과거 알림을 자동 전송하지 않는다. 처음에 설정이 전혀 없었다면 재시도 시 설정된 채널을 사용한다. 재시도는 현재 로컬 수신 설정을 사용하므로 봇/채팅방 변경 후에는 대상을 확인한다.
+- 목록의 attempts는 알림 전송 횟수다. 개발 티켓의 3회 시도 예산과 무관하다. 목록은 채널 상태만 보여주며 API 토큰·웹훅 URL을 저장하지 않는다.
+- 오래된 transitions.json의 성공 ID 및 기존 runner SENT는 존중한다. 과거에 누락된 실패 이벤트나 과거 부분 성공의 채널 정보는 소급 복원할 수 없다.
+- 네트워크 응답 유실이나 원격 수신 직후 로컬 기록 전 종료에서는 중복 전송 가능성이 있다. exactly-once를 보장하지 않으며 메시지의 Event ID로 식별한다.
+- 재전송은 과거 이벤트 안내이지 현재 승인 권한이 아니다. 승인/릴리스 전 현재 상태와 fingerprint를 다시 확인한다.
+- 작업 결과 저장과 전환 hook은 하나의 트랜잭션이 아니다. 작업 종료 직후 hook 진입 전 프로세스가 죽은 경우까지 자동 이벤트 복구를 보장하지 않는다.
+- 로컬 알림 기록에는 업무 요약이 들어간다. Git에 올리지 않고 기존 로컬 상태 보호·백업 정책을 적용한다.

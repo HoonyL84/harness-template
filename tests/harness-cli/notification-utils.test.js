@@ -33,7 +33,7 @@ test("notification result distinguishes missing configuration from provider fail
     env: {},
     log: (message) => logs.push(message)
   });
-  assert.deepEqual(missing, { configured: [], sent: 0 });
+  assert.deepEqual(missing, { configured: [], sent: 0, channels: {}, complete: false });
   assert.match(logs.at(-1), /not configured/);
 
   const failed = await sendNotification({
@@ -44,7 +44,7 @@ test("notification result distinguishes missing configuration from provider fail
     fetchImpl: async () => ({ ok: false, status: 500 }),
     log: (message) => logs.push(message)
   });
-  assert.deepEqual(failed, { configured: ["Slack"], sent: 0 });
+  assert.deepEqual(failed, { configured: ["Slack"], sent: 0, channels: { Slack: "PENDING" }, complete: false });
   assert.match(logs.at(-1), /Configured providers failed/);
 });
 
@@ -71,4 +71,47 @@ test("local Harness notifications and multi-project or unknown requests are expl
   assert.match(texts[2], /^\[unknown-project\] \[FAIL\]/);
   await assert.rejects(sendNotification({ ...base, projectIds: ["steam-project\n[PASS]"] }), /explicit kebab-case/);
   assert.equal(texts.length, 3);
+});
+
+test("channel timeout aborts a hanging transport and still tries the other channel", async () => {
+  let signal;
+  const logs = [];
+  const result = await sendNotification({ status: "fail", message: "test", taskId: "work",
+    env: { TELEGRAM_BOT_TOKEN: "123:token", TELEGRAM_CHAT_ID: "456", SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/valid" },
+    timeoutMs: 10, log: value => logs.push(value),
+    fetchImpl: async (url, options) => {
+      if (url.includes("telegram")) { signal = options.signal; return new Promise(() => {}); }
+      return { ok: true };
+    } });
+  assert.equal(signal.aborted, true);
+  assert.deepEqual(result.channels, { Telegram: "PENDING", Slack: "SENT" });
+  assert.equal(result.complete, false);
+  assert.equal(result.sent, 1);
+  assert.ok(!logs.join("").includes("123:token"));
+  await assert.rejects(sendNotification({ timeoutMs: 0 }), /timeout/);
+  await assert.rejects(sendNotification({ timeoutMs: 10001 }), /timeout/);
+});
+
+test("retry skips acknowledged channels and keeps a removed pending provider pending", async () => {
+  const initial = { channels: { Telegram: "PENDING", Slack: "SENT" } };
+  let calls = 0;
+  const base = { status: "success", message: "done", taskId: "work", deliveryState: initial,
+    fetchImpl: async url => { calls++; assert.match(url, /telegram/); return { ok: true }; } };
+  const unavailable = await sendNotification({ ...base, env: {} });
+  assert.equal(unavailable.complete, false); assert.equal(calls, 0);
+  const retry = await sendNotification({ ...base, env: { TELEGRAM_BOT_TOKEN: "123:token", TELEGRAM_CHAT_ID: "456" } });
+  assert.equal(retry.complete, true); assert.equal(calls, 1);
+  assert.equal(initial.channels.Telegram, "PENDING");
+  const repeated = await sendNotification({ ...base, deliveryState: retry, env: {} });
+  assert.equal(repeated.complete, true); assert.equal(calls, 1);
+  await assert.rejects(sendNotification({ ...base, deliveryState: { channels: { Other: "SENT" } } }), /channel state/);
+});
+
+test("transport exceptions do not expose credentials in logs or progress", async () => {
+  const logs = [];
+  const result = await sendNotification({ status: "fail", message: "test", taskId: "work",
+    env: { TELEGRAM_BOT_TOKEN: "123:private", TELEGRAM_CHAT_ID: "456" }, log: v => logs.push(v),
+    fetchImpl: async () => { throw new Error("https://api.telegram.org/bot123:private/sendMessage"); } });
+  assert.equal(result.complete, false);
+  assert.doesNotMatch(JSON.stringify({ logs, result }), /123:private/);
 });
