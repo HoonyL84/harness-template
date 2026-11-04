@@ -2,6 +2,8 @@
 
 const COMMAND_METADATA = Object.freeze({
   "check": { requiresGit: false },
+  "memory": { requiresGit: false },
+  "notifications": { requiresGit: false },
   "check-environment": { requiresGit: false },
   "create-ticket": { requiresGit: false },
   "bootstrap": { requiresGit: false },

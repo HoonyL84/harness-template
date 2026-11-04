@@ -16,17 +16,24 @@ function summarize(record) {
   return { id: record.id, provider: record.provider, model: record.model, status: record.status,
     passed: record.cases.filter(c => c.status === "PASS").length, total: record.cases.length,
     attempts: attempts.length, retries: record.cases.reduce((n, c) => n + Math.max(0, c.attempts.length - 1), 0),
-    latency_ms: attempts.reduce((n, a) => n + (a.latency_ms || 0), 0),
+    latency_ms: attempts.length && attempts.every(a => Number.isFinite(a.latency_ms)) ? attempts.reduce((n, a) => n + a.latency_ms, 0) : null,
     observed_total_tokens: attempts.length && attempts.every(a => a.usage?.total_tokens !== null && a.usage?.total_tokens !== undefined)
       ? attempts.reduce((n, a) => n + a.usage.total_tokens, 0) : null,
     cost_usd: null, human_review: record.review?.result || "pending", review_count: record.review_history?.length ?? (record.review ? 1 : 0), result_fingerprint: record.result_fingerprint };
 }
-function createModelEvalCommand({ root, parseArgs, log, invokeAgent, env = process.env, now = () => Date.now() }) {
+function createModelEvalCommand({ root, parseArgs, log, invokeAgent, env = process.env, now = () => Date.now(), caseBank }) {
+  const system = caseBank?.system || SYSTEM;
+  const gradeCase = caseBank?.grade || grade;
   const directory = path.join(root, ".harness/local/evals");
   function bank() {
-    const file = path.join(root, "evals/regression/ticket-cases.json");
+    const file = path.join(root, caseBank?.file || "evals/regression/ticket-cases.json");
     if (fs.statSync(file).size > 65536) throw new Error("Eval case bank exceeds 64KB");
     const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (caseBank) {
+      if (value.schema_version !== "1.0" || !Array.isArray(value.cases) || value.cases.length < 1 || value.cases.length > 9
+        || new Set(value.cases.map(c => c.id)).size !== value.cases.length || !value.cases.every(caseBank.validate)) throw new Error("Invalid planning quality case bank");
+      return value.cases;
+    }
     if (value.schema_version !== "1.0" || !Array.isArray(value.cases) || value.cases.length < 1 || value.cases.length > 9
         || new Set(value.cases.map(c => c.id)).size !== value.cases.length
         || !value.cases.every(c => /^[a-z0-9-]+$/.test(c.id) && typeof c.input === "string" && c.input.trim() && ["DRAFT", "BLOCKED"].includes(c.expected?.status)
@@ -67,10 +74,25 @@ function createModelEvalCommand({ root, parseArgs, log, invokeAgent, env = proce
   return async function commandModelEval(argv) {
     const { positional, options } = parseArgs(argv);
     const command = positional[0];
-    const allowed = { list: [], run: ["provider", "model", "cases", "live", "max-requests", "max-attempts"], show: [], compare: [], review: ["fingerprint", "result", "reason", "minutes"] };
+    const allowed = { list: [], run: ["provider", "model", "cases", "live", "max-requests", "max-attempts"], import: ["responses-file"], show: [], compare: [], review: ["fingerprint", "result", "reason", "minutes"] };
     if (!allowed[command] || Object.keys(options).some(k => !allowed[command].includes(k))) throw new Error("Invalid eval command/options");
     if (["list", "run"].includes(command) && positional.length !== 1 || ["show", "review"].includes(command) && positional.length !== 2) throw new Error("Invalid eval arguments");
     const emit = value => { log(JSON.stringify(value, null, 2)); return value; };
+    if (command === "import") {
+      if (!caseBank || positional.length !== 1 || typeof options["responses-file"] !== "string") throw new Error("Planning eval import requires --responses-file");
+      const { boundedText } = require("./planning-contract");
+      const rows = JSON.parse(boundedText(path.resolve(options["responses-file"])));
+      const cases = bank();
+      if (!Array.isArray(rows) || !rows.length || new Set(rows.map(r => r.id)).size !== rows.length || rows.some(r => !cases.some(c => c.id === r.id) || typeof r.text !== "string")) throw new Error("Unknown or duplicate captured response IDs");
+      const selected = cases.filter(c => rows.some(r => r.id === c.id));
+      const policy = { system, kind: caseBank.kind, oracle: caseBank.fingerprint, provenance: "captured-response" };
+      const record = { schema_version: "1.0", id: `eval-${crypto.randomUUID()}`, provider: "unknown", model: "unknown", provenance: "captured-response", status: "COMPLETE",
+        started_at: new Date(now()).toISOString(), cohort_fingerprint: hash(JSON.stringify({ cases: selected, policy })), policy,
+        cases: selected.map(c => { const text = rows.find(r => r.id === c.id).text; const oracle = gradeCase(c, text);
+          return { id: c.id, input: c.input, expected: c.expected, split: c.split, rubric: c.rubric, status: oracle.passed ? "PASS" : "FAIL", attempts: [{ number: 1, output: text, output_fingerprint: hash(text), oracle, usage: null, latency_ms: null, status: "RECEIVED" }] }; }), review: null };
+      save(record);
+      return emit(summarize(record));
+    }
     if (command === "list") return emit({ cases: bank(), limitation: "Structural/boundary oracles only; not semantic correctness or a model ranking." });
     if (command === "show") return emit(read(positional[1]));
     if (command === "compare") {
@@ -99,7 +121,7 @@ function createModelEvalCommand({ root, parseArgs, log, invokeAgent, env = proce
       return emit(summarize(record));
     }
     if (!["openai", "anthropic", "gemini"].includes(options.provider) || typeof options.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(options.model)) throw new Error("Run requires an explicit supported provider and model name");
-    const cases = bank(), selectedIds = options.cases === undefined ? cases.map(c => c.id) : String(options.cases).split(",");
+    const cases = bank(), selectedIds = options.cases === undefined ? cases.filter(c => !caseBank || c.split === "development").map(c => c.id) : String(options.cases).split(",");
     if (!selectedIds.length || new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => !cases.some(c => c.id === id))) throw new Error("Unknown or duplicate eval case");
     const selected = cases.filter(c => selectedIds.includes(c.id));
     if (["max-attempts", "max-requests"].some(k => options[k] !== undefined && (typeof options[k] !== "string" || !/^[1-9]$/.test(options[k])))) throw new Error("Eval limits require an explicit integer value");
@@ -107,16 +129,17 @@ function createModelEvalCommand({ root, parseArgs, log, invokeAgent, env = proce
     const budget = options["max-requests"] === undefined ? null : Number(options["max-requests"]);
     if (!Number.isInteger(attempts) || attempts < 1 || attempts > 3 || budget !== null && (!Number.isInteger(budget) || budget < 1 || budget > 9)) throw new Error("Eval limits: max-attempts 1..3; max-requests 1..9");
     if (options.live !== undefined && options.live !== true) throw new Error("Use --live without a value");
-    const policy = { max_attempts: attempts, max_output_tokens: MAX_OUTPUT_TOKENS, max_requests: budget, system: SYSTEM,
+    const policy = { max_attempts: attempts, max_output_tokens: MAX_OUTPUT_TOKENS, max_requests: budget, system,
       engine: hash(fs.readFileSync(path.join(__dirname, "model-eval-command.js"), "utf8").replace(/\r\n/g, "\n")),
       oracle: hash(fs.readFileSync(path.join(__dirname, "model-eval-oracle.js"), "utf8").replace(/\r\n/g, "\n")),
       transport: hash(fs.readFileSync(path.join(__dirname, "provider-request.js"), "utf8").replace(/\r\n/g, "\n")) };
+    if (caseBank) { policy.kind = caseBank.kind; policy.quality_oracle = caseBank.fingerprint; }
     const cohort = hash(JSON.stringify({ cases: selected, policy }));
     if (!options.live) return emit({ mode: "dry-run", api_calls: 0, provider: options.provider, model: options.model, cases: selected.map(c => ({ id: c.id, input_fingerprint: hash(c.input) })), policy, cohort_fingerprint: cohort });
     if (env.HARNESS_AGENT_MODE !== "api" || budget === null) throw new Error("Live eval requires HARNESS_AGENT_MODE=api and explicit --max-requests");
     const record = { schema_version: "1.0", id: `eval-${crypto.randomUUID()}`, provider: options.provider, model: options.model,
       provenance: "provider-api", status: "RUNNING", started_at: new Date(now()).toISOString(), cohort_fingerprint: cohort, policy,
-      cases: selected.map(c => ({ id: c.id, input: c.input, expected: c.expected, status: "NOT_RUN", attempts: [] })), review: null };
+      cases: selected.map(c => ({ id: c.id, input: c.input, expected: c.expected, ...(caseBank ? { split: c.split, rubric: c.rubric } : {}), status: "NOT_RUN", attempts: [] })), review: null };
     save(record);
     let calls = 0, aborted = false;
     for (const item of record.cases) {
@@ -127,14 +150,14 @@ function createModelEvalCommand({ root, parseArgs, log, invokeAgent, env = proce
         item.attempts.push(attempt); calls += 1; save(record);
         let received = false;
         try {
-          const result = await invokeAgent({ provider: options.provider, model: options.model, systemPrompt: SYSTEM, prompt, maxOutputTokens: MAX_OUTPUT_TOKENS, maxRequests: budget });
+          const result = await invokeAgent({ provider: options.provider, model: options.model, systemPrompt: system, prompt, maxOutputTokens: MAX_OUTPUT_TOKENS, maxRequests: budget });
           received = true;
           attempt.latency_ms = Math.max(0, now() - started); attempt.usage = observedUsage(options.provider, result.response);
           attempt.response_model = typeof result.response_model === "string" ? result.response_model.slice(0, 120) : null;
           const text = typeof result.text === "string" ? result.text : "";
           attempt.output_fingerprint = hash(text);
           attempt.output = text.slice(0, 32768);
-          attempt.oracle = text.length > 32768 ? { passed: false, failures: ["output-size-limit"] } : grade(item, text);
+          attempt.oracle = text.length > 32768 ? { passed: false, failures: ["output-size-limit"] } : gradeCase(item, text);
           attempt.status = "RECEIVED"; item.status = attempt.oracle.passed ? "PASS" : "FAIL";
         } catch {
           attempt.latency_ms = Math.max(0, now() - started); attempt.status = received ? "EVALUATION_ERROR" : "API_ERROR";

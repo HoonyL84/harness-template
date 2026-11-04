@@ -23,7 +23,9 @@ const { createProviderUsageService } = require("./provider-usage");
 const { requestAgent } = require("./provider-request");
 const { observedUsage } = require("./model-eval-oracle");
 const { createModelEvalCommand } = require("./model-eval-command");
-const { selectModelRoute } = require("./model-router");
+const { createPlanningEvalCommand } = require("./planning-eval");
+const { selectModelRoute, taskAgentOptions } = require("./model-router");
+const { validateMemoryDirectory } = require("./memory-governance");
 const { createAgentRunnerCommand } = require("./agent-runner");
 const { buildAgentContext, resolveAgentTaskScope } = require("./agent-context");
 const { REPAIR_CONTRACT, validateRepairResponse } = require("./repair-evidence");
@@ -456,7 +458,7 @@ const commandBootstrap = createProjectBootstrapCommand({
   log
 });
 
-const commandRequest = createRequestCommand({ root: ROOT, parseArgs, log });
+const commandRequest = createRequestCommand({ root: ROOT, parseArgs, log, invokeAgent: invokeBoundedAgent });
 const commandExecution = createExecutionCommand({
   root: ROOT,
   parseArgs,
@@ -469,7 +471,7 @@ const commandExecution = createExecutionCommand({
 const controlPlane = createControlPlaneCommands({
   root: ROOT,
   parseArgs,
-  notify: (status, message, taskId, projectIds) => deliverNotification({ status, message, taskId, projectIds, env: process.env, fetchImpl: globalThis.fetch, log }),
+  notify: (status, message, taskId, projectIds, deliveryState) => deliverNotification({ status, message, taskId, projectIds, deliveryState, env: process.env, fetchImpl: globalThis.fetch, log }),
   reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
   runGit: runExternalGit,
   checkAtlassian: () => createAtlassianCommand({ root: ROOT, parseArgs, log: () => {}, reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) })(["check"]),
@@ -479,19 +481,20 @@ const commandRunner = createAgentRunnerCommand({
   onProgress: id => publishManagedFollowups("runner", ["run", id]),
   root: ROOT,
   parseArgs,
-  invokeAgent: (prompt, ticket) => commandRunAgent(["--type", ticket.ticket_kind === "development" || !ticket.ticket_kind ? "code" : "architect", "--role", ticket.ticket_kind === "planning" ? "planner" : ticket.ticket_kind === "design" ? "architect" : "implementer", prompt],
+  invokeAgent: (prompt, ticket) => commandRunAgent([...taskAgentOptions(ticket), prompt],
     {
       project_id: ticket.project_id,
       request_id: ticket.request_id,
       ticket_id: ticket.ticket_id,
       priority: ticket.priority,
       risk: ticket.risk,
+      risk_source: ticket.risk_source,
       ticket_kind: ticket.ticket_kind,
       scope: ticket.scope,
       attempt: ticket.attempt,
       repair_required: ticket.repair_required
     }),
-  notify: (status, message, taskId, projectIds) => deliverNotification({ status, message, taskId, projectIds, env: process.env, fetchImpl: globalThis.fetch, log }),
+  notify: (status, message, taskId, projectIds, deliveryState) => deliverNotification({ status, message, taskId, projectIds, deliveryState, env: process.env, fetchImpl: globalThis.fetch, log }),
   reviewFingerprint: (worktree) => calculateRepositoryContentFingerprint(worktree, runExternalGit),
   runCommand: run,
   runGit: runExternalGit,
@@ -500,16 +503,16 @@ const commandRunner = createAgentRunnerCommand({
 });
 const commandDeployment = createDeploymentCommand({ root: ROOT, parseArgs, runGit: runExternalGit, log });
 const commandBackup = createBackupCommand({ root: ROOT, parseArgs, log });
-const commandModelEval = createModelEvalCommand({ root: ROOT, parseArgs, log,
-  invokeAgent: async ({ provider, model, systemPrompt, prompt, maxOutputTokens, maxRequests }) => {
+async function invokeBoundedAgent({ provider, model, systemPrompt, prompt, maxOutputTokens, maxRequests }) {
     const result = await requestAgent({ provider, model, systemPrompt, prompt, maxOutputTokens,
       postJson: (url, headers, body) => postJson(url, headers, body, { maxRetries: 0, maxProviderRequests: maxRequests, timeoutMs: 60000 }) });
     if (observedUsage(provider, result.response).total_tokens !== null) {
       try { providerUsage.record(provider, model, result.response); } catch { log("[WARN] Eval provider usage ledger write failed; run evidence is retained separately."); }
     }
     return result;
-  }
-});
+}
+const commandModelEval = createModelEvalCommand({ root: ROOT, parseArgs, log, invokeAgent: invokeBoundedAgent });
+const commandPlanningEval = args => createPlanningEvalCommand({ root: ROOT, parseArgs, log, invokeAgent: invokeBoundedAgent })(args);
 const commandHistory = createHistoryCommand({ root: ROOT, parseArgs, log,
   reviewFingerprint: worktree => calculateRepositoryContentFingerprint(worktree, runExternalGit) });
 const commandAtlassian = createAtlassianCommand({ root: ROOT, parseArgs, log,
@@ -524,7 +527,7 @@ const publishManagedFollowups = createPublicationHook({ parseArgs, log,
 const notifyStateTransition = createStateTransitionNotifier({
   root: ROOT,
   parseArgs,
-  notify: (status, message, taskId, projectIds) => deliverNotification({ status, message, taskId, projectIds, env: process.env, fetchImpl: globalThis.fetch, log }),
+  notify: (status, message, taskId, projectIds, deliveryState) => deliverNotification({ status, message, taskId, projectIds, deliveryState, env: process.env, fetchImpl: globalThis.fetch, log }),
   log
 });
 
@@ -799,9 +802,24 @@ async function commandCheck() {
   if (activeCount > 1) warn(`Multiple active tickets detected: ${activeCount}. Use --task <ticket> or TASK_ID for verify/run-agent.`);
   else pass(`Active ticket count is safe: ${activeCount}`);
 
+  if (!reportMemoryFormat()) bad("Memory format violations: run memory check and follow docs/design-docs/memory-governance.md");
+
   log("----------------------------------------");
   log(`Environment preflight complete: fail=${failed} warn=${warned}`);
   process.exit(failed > 0 ? 1 : 0);
+}
+
+function reportMemoryFormat(output = log) {
+  output("[Memory] Format/path lint only; factual accuracy and freshness are not verified.");
+  try {
+    const result = validateMemoryDirectory(ROOT);
+    for (const item of result.files.filter(item => !item.ok)) output(`[Memory] ${item.file}: ${item.errors.join("; ")}`);
+    output(`[Memory] ${result.ok ? "PASS" : "FAIL"}: ${result.checked} checked. Guide: docs/design-docs/memory-governance.md`);
+    return result.ok;
+  } catch (error) {
+    output(`[Memory] FAIL: ${error.message}. Guide: docs/design-docs/memory-governance.md`);
+    return false;
+  }
 }
 
 function commandCreateTicket(args) {
@@ -1457,6 +1475,7 @@ function repositoryContentFingerprint() {
 }
 
 function requireCurrentVerifiedContent(name, verify) {
+  if (!reportMemoryFormat()) fail("Memory format validation failed; re-run Full verification before completion.");
   if (!verify.content_fingerprint) {
     fail(`Verification record for "${name}" predates content binding. Re-run verification.`);
   }
@@ -1965,6 +1984,14 @@ async function commandVerify(args) {
     log(message);
   };
 
+  const memoryGate = () => {
+    if (mode !== "full" || reportMemoryFormat(say)) return;
+    recordVerify("fail", "memory-format-invalid", null, "full");
+    writeText(logRel, lines.join("\n"));
+    fail("Memory format validation failed. Run memory check; no Full success fingerprint issued.");
+  };
+  memoryGate();
+
   while (attempt < maxAttempts && !verifyPassed) {
     const worktreeBefore = worktreeSnapshot();
     say(`[Harness] Verify execution started (Attempt ${attempt + 1}/${maxAttempts}, Mode: ${mode})`);
@@ -2168,6 +2195,7 @@ async function commandVerify(args) {
     }
 
     if (success) {
+      memoryGate();
       verifyPassed = true;
       const contentFingerprint = repositoryContentFingerprint();
       if (!contentFingerprint) {
@@ -2442,8 +2470,8 @@ async function commandRunAgent(args, attribution = null) {
 
   const provider = providerUsage.activeProvider();
   const { taskName, localTicket } = resolveAgentTaskScope(ROOT, attribution, () => resolveTaskId({ strict: true }));
-  let ticketRisk = attribution?.risk || options.risk || null;
-  if (!ticketRisk && localTicket && exists(`.harness/tasks/active/${localTicket}.md`)) {
+  let ticketRisk = attribution?.risk ?? options.risk;
+  if (ticketRisk === undefined && localTicket && exists(`.harness/tasks/active/${localTicket}.md`)) {
     const match = readText(`.harness/tasks/active/${localTicket}.md`).match(/^## Risk\r?\n-\s*([^\r\n]+)/m);
     if (match) ticketRisk = match[1].trim();
   }
@@ -2464,6 +2492,7 @@ async function commandRunAgent(args, attribution = null) {
     fail(error.message);
   }
   const model = route.model;
+  if (ticketRisk === undefined || attribution?.risk_source === "legacy-default") log("[WARN] Risk: low (legacy-default). Compatibility fallback, not a low-risk guarantee; review risk before approval.");
   const rolePrompt = readText(`prompts/system/roles/${role}.md`);
   const context = buildAgentContext(ROOT, {
     type, role, taskName: localTicket,
@@ -2568,6 +2597,11 @@ function usage() {
   node tools/harness-cli/index.js request <create|revise|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]
   node tools/harness-cli/index.js request import-jira <id> --project <id> --issues <KEY-1,KEY-2>
   node tools/harness-cli/index.js request priority <id> --ticket <id> --value <P0|P1|P2|P3>
+  node tools/harness-cli/index.js request capture <id> --input-file <json>
+  node tools/harness-cli/index.js request draft <id> --output-file <json>
+  node tools/harness-cli/index.js request planning <id>
+  node tools/harness-cli/index.js request planning-review <id> --review-file <json>
+  node tools/harness-cli/index.js request generate <id> --provider <openai|anthropic|gemini> [--model-tier standard|strong] [--live --approve-send --max-requests 1 --input-fingerprint <sha256>]
   node tools/harness-cli/index.js execution <prepare|advance|review-ready|status> <request-id>
   node tools/harness-cli/index.js runner <run|reconcile|status|notify> <request-id> [--ticket <ticket-id>] [--max-attempts N] [--max-tickets N] [--full-context]
   node tools/harness-cli/index.js release request <request-id> [--ticket <id>] [--approval <id>] --summary "..." [--operation record|commit|push|merge]
@@ -2590,6 +2624,9 @@ function usage() {
   node tools/harness-cli/index.js orchestrate <ticket> [--mode auto|native|api|sequential]
   node tools/harness-cli/index.js orchestrate <--capabilities|--status <run-id>|--resume <run-id>|--begin-review <run-id>|--promote <run-id> --approve-risk|--finish <run-id>>
   node tools/harness-cli/index.js autonomy [--status] [--verify-current] [--approve-risk] [--iterations N]
+  node tools/harness-cli/index.js memory check
+  node tools/harness-cli/index.js notifications list
+  node tools/harness-cli/index.js notifications retry <event-id>
 
 [Integrations & Recovery]
   node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|priority-plan|priority-apply|priority-show|priority-reconcile|status>
@@ -2607,6 +2644,7 @@ function usage() {
 
 [Evals, Provider & Diagnostics]
   node tools/harness-cli/index.js eval <list|run|show|compare|review> [id] [--provider NAME --model NAME] [--cases ID,ID] [--live --max-requests N --max-attempts N]
+  node tools/harness-cli/index.js eval planning <list|run|import|show|compare|review> [id] [--responses-file <json>]
   node tools/harness-cli/skill-eval.js [--skill <name>] <--cases|--responses <json-file>|--list-skills>
   node tools/harness-cli/index.js provider <status|list|usage|check> [--provider openai|anthropic|gemini] [--json] [--cost]
   node tools/harness-cli/index.js provider use <openai|anthropic|gemini> [--json]
@@ -2680,6 +2718,20 @@ async function main(argv = process.argv.slice(2)) {
     checkGitPreflight();
   }
   const handlers = {
+    memory: args => {
+      if (args.length !== 1 || args[0] !== "check") fail("Usage: memory check");
+      if (!reportMemoryFormat()) fail("Memory format validation failed");
+    },
+    notifications: async args => {
+      const { positional, options } = parseArgs(args);
+      const [action, id] = positional;
+      if (Object.keys(options).length || (action === "list" ? positional.length !== 1 : action !== "retry" || positional.length !== 2)) {
+        throw new Error("Usage: notifications list | notifications retry <event-id>");
+      }
+      const result = action === "list" ? notifyStateTransition.list() : await notifyStateTransition.retry(id);
+      log(JSON.stringify(result, null, 2));
+      return result;
+    },
     cleanup: commandCleanup,
     check: commandCheck,
     "check-environment": commandCheck,
@@ -2697,7 +2749,7 @@ async function main(argv = process.argv.slice(2)) {
     atlassian: commandAtlassian,
     operations: commandOperations,
     backup: commandBackup,
-    eval: commandModelEval,
+    eval: args => args[0] === "planning" ? commandPlanningEval(args.slice(1)) : commandModelEval(args),
     "start-ticket": commandStartTicket,
     "complete-task": commandCompleteTask,
     verify: commandVerify,

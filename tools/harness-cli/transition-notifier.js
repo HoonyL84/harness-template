@@ -1,6 +1,8 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { deliveryComplete } = require("./notification-utils");
+const fs = require("node:fs");
 const path = require("node:path");
 const { readJson, withFileLockAsync, writeJsonAtomic } = require("./control-plane-state");
 
@@ -31,9 +33,31 @@ function transitionEvent(command, args, result, parseArgs, error = null) {
   return null;
 }
 
+/** Durable alert outbox; retries never execute the originating operation. */
 function createStateTransitionNotifier({ root, parseArgs, notify, log = () => {} }) {
-  const eventPath = path.join(root, ".harness", "local", "notifications", "transitions.json");
-  return async function afterCommand(command, args, result, error) {
+  const legacyPath = path.join(root, ".harness", "local", "notifications", "transitions.json");
+  const directory = path.join(root, ".harness", "local", "notifications", "transitions");
+  const fileFor = id => {
+    if (typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id)) throw new Error("Invalid notification event ID");
+    return path.join(directory, id + ".json");
+  };
+  const deliver = async (file, record) => {
+    if (record.status === "SENT") return { duplicate: true, event_id: record.event_id };
+    record.delivery_attempts += 1;
+    record.last_attempt_at = new Date().toISOString();
+    writeJsonAtomic(file, record);
+    let error;
+    try {
+      record.delivery = await notify(record.event.status, record.event.message + "\nEvent: " + record.event_id, record.event.task, record.project_ids, record.delivery);
+      record.status = deliveryComplete(record.delivery) ? "SENT" : "PENDING";
+    } catch {
+      error = "Notification transport failed; use notifications retry with the event ID";
+      log("[WARN] State transition notification failed: " + error);
+    }
+    writeJsonAtomic(file, record);
+    return { duplicate: false, event_id: record.event_id, status: record.status, delivery: record.delivery, ...(error ? { error } : {}) };
+  };
+  const afterCommand = async (command, args, result, error) => {
     const event = transitionEvent(command, args, result, parseArgs, error);
     if (!event) return null;
     const eventId = crypto.createHash("sha256").update(event.key).digest("hex");
@@ -41,7 +65,6 @@ function createStateTransitionNotifier({ root, parseArgs, notify, log = () => {}
       const { positional, options } = parseArgs(args);
       let subject = result;
       const id = positional[1];
-      // Failures may have no result; consult only the known local operation record.
       if (!subject?.tickets && !subject?.project_id && typeof id === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
         const folder = command === "release" && positional[0] !== "request" ? "releases"
           : ["execution", "runner"].includes(command) ? "executions" : "requests";
@@ -51,18 +74,36 @@ function createStateTransitionNotifier({ root, parseArgs, notify, log = () => {}
       const selected = typeof options.ticket === "string" ? options.ticket.split(",") : null;
       const tickets = (subject?.tickets || []).filter(ticket => event.status === "fail" || !selected || selected.includes(ticket.ticket_id));
       const projectIds = [...new Set([subject?.project_id, ...tickets.map(ticket => ticket.project_id)].filter(Boolean))];
-      return await withFileLockAsync(eventPath, async () => {
-        const sent = readJson(eventPath, []);
-        if (sent.includes(eventId)) return { duplicate: true, event_id: eventId };
-        const delivery = await notify(event.status, event.message, event.task, projectIds);
-        if (delivery?.sent > 0) writeJsonAtomic(eventPath, [...sent, eventId].slice(-200));
-        return { duplicate: false, event_id: eventId, delivery };
+      const file = fileFor(eventId);
+      return await withFileLockAsync(file, async () => {
+        if (readJson(legacyPath, []).includes(eventId)) return { duplicate: true, event_id: eventId };
+        let record = readJson(file, null);
+        if (!record) {
+          record = { event_id: eventId, event, project_ids: projectIds, status: "PENDING", delivery_attempts: 0, created_at: new Date().toISOString() };
+          writeJsonAtomic(file, record);
+        }
+        return deliver(file, record);
       }, { ttlMs: 120_000 });
     } catch (error) {
-      log(`[WARN] State transition notification failed: ${error.message}`);
+      log("[WARN] State transition notification failed: " + error.message);
       return { duplicate: false, event_id: eventId, error: error.message };
     }
   };
+  afterCommand.list = () => (fs.existsSync(directory) ? fs.readdirSync(directory) : [])
+    .filter(name => /^[a-f0-9]{64}\.json$/.test(name))
+    .map(name => readJson(path.join(directory, name), null))
+    .filter(record => record?.status === "PENDING")
+    .map(record => ({ event_id: record.event_id, status: record.status, task: record.event.task,
+      project_ids: record.project_ids, delivery_attempts: record.delivery_attempts,
+      channels: record.delivery?.channels || {}, created_at: record.created_at }));
+  afterCommand.retry = id => {
+    const file = fileFor(id);
+    return withFileLockAsync(file, async () => {
+      const record = readJson(file, null);
+      if (!record || record.event_id !== id) throw new Error("Unknown notification event");
+      return deliver(file, record);
+    }, { ttlMs: 120_000 });
+  };
+  return afterCommand;
 }
-
 module.exports = { createStateTransitionNotifier, transitionEvent };

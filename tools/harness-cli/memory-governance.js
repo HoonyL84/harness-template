@@ -88,24 +88,17 @@ function validateMemoryDirectory(rootDir = path.resolve(__dirname, "../..")) {
     throw new Error("Unsafe symlink or junction rejected for memory root");
   }
 
-  for (const layer of MEMORY_LAYERS) {
-    const layerDir = path.join(memoryRoot, layer);
-    if (!fs.existsSync(layerDir)) continue;
-    const layerStat = fs.lstatSync(layerDir);
-    if (layerStat.isSymbolicLink()) {
-      throw new Error(`Unsafe symlink or junction rejected for memory/${layer}`);
-    }
-    if (!layerStat.isDirectory()) continue;
-
-    const entries = fs.readdirSync(layerDir).filter(name => name.endsWith(".md") && !IGNORED_FILES.has(name)).sort();
-    for (const name of entries) {
-      const fullPath = path.join(layerDir, name);
-      const relPath = `memory/${layer}/${name}`;
+  const scan = (directory, layer) => {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const fullPath = path.join(directory, name);
+      const relPath = path.relative(rootDir, fullPath).split(path.sep).join("/");
       const stat = fs.lstatSync(fullPath);
       if (stat.isSymbolicLink()) {
         files.push({ file: relPath, layer, ok: false, errors: ["Unsafe symlink or junction rejected"] });
         continue;
       }
+      if (stat.isDirectory()) { scan(fullPath, layer); continue; }
+      if (!/\.md$/i.test(name) || IGNORED_FILES.has(name)) continue;
       if (!stat.isFile() || stat.size > MAX_NOTE_BYTES) {
         files.push({ file: relPath, layer, ok: false, errors: ["Memory note must be a regular file <=256KB"] });
         continue;
@@ -113,6 +106,15 @@ function validateMemoryDirectory(rootDir = path.resolve(__dirname, "../..")) {
       const content = fs.readFileSync(fullPath, "utf8");
       const errors = validateMemoryContent(content, layer);
       files.push({ file: relPath, layer, ok: errors.length === 0, errors });
+    }
+  };
+  for (const name of fs.readdirSync(memoryRoot).sort()) {
+    const entry = path.join(memoryRoot, name);
+    const stat = fs.lstatSync(entry);
+    if (stat.isSymbolicLink()) throw new Error(`Unsafe symlink or junction rejected for memory/${name}`);
+    if (stat.isDirectory() && MEMORY_LAYERS.includes(name)) scan(entry, name);
+    else if (stat.isDirectory() || MEMORY_LAYERS.includes(name) || (/\.md$/i.test(name) && !IGNORED_FILES.has(name))) {
+      files.push({ file: `memory/${name}`, layer: name, ok: false, errors: ["Memory notes must be inside a working, semantic, episodic or procedural directory"] });
     }
   }
 

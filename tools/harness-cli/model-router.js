@@ -41,11 +41,26 @@ const TIER_ENV = Object.freeze({
 /**
  * 위험도 문자열을 표준 단계(low | medium | high)로 정규화한다.
  */
-function normalizeRisk(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  if (["high", "높음", "고위험", "critical", "상"].some((token) => raw.includes(token))) return "high";
-  if (["medium", "보통", "중간", "중위험", "중"].some((token) => raw.includes(token))) return "medium";
-  return "low";
+function normalizeRisk(value = "low") {
+  const aliases = { low: "low", medium: "medium", high: "high", "낮음": "low", "보통": "medium", "높음": "high" };
+  if (typeof value !== "string" || !Object.hasOwn(aliases, value.trim().toLowerCase())) throw new Error("Risk must be low, medium or high (낮음, 보통, 높음)");
+  return aliases[value.trim().toLowerCase()];
+}
+
+/** Keep compatibility defaults distinguishable from an explicitly assessed risk. */
+function ticketRiskMetadata(ticket) {
+  const risk = normalizeRisk(ticket.risk);
+  const source = ticket.risk_source ?? (ticket.risk === undefined ? "legacy-default" : "explicit");
+  if (!["explicit", "legacy-default"].includes(source) || (source === "legacy-default" && risk !== "low")) throw new Error("Invalid risk_source");
+  if (ticket.risk_reason !== undefined && typeof ticket.risk_reason !== "string") throw new Error("risk_reason must be a string");
+  return { risk, risk_source: source, risk_reason: (ticket.risk_reason || "").trim() };
+}
+
+/** Shared runner-to-CLI role/type contract. */
+function taskAgentOptions(ticket) {
+  if (ticket.ticket_kind === "planning") return ["--type", "docs", "--role", "planner"];
+  if (ticket.ticket_kind === "design") return ["--type", "architect", "--role", "architect"];
+  return ["--type", "code", "--role", "implementer"];
 }
 
 /**
@@ -56,7 +71,7 @@ function resolveModelTier(options = {}) {
     type = "default",
     role = null,
     priority = null,
-    risk = null,
+    risk = undefined,
     ticketKind = null,
     scopeCount = 0,
     attempt = 1,
@@ -65,10 +80,12 @@ function resolveModelTier(options = {}) {
   } = options;
 
   if (tierOverride !== null && tierOverride !== undefined && String(tierOverride).trim() !== "") {
+    const riskLevel = normalizeRisk(risk);
     const normalizedTier = String(tierOverride).trim().toLowerCase();
     if (!MODEL_TIERS.includes(normalizedTier)) {
       throw new Error(`Unsupported model tier: ${tierOverride}. Expected one of: ${MODEL_TIERS.join(", ")}`);
     }
+    if (riskLevel === "high" && normalizedTier === "fast") throw new Error("High-risk work cannot use the fast model tier");
     return {
       tier: normalizedTier,
       base_tier: normalizedTier,
@@ -169,6 +186,8 @@ module.exports = {
   MODEL_TIERS,
   TIER_ENV,
   normalizeRisk,
+  ticketRiskMetadata,
+  taskAgentOptions,
   resolveModelTier,
   selectModel,
   selectModelRoute

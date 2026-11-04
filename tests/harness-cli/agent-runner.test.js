@@ -21,7 +21,7 @@ function parseArgs(args) {
   return { positional, options };
 }
 
-function fixture({ approved = true, retryPolicy } = {}) {
+function fixture({ approved = true, retryPolicy, ticketMetadata = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-runner-"));
   const projectRoot = path.join(root, "project");
   fs.mkdirSync(projectRoot);
@@ -36,7 +36,7 @@ function fixture({ approved = true, retryPolicy } = {}) {
   let plan = createRequestPlan({
     requestId: "work",
     goal: "Add safe feature",
-    tickets: [{ ticket_id: "work-demo", project_id: "demo", goal: "Add safe feature", retry_policy: retryPolicy }],
+    tickets: [{ ticket_id: "work-demo", project_id: "demo", goal: "Add safe feature", retry_policy: retryPolicy, ...ticketMetadata }],
     profiles: { demo: profile }
   });
   if (approved) plan = approveRequestPlan(plan);
@@ -374,4 +374,59 @@ test("runner rejects verification drift and stops when rollback cannot restore b
   assert.equal(result.tickets[0].verification, undefined);
   assert.match(result.tickets[0].error, /changed during verification/);
   assert.match(result.tickets[0].error, /rollback failed/);
+});
+
+test("runner notification retry preserves per-channel progress and never reruns the agent", async t => {
+  const { sendNotification } = require("../../tools/harness-cli/notification-utils");
+  const { root } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let agentCalls = 0, gitCalls = 0, buildCalls = 0, online = false;
+  const channels = [];
+  const command = runnerFor(root, {
+    runGit: () => { gitCalls++; return { status: 0 }; },
+    runCommand: () => { buildCalls++; return { status: 0 }; },
+    invokeAgent: async () => { agentCalls++; return "diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n"; },
+    notify: (status, message, taskId, projectIds, deliveryState) => sendNotification({
+      status, message, taskId, projectIds, deliveryState,
+      env: { TELEGRAM_BOT_TOKEN: "123:token", TELEGRAM_CHAT_ID: "456", SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/valid" },
+      fetchImpl: async url => { const name = url.includes("telegram") ? "Telegram" : "Slack"; channels.push(name); return { ok: online || name === "Slack", status: 503 }; }
+    })
+  });
+  const result = await command(["run", "work"]);
+  assert.equal(result.tickets[0].outcome_notification.status, "PENDING");
+  const effects = { gitCalls, buildCalls };
+  online = true;
+  const resumed = await command(["notify", "work"]);
+  assert.equal(resumed.tickets[0].outcome_notification.status, "SENT");
+  await command(["notify", "work"]);
+  assert.equal(agentCalls, 1);
+  assert.deepEqual({ gitCalls, buildCalls }, effects);
+  assert.deepEqual(channels, ["Telegram", "Slack", "Telegram"]);
+});
+
+test("approved risk flows through execution and runner into the actual role/type model route", async t => {
+  const { taskAgentOptions, selectModelRoute } = require("../../tools/harness-cli/model-router");
+  for (const [ticketKind, risk, tier] of [["planning", "low", "fast"], ["planning", "high", "strong"], ["development", "high", "strong"], ["design", "low", "strong"]]) {
+    const { root } = fixture({ ticketMetadata: {
+      ticket_kind: ticketKind, risk, risk_reason: "Assessed scope", priority: "P2",
+      acceptance_criteria: ["Review artifact"], implementation_steps: ["Write artifact"],
+      ...(ticketKind !== "development" ? { deliverables: ["docs/result.md"] } : {})
+    } });
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    let calls = 0;
+    const command = runnerFor(root, { invokeAgent: async (_prompt, ticket) => {
+      calls++;
+      const { options } = parseArgs(taskAgentOptions(ticket));
+      const route = selectModelRoute("openai", { ...options, risk: ticket.risk, ticketKind: ticket.ticket_kind, priority: ticket.priority },
+        { OPENAI_MODEL_FAST: "test-fast", OPENAI_MODEL_STRONG: "test-strong" });
+      assert.equal(ticket.risk, risk);
+      assert.equal(ticket.risk_reason, "Assessed scope");
+      assert.equal(route.tier, tier);
+      assert.equal(route.model, `test-${tier}`);
+      // Stop after routing: this contract test never spends provider tokens or applies code.
+      throw Object.assign(new Error("Routing assertion complete"), { code: "APPROVAL_REQUIRED" });
+    } });
+    await command(["run", "work"]);
+    assert.equal(calls, 1);
+  }
 });
