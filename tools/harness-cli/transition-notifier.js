@@ -18,6 +18,14 @@ function transitionEvent(command, args, result, parseArgs, error = null) {
   if (command === "request" && new Set(["create", "revise", "priority", "import-jira"]).has(action)) {
     return { key: `request:${result.request_id}:PLAN_READY:${result.content_fingerprint}`, status: "success", task: result.request_id, message: `${result.request_id} PLAN_READY: review ${result.tickets.length} ticket(s) and approve the fingerprint-bound plan.` };
   }
+  if (command === "request" && new Set(["draft", "generate"]).has(action)
+    && result.status === "DRAFT" && typeof result.ready === "boolean" && Array.isArray(result.summary)) {
+    const milestone = result.ready ? "PLAN_READY" : "PLAN_INPUT_REQUIRED";
+    const message = result.ready ? `review ${result.summary.length} ticket(s) and approve the fingerprint-bound plan.`
+      : "resolve blocking questions or missing context before approval.";
+    return { key: `request:${result.request_id}:${milestone}:${result.fingerprint}`, status: result.ready ? "success" : "fail",
+      task: result.request_id, message: `${result.request_id} ${milestone}: ${message}` };
+  }
   if (command === "execution" && new Set(["prepare", "advance", "review-ready"]).has(action)) {
     const blocked = result.tickets?.filter((ticket) => ticket.status === "BLOCKED") || [];
     if (blocked.length > 0) return { key: `execution:${result.execution_id}:BLOCKED:${blocked.map((ticket) => `${ticket.ticket_id}=${ticket.error}`).join("|")}`, status: "fail", task: result.request_id, message: `${result.request_id} BLOCKED: ${blocked.map((ticket) => `${ticket.ticket_id}=${ticket.error}`).join("; ")}` };

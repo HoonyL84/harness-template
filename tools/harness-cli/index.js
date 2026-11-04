@@ -527,8 +527,9 @@ const publishManagedFollowups = createPublicationHook({ parseArgs, log,
 const notifyStateTransition = createStateTransitionNotifier({
   root: ROOT,
   parseArgs,
-  notify: (status, message, taskId, projectIds, deliveryState) => deliverNotification({ status, message, taskId, projectIds, deliveryState, env: process.env, fetchImpl: globalThis.fetch, log }),
-  log
+  notify: (status, message, taskId, projectIds, deliveryState) => deliverNotification({ status, message, taskId, projectIds, deliveryState,
+    env: process.env, fetchImpl: globalThis.fetch, log: message => process.stderr.write(`${message}\n`) }),
+  log: message => process.stderr.write(`${message}\n`)
 });
 
 function ensureEnvLocal() {

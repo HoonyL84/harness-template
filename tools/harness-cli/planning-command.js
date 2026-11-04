@@ -6,12 +6,14 @@ const crypto = require("node:crypto");
 const { isDeepStrictEqual } = require("node:util");
 const contract = require("./planning-contract");
 const { stateFile } = contract;
-const { createRequestPlan, planFingerprint } = require("./request-plan");
+const { createRequestPlan, planFingerprint, validateRequestPlan } = require("./request-plan");
+const { normalizeJiraSource } = require("./jira-input");
 const { writeJsonAtomic, updateJsonLocked } = require("./control-plane-state");
 const { selectModelRoute } = require("./model-router");
 const { observedUsage } = require("./model-eval-oracle");
 
 const artifactId = id => typeof id === "string" && /^planning-[a-f0-9-]{36}$/.test(id);
+const DRAFT_CONFLICT = "Planning draft changed concurrently; inspect the current plan before retrying";
 
 /** Validate immutable evidence and current sources at managed approval/execution boundaries. */
 function assertPlanningEvidence(root, plan, { fresh = true } = {}) {
@@ -63,14 +65,29 @@ function createPlanningCommand({ root, log, invokeAgent, env = process.env, now 
     contract.unseal(input);
     return input;
   }
-  function saveDraft(id, output, provenance, details = {}) {
+  function readRequest(id) {
+    if (!fs.existsSync(requestFile(id))) return null;
+    const plan = contract.readJson(requestFile(id));
+    validateRequestPlan(plan);
+    assertPlanningEvidence(root, plan);
+    return plan;
+  }
+  function saveDraft(id, output, provenance, details = {}, previous = readRequest(id)) {
     const input = inputFor(id);
     contract.assertFreshInput(root, input);
     const check = contract.validateOutput(input, output);
+    if (previous && previous.status !== "DRAFT") throw new Error("Only a DRAFT quality plan can be revised");
+    output = JSON.parse(JSON.stringify(output));
+    for (const ticket of output.plan.tickets) {
+      const prior = previous?.tickets.find(t => t.ticket_id === ticket.ticket_id);
+      if (!prior?.source) continue;
+      if (ticket.project_id !== prior.project_id || (ticket.source && !isDeepStrictEqual(normalizeJiraSource(ticket.source), prior.source))) {
+        throw new Error(`Jira source cannot change during planning revision: ${ticket.ticket_id}`);
+      }
+      ticket.source = { ...prior.source };
+    }
     const projects = contract.loadProjects(root, Object.keys(input.projects));
     const plan = createRequestPlan({ ...output.plan, requestId: id, profiles: Object.fromEntries(Object.entries(projects).map(([k, v]) => [k, v.profile])) });
-    const previous = fs.existsSync(requestFile(id)) ? contract.readJson(requestFile(id)) : null;
-    if (previous && previous.status !== "DRAFT") throw new Error("Only a DRAFT quality plan can be revised");
     const artifact = contract.seal({ schema_version: "1.0", id: `planning-${crypto.randomUUID()}`, request_id: id,
       input, output, provenance, generated_at: new Date(now()).toISOString(), prompt_fingerprint: contract.hash(input.prompt_template),
       ready: check.ready, previous_evidence: previous?.planning_evidence || null, plan_hash: contract.hash(JSON.stringify(contract.planPayload(plan))), ...details });
@@ -79,8 +96,8 @@ function createPlanningCommand({ root, log, invokeAgent, env = process.env, now 
     plan.planning_evidence = { id: artifact.id, fingerprint: artifact.fingerprint, ready: artifact.ready };
     plan.content_fingerprint = planFingerprint(plan);
     updateJsonLocked(requestFile(id), null, current => {
+      if (!isDeepStrictEqual(current, previous)) throw Object.assign(new Error(DRAFT_CONFLICT), { code: "PLANNING_DRAFT_CHANGED" });
       if (current && current.status !== "DRAFT") throw new Error("Only a DRAFT quality plan can be revised");
-      if (JSON.stringify(current) !== JSON.stringify(previous)) throw new Error("Planning draft changed concurrently; inspect before retrying");
       return plan;
     });
     return emit({ request_id: id, status: "DRAFT", ready: check.ready, fingerprint: plan.content_fingerprint,
@@ -138,7 +155,9 @@ function createPlanningCommand({ root, log, invokeAgent, env = process.env, now 
     }
     const input = inputFor(id);
     contract.assertFreshInput(root, input);
-    if (fs.existsSync(requestFile(id)) && contract.readJson(requestFile(id)).status !== "DRAFT") throw new Error("Only a DRAFT plan can be generated");
+    // Freeze the draft before awaiting a provider; a later human edit must win.
+    const previous = readRequest(id);
+    if (previous && previous.status !== "DRAFT") throw new Error("Only a DRAFT plan can be generated");
     if (!["openai", "anthropic", "gemini"].includes(options.provider)) throw new Error("generate requires an explicit provider");
     // Capture-time risk is trusted routing input, not a model-generated instruction.
     const route = selectModelRoute(options.provider, { type: "docs", role: "planner", risk: input.risk, tierOverride: options["model-tier"] }, env);
@@ -147,7 +166,8 @@ function createPlanningCommand({ root, log, invokeAgent, env = process.env, now 
     if (options.live !== true || options["approve-send"] !== true || env.HARNESS_AGENT_MODE !== "api" || options["max-requests"] !== "1"
       || options["input-fingerprint"] !== input.fingerprint) throw new Error("Live planning requires API mode, --live --approve-send --max-requests 1 and current --input-fingerprint");
     if (typeof invokeAgent !== "function") throw new Error("Planning provider transport unavailable");
-    const attempt = { id: `planning-${crypto.randomUUID()}`, status: "STARTED", input_fingerprint: input.fingerprint, route, started_at: new Date(now()).toISOString() };
+    const attempt = { id: `planning-${crypto.randomUUID()}`, status: "STARTED", input_fingerprint: input.fingerprint,
+      request_fingerprint: previous?.content_fingerprint || null, route, started_at: new Date(now()).toISOString() };
     const file = stateFile(root, attempt.id + ".json");
     writeJsonAtomic(file, contract.seal(attempt));
     try {
@@ -163,10 +183,11 @@ function createPlanningCommand({ root, log, invokeAgent, env = process.env, now 
       attempt.output = result.text;
       attempt.status = "RECEIVED";
       writeJsonAtomic(file, contract.seal(attempt));
-      return saveDraft(id, JSON.parse(result.text), "provider-api", { model: attempt.response_model || route.model, requested_route: route, usage: attempt.usage, latency_ms: attempt.latency_ms });
-    } catch {
+      return saveDraft(id, JSON.parse(result.text), "provider-api", { model: attempt.response_model || route.model, requested_route: route, usage: attempt.usage, latency_ms: attempt.latency_ms }, previous);
+    } catch (error) {
       attempt.status = "FAILED";
-      attempt.error = "Provider or output validation failed. Inspect local attempt; no automatic retry or execution.";
+      attempt.error = error?.code === "PLANNING_DRAFT_CHANGED" ? DRAFT_CONFLICT
+        : "Provider or output validation failed. Inspect local attempt; no automatic retry or execution.";
       writeJsonAtomic(file, contract.seal(attempt));
       throw new Error(attempt.error);
     }

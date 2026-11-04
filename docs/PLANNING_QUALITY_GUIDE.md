@@ -87,11 +87,14 @@ node tools/harness-cli/index.js request ready login-tests
 ### 수정과 Jira 연결
 
 - 같은 입력에서 계획을 고칠 때는 출력 JSON을 수정해 `request draft`를 재실행한다. 이전 근거는 연결·보존한다.
+- 같은 티켓의 Jira 출처는 수정 JSON에서 생략해도 보존한다. 연결된 티켓의 프로젝트나 Jira 출처를 바꾸는 수정은 거부한다. 새 초안은 다시 검수해야 하며 Jira 게시나 실행을 자동으로 승인하지 않는다.
 - 중요도/재시도 변경도 새 draft로 검사한다. 품질 계획의 기존 `priority/revise` 직접 변경은 거부한다.
 - 승인 후 계획 변경은 새 요청으로 검토한다. 승인 상태를 직접 되돌리지 않는다.
 - 기존 승인형 `queue-ticket -> preview -> sync -> link` 흐름은 유지된다. 게시 자체가 실행 승인은 아니다.
 - `link`는 확인된 Jira 출처만 연결하고 새 근거 지문을 만든다. 구현 내용까지 바뀌면 거부한다.
 - 관계는 검수 요약에 보존되지만 모든 Jira issue link를 자동 생성하는 기능은 아니다.
+- `draft`와 실제 `generate` 성공 시 기존 알림 outbox에 검토 요청을 기록한다. 구조 검사 통과는 `PLAN_READY`, 필수 질문/자료 누락은 `PLAN_INPUT_REQUIRED`로 구분한다. dry-run은 알리지 않는다. 알림 재전송은 계획 생성이나 Jira 게시를 다시 실행하지 않는다.
+- CLI 결과 JSON은 stdout, 알림 진단은 stderr로 분리한다. 알림 채널이 미설정이거나 실패하면 outbox에 PENDING으로 남는다.
 
 ## 3. 사람 검수 기록
 
@@ -141,6 +144,8 @@ request generate login-tests --provider openai --live --approve-send --max-reque
 요청 1회, HTTP 자동 재시도 없음, 출력 최대 4096 토큰, 전송 타임아웃 60초다.
 큰 계획을 한 번에 모두 생성한다는 보장은 없다. 응답이 잘리거나 JSON/계약 검사가 실패하면 실패로 남긴다.
 실패 근거 확인 후에만 재호출한다. CLI 실행별 1회 한도이며 월 누적 지출 상한은 아니다.
+API 대기 중 초안이 생성·수정·승인되면 늦게 도착한 응답은 현재 계획에 적용하지 않는다.
+동시 변경 오류와 응답을 로컬 시도 기록에 남기므로 현재 계획을 확인한 뒤에만 다시 요청한다.
 실행 전 STARTED, 응답 수신/검증 실패 기록을 남겨 중단을 성공으로 처리하지 않는다.
 대화형 모델명·토큰·지연은 호스트가 제공하지 않으면 unknown/null이며 API 관측치와 섞지 않는다.
 
