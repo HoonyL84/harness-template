@@ -13,6 +13,9 @@ test("state transitions map only actionable milestones to notifications", () => 
   const event = transitionEvent("request", ["create", "work"], { request_id: "work", tickets: [{}], content_fingerprint: "abc" }, parseArgs);
   assert.match(event.message, /PLAN_READY/);
   assert.equal(transitionEvent("request", ["show", "work"], {}, parseArgs), null);
+  for (const [command, action] of [["request", "show"], ["runner", "status"], ["execution", "status"], ["release", "status"], ["deployment", "list"]]) {
+    assert.equal(transitionEvent(command, [action, "work"], null, parseArgs, new Error("query failed")), null);
+  }
   const blocked = transitionEvent("execution", ["prepare", "work"], { execution_id: "e", request_id: "work", updated_at: "now", tickets: [{ ticket_id: "t", status: "BLOCKED", error: "failed" }] }, parseArgs);
   assert.equal(blocked.status, "fail");
   const failed = transitionEvent("release", ["apply", "approval"], null, parseArgs, new Error("stale fingerprint"));

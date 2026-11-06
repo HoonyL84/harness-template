@@ -33,7 +33,7 @@ test("CLI help and version entrypoints execute as real processes", { skip: Boole
 });
 
 test("notification CLI exposes pending lookup and rejects invalid retry IDs without sending", { skip: Boolean(process.env.NODE_V8_COVERAGE) }, () => {
-  assert.match(runCli(["help"]).stdout, /notifications retry <event-id>/);
+  assert.match(runCli(["help", "--all"]).stdout, /notifications retry <event-id>/);
   const list = runCli(["notifications", "list"]);
   assert.equal(list.status, 0, list.stderr);
   assert.ok(Array.isArray(JSON.parse(list.stdout)));

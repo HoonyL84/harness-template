@@ -9,6 +9,8 @@ require("./ci-release-gate.test");
 require("./cli-process.test");
 require("./config.test");
 require("./lean-workflow.test");
+require("./focused-context.test");
+require("./diagnostic-commands.test");
 require("./skill-eval.test");
 require("./runtime-smoke.test");
 require("./operations-report.test");

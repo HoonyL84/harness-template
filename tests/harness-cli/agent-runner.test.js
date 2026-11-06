@@ -60,6 +60,24 @@ function runnerFor(root, overrides = {}) {
     tokenizeCommand: value => value.split(" "), log: () => {}, ...overrides });
 }
 
+test("runner status leaves execution and followups untouched, including unknown request failures", async () => {
+  const { root } = fixture();
+  const file = path.join(root, ".harness/local/executions/work.json");
+  const followups = path.join(root, ".harness/local/followups.json");
+  fs.writeFileSync(path.join(root, ".harness/local/atlassian.json"), "{}");
+  const before = fs.readFileSync(file, "utf8");
+  const command = runnerFor(root, {
+    invokeAgent: () => { throw new Error("must not execute"); },
+    notify: () => { throw new Error("must not notify"); },
+    onProgress: () => { throw new Error("must not publish"); }
+  });
+  await command(["status", "work"]);
+  assert.equal(fs.readFileSync(file, "utf8"), before);
+  assert.equal(fs.existsSync(followups), false);
+  await assert.rejects(command(["status", "missing"]));
+  assert.equal(fs.existsSync(followups), false);
+});
+
 test("verification repair requires recorded evidence and refuses an identical failed patch before applying", async () => {
   for (const repairKind of ["missing", "duplicate", "new"]) {
     const { root } = fixture({ retryPolicy: { max_attempts: 3, stop_on_same_error: false } });

@@ -136,33 +136,9 @@ node tools/harness-cli/index.js request show demo-work
 기본 최대 시도는 3회다. 제목과 본문을 가져왔을 뿐 구현 계획이 완성된 것은 아니다.
 이슈 상태가 In Progress/Done이어도 로컬 실행 승인으로 취급하지 않는다.
 
-AI는 코드를 읽고 `.harness/local/requests/demo-work.json`을 참고해 별도 plan-file을 작성한다.
-다음은 구조 예시다. 실제 이슈 ID, 목표, 테스트 및 범위로 바꾼다.
+새 계획은 [계획 품질 가이드](PLANNING_QUALITY_GUIDE.md)의 입력 스냅샷·출처·상세 구현/테스트 계획 계약으로 작성한다. `request capture -> draft -> planning-review` 후 사용자가 승인한다. 가져온 Jira 티켓 ID를 유지하면 출처가 보존되며, 연결 프로젝트/원본을 임의 교체할 수 없다.
 
-```json
-{
-  "goal": "중복 요청 처리 개선",
-  "tickets": [{
-    "ticket_id": "jira-10001",
-    "project_id": "demo",
-    "goal": "중복 요청이 부작용을 두 번 만들지 않게 한다",
-    "priority": "P1",
-    "scope": ["기존 요청 처리 경로와 회귀 테스트"],
-    "exclusions": ["DB 변경은 별도 승인"],
-    "acceptance_criteria": ["동일 키의 중복 요청이 한 번만 처리된다"],
-    "implementation_steps": ["현재 중복 방어 확인", "필요한 최소 수정", "회귀 검증"],
-    "test_plan": { "unit": ["동일 키 재요청"], "regression": ["서로 다른 키 요청"] }
-  }]
-}
-```
-
-```sh
-node tools/harness-cli/index.js request revise demo-work --plan-file "<계획 JSON 절대 경로>"
-node tools/harness-cli/index.js request priority demo-work --ticket jira-10001 --value P1
-node tools/harness-cli/index.js request show demo-work
-```
-
-같은 티켓 ID로 revise하면 Jira 출처는 보존된다. Jira 상세 필드를 모두 구조적으로 해석하거나 요구사항의 의미적 정합성을 검증하는 기능은 아니다. AI와 사용자가 범위/의존성/실제 테스트 명령을 확인해야 한다.
+기존 레거시 DRAFT만 수정할 때는 `request revise <id> --plan-file <json>`과 `request priority`를 계속 지원한다. 품질 근거가 연결된 계획은 `request draft`로 다시 검증해야 한다. 기존 승인 계획을 일괄 변환하지 않는다.
 
 사용자가 최종 계획을 승인한 뒤에만:
 

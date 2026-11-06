@@ -2,7 +2,6 @@
 
 const fs = require("fs");
 const crypto = require("crypto");
-const http = require("http");
 const path = require("path");
 const os = require("os");
 const { spawn, spawnSync } = require("child_process");
@@ -31,7 +30,8 @@ const { buildAgentContext, resolveAgentTaskScope } = require("./agent-context");
 const { REPAIR_CONTRACT, validateRepairResponse } = require("./repair-evidence");
 const { createPublicationHook } = require("./operations-publish");
 const { repositoryContentFingerprint: calculateRepositoryContentFingerprint } = require("./content-fingerprint");
-const { runAutonomySoak } = require("./autonomy-utils");
+const { createDiagnosticCommands } = require("./diagnostic-commands");
+const { printHelp } = require("./cli-help");
 const { createCleanupManifest, findGeneratedPaths, isCleanupManifestValid } = require("./cleanup-utils");
 const { createConfigLoader, isPlainObject } = require("./config");
 const { sendNotification: deliverNotification } = require("./notification-utils");
@@ -492,6 +492,7 @@ const commandRunner = createAgentRunnerCommand({
       ticket_kind: ticket.ticket_kind,
       scope: ticket.scope,
       attempt: ticket.attempt,
+      full_context: ticket.full_context,
       repair_required: ticket.repair_required
     }),
   notify: (status, message, taskId, projectIds, deliveryState) => deliverNotification({ status, message, taskId, projectIds, deliveryState, env: process.env, fetchImpl: globalThis.fetch, log }),
@@ -527,8 +528,9 @@ const publishManagedFollowups = createPublicationHook({ parseArgs, log,
 const notifyStateTransition = createStateTransitionNotifier({
   root: ROOT,
   parseArgs,
-  notify: (status, message, taskId, projectIds, deliveryState) => deliverNotification({ status, message, taskId, projectIds, deliveryState, env: process.env, fetchImpl: globalThis.fetch, log }),
-  log
+  notify: (status, message, taskId, projectIds, deliveryState) => deliverNotification({ status, message, taskId, projectIds, deliveryState,
+    env: process.env, fetchImpl: globalThis.fetch, log: message => process.stderr.write(`${message}\n`) }),
+  log: message => process.stderr.write(`${message}\n`)
 });
 
 function ensureEnvLocal() {
@@ -1257,120 +1259,6 @@ function commandCleanup(args) {
   log(`Cleanup approved and completed for manifest ${manifestId}.`);
 }
 
-function commandValidateAutoFix(args) {
-  const { positional } = parseArgs(args);
-  const [patchFile] = positional;
-  if (!patchFile) {
-    fail("Usage: node tools/harness-cli/index.js validate-auto-fix <patch-file>");
-  }
-
-  const patchPath = path.resolve(ROOT, patchFile);
-  if (!patchPath.startsWith(`${ROOT}${path.sep}`) || !fs.existsSync(patchPath)) {
-    fail(`Patch file not found inside repository: ${patchFile}`);
-  }
-
-  const patch = fs.readFileSync(patchPath, "utf8");
-  const changedFiles = validateAutoFixPatch(patch);
-  log(`Auto-fix patch policy passed: ${changedFiles.join(", ")}`);
-}
-
-function commandValidateL5Patch(args) {
-  const { positional } = parseArgs(args);
-  const [patchFile] = positional;
-  if (!patchFile) fail("Usage: node tools/harness-cli/index.js validate-l5-patch <patch-file>");
-  const patchPath = path.resolve(ROOT, patchFile);
-  if (!patchPath.startsWith(`${ROOT}${path.sep}`) || !fs.existsSync(patchPath)) {
-    fail(`Patch file not found inside repository: ${patchFile}`);
-  }
-  const result = validateL5Patch(fs.readFileSync(patchPath, "utf8"));
-  log(`L5 patch policy passed: ${result.paths.join(", ")}`);
-  if (result.highRisk.length > 0) log(`Approval required: ${result.highRisk.join(", ")}`);
-}
-
-function commandValidatePrompts() {
-  renderPrompt("prompts/templates/agent-system.md", {
-    CONTEXT: "context",
-    ROLE: "implementer",
-    ROLE_PROMPT: "role prompt",
-    TYPE: "code",
-  });
-  renderPrompt("prompts/templates/l5-planner.md");
-  renderPrompt("prompts/templates/l5-implementer.md", { TICKET: "example-ticket" });
-  for (const role of VALID_ROLES) {
-    if (!readText(`prompts/system/roles/${role}.md`).trim()) {
-      fail(`Role prompt is missing or empty: ${role}`);
-    }
-  }
-  log("Prompt templates passed.");
-}
-
-async function commandValidateApiRetry() {
-  const previous = {
-    maxRetries: process.env.HARNESS_API_MAX_RETRIES,
-    baseDelay: process.env.HARNESS_API_RETRY_BASE_MS,
-    maxDelay: process.env.HARNESS_API_RETRY_MAX_MS,
-    maxRequests: process.env.HARNESS_MAX_PROVIDER_REQUESTS,
-    requestCount: providerRequestCount,
-  };
-  process.env.HARNESS_API_MAX_RETRIES = "2";
-  process.env.HARNESS_API_RETRY_BASE_MS = "1";
-  process.env.HARNESS_API_RETRY_MAX_MS = "5";
-  process.env.HARNESS_MAX_PROVIDER_REQUESTS = "10";
-  providerRequestCount = 0;
-
-  let retryRequests = 0;
-  let quotaRequests = 0;
-  const server = http.createServer((req, res) => {
-    res.setHeader("Content-Type", "application/json");
-    if (req.url === "/retry") {
-      retryRequests += 1;
-      if (retryRequests === 1) {
-        res.statusCode = 503;
-        res.setHeader("Retry-After", "0");
-        res.end(JSON.stringify({ error: { code: "temporary_unavailable" } }));
-      } else {
-        res.statusCode = 200;
-        res.end(JSON.stringify({ ok: true }));
-      }
-      return;
-    }
-    quotaRequests += 1;
-    res.statusCode = 429;
-    res.end(JSON.stringify({ error: { code: "insufficient_quota" } }));
-  });
-
-  try {
-    await new Promise((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const { port } = server.address();
-    const retried = await postJson(`http://127.0.0.1:${port}/retry`, {}, { test: true });
-    if (!retried.ok || retryRequests !== 2) fail("API retry self-test did not retry exactly once.");
-    let quotaFailed = false;
-    try {
-      await postJson(`http://127.0.0.1:${port}/quota`, {}, { test: true });
-    } catch (err) {
-      quotaFailed = err.message.includes("insufficient_quota");
-    }
-    if (!quotaFailed || quotaRequests !== 1) fail("API quota self-test retried a non-retryable quota error.");
-    log("API retry policy passed.");
-  } finally {
-    await new Promise((resolve) => {
-      server.close(resolve);
-    });
-    const restore = (key, value) => {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    };
-    restore("HARNESS_API_MAX_RETRIES", previous.maxRetries);
-    restore("HARNESS_API_RETRY_BASE_MS", previous.baseDelay);
-    restore("HARNESS_API_RETRY_MAX_MS", previous.maxDelay);
-    restore("HARNESS_MAX_PROVIDER_REQUESTS", previous.maxRequests);
-    providerRequestCount = previous.requestCount;
-  }
-}
-
 function createPlannedTickets(plan) {
   if (!Array.isArray(plan.tasks) || plan.tasks.length === 0) {
     fail("Planner did not return any tasks.");
@@ -1621,50 +1509,6 @@ function commandRecover() {
   }, null, 2));
 }
 
-function commandValidateRecovery() {
-  const base = {
-    state: { status: "implementing", current_ticket: "demo" },
-    active: ["demo"],
-    dirty: [".harness/tasks/active/demo.md"],
-    headSha: "abc",
-    verify: {},
-    contentFingerprint: "current",
-    patchExists: false,
-  };
-  const cases = [
-    [base, "retry_agent"],
-    [{ ...base, dirty: [...base.dirty, "src/demo.js"] }, "inspect_and_verify"],
-    [{ ...base, verify: { last_full: { result: "pass", content_fingerprint: "old" } } }, "reverify_required"],
-    [{ ...base, verify: { last_full: { result: "pass", content_fingerprint: "current" } } }, "ready_to_complete"],
-    [{ ...base, verify: { last_full: { result: "fail", reason: "test failed" } } }, "fix_and_reverify"],
-    [{
-      ...base,
-      state: {
-        status: "applying_patch",
-        current_ticket: "demo",
-        recovery_checkpoint: { head_sha: "abc", working_tree: base.dirty },
-      },
-      patchExists: true,
-    }, "retry_patch"],
-    [{ ...base, active: ["demo", "other"] }, "manual_review"],
-  ];
-  for (const [input, expected] of cases) {
-    const actual = assessRecovery(input).action;
-    if (actual !== expected) fail(`Recovery self-test expected ${expected} but received ${actual}.`);
-  }
-  log("Recovery diagnostics policy passed.");
-}
-
-function commandValidateL5Soak(args) {
-  const { options } = parseArgs(args);
-  const cycles = Number(options.cycles || "1000");
-  if (!Number.isInteger(cycles) || cycles < 1 || cycles > 100000) {
-    fail("--cycles must be an integer between 1 and 100000.");
-  }
-  const result = runAutonomySoak(cycles);
-  log(`L5 autonomy soak simulation passed: cycles=${result.cycles}, scenarios=${result.scenarios}.`);
-}
-
 async function commandAutonomy(args) {
   parseEnvFile();
   const { options } = parseArgs(args);
@@ -1753,6 +1597,7 @@ async function commandAutonomy(args) {
   if (!ticket) {
     if (apiCalls >= maxApiCalls) fail("L5 API call budget exhausted before planning.");
     const planText = await commandRunAgent([
+      "--execution-mode", "l5",
       "--type", "architect", "--role", "planner",
       renderPrompt("prompts/templates/l5-planner.md"),
     ]);
@@ -1788,6 +1633,7 @@ async function commandAutonomy(args) {
       patchInfo = validateL5Patch(patch);
     } else {
       const response = await commandRunAgent([
+        "--execution-mode", "l5",
         "--type", "code", "--role", "implementer",
         renderPrompt("prompts/templates/l5-implementer.md", { TICKET: ticket }),
       ]);
@@ -2279,7 +2125,7 @@ Safety contract:
 
         try {
           say("[Auto-fix] Requesting one low-risk patch from the configured AI provider...");
-          const response = await commandRunAgent(["--type", "fix", "--role", "implementer", autoFixPrompt]);
+          const response = await commandRunAgent(["--execution-mode", "auto-fix", "--type", "fix", "--role", "implementer", autoFixPrompt]);
           const patch = extractUnifiedDiff(response);
           appliedRepairEvidence = validateRepairResponse(response, patch, failedRepairHashes);
           const changedFiles = validateAutoFixPatch(patch);
@@ -2378,6 +2224,7 @@ function commandContext(args) {
   const { options } = parseArgs(args);
   const bundle = buildAgentContext(ROOT, {
     type: options.type || "code", role: options.role, taskName: options.task,
+    executionMode: options["execution-mode"] || "standard",
     fullContext: Boolean(options["full-context"]),
     ...(options["max-bytes"] ? { maxBytes: Number(options["max-bytes"]) } : {})
   });
@@ -2496,7 +2343,9 @@ async function commandRunAgent(args, attribution = null) {
   const rolePrompt = readText(`prompts/system/roles/${role}.md`);
   const context = buildAgentContext(ROOT, {
     type, role, taskName: localTicket,
-    fullContext: Boolean(options["full-context"])
+    executionMode: options["execution-mode"] || "standard",
+    includeProject: !attribution,
+    fullContext: Boolean(options["full-context"] || attribution?.full_context)
   }).content;
   const systemPrompt = renderPrompt("prompts/templates/agent-system.md", {
     CONTEXT: context,
@@ -2586,72 +2435,7 @@ function commandProvider(args) {
   return report;
 }
 
-function usage() {
-  log(`Harness CLI
-
-[Multi-Project Control Plane]
-  node tools/harness-cli/index.js dashboard [--json] [--cost] [--check-connections] [--notify]
-  node tools/harness-cli/index.js bootstrap <request|approve|apply|status> <id> [--path <project-root>] [--summary <text>] [--message <commit-message>]
-  node tools/harness-cli/index.js project <add|list|show|check|context|onboard|profile|remove> [id] [--path <git-root>] [--bundle] [--approve] [--json]
-  node tools/harness-cli/index.js project context ID --bundle [--request ID --ticket ID] [--query TEXT] [--max-files N] [--max-bytes N]
-  node tools/harness-cli/index.js request <create|revise|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]
-  node tools/harness-cli/index.js request import-jira <id> --project <id> --issues <KEY-1,KEY-2>
-  node tools/harness-cli/index.js request priority <id> --ticket <id> --value <P0|P1|P2|P3>
-  node tools/harness-cli/index.js request capture <id> --input-file <json>
-  node tools/harness-cli/index.js request draft <id> --output-file <json>
-  node tools/harness-cli/index.js request planning <id>
-  node tools/harness-cli/index.js request planning-review <id> --review-file <json>
-  node tools/harness-cli/index.js request generate <id> --provider <openai|anthropic|gemini> [--model-tier standard|strong] [--live --approve-send --max-requests 1 --input-fingerprint <sha256>]
-  node tools/harness-cli/index.js execution <prepare|advance|review-ready|status> <request-id>
-  node tools/harness-cli/index.js runner <run|reconcile|status|notify> <request-id> [--ticket <ticket-id>] [--max-attempts N] [--max-tickets N] [--full-context]
-  node tools/harness-cli/index.js release request <request-id> [--ticket <id>] [--approval <id>] --summary "..." [--operation record|commit|push|merge]
-  node tools/harness-cli/index.js release <approve|apply|consume> <request-id> --fingerprint <sha256>
-  node tools/harness-cli/index.js release status <request-id>
-  node tools/harness-cli/index.js deployment <record|list|show> [id] [--file <json>] [--project <id>] [--environment <name>] [--status <status>]
-  node tools/harness-cli/index.js history <list|search|export|refresh|review|status|report|measure|map-check|audit-tasks> [--project id] [--request id] [--ticket id] [--ticket-kind development|planning|design]
-  node tools/harness-cli/index.js evidence add --file <json>
-  node tools/harness-cli/index.js evidence search [--query <text>] [--project <id>] [--technology <name>] [--from <date>] [--to <date>] [--include-drafts]
-  node tools/harness-cli/index.js evidence export [--format json]
-
-[Single-Repo Mode]
-  node tools/harness-cli/index.js check
-  node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
-  node tools/harness-cli/index.js start-ticket <name> [--from-review]
-  node tools/harness-cli/index.js verify [--quick|--full] [--offline] [--diagnose] [--auto-fix]
-  node tools/harness-cli/index.js complete-task <name> [--force]
-  node tools/harness-cli/index.js context [--task <ticket>] [--type code|architect|review] [--role reviewer|architect] [--full-context] [--max-bytes <n>] [--json]
-  node tools/harness-cli/index.js run-agent [--type type] [--role role] [--model-tier fast|standard|strong] "prompt"
-  node tools/harness-cli/index.js orchestrate <ticket> [--mode auto|native|api|sequential]
-  node tools/harness-cli/index.js orchestrate <--capabilities|--status <run-id>|--resume <run-id>|--begin-review <run-id>|--promote <run-id> --approve-risk|--finish <run-id>>
-  node tools/harness-cli/index.js autonomy [--status] [--verify-current] [--approve-risk] [--iterations N]
-  node tools/harness-cli/index.js memory check
-  node tools/harness-cli/index.js notifications list
-  node tools/harness-cli/index.js notifications retry <event-id>
-
-[Integrations & Recovery]
-  node tools/harness-cli/index.js atlassian <connect|check|discover|map|queue-ticket|queue-status|queue-result|preview|sync|retry-rejected|reconcile|search|context|priority-plan|priority-apply|priority-show|priority-reconcile|status>
-  node tools/harness-cli/index.js atlassian connect --site https://your-site.atlassian.net [--cloud-id UUID] [--transport mcp|rest]
-  node tools/harness-cli/index.js atlassian map --project ID --jira-project KEY --issue-type ID --space-id ID [--parent-id ID] [--context-pages ID,ID] [--priority-map ID:P0,ID:P1,ID:P2,ID:P3]
-  node tools/harness-cli/index.js atlassian workflow --project ID --running ID --blocked ID --review-ready ID --completed ID
-  node tools/harness-cli/index.js atlassian consent <preview|grant|status|revoke> --project ID [--approve SCOPE_DIGEST]
-  node tools/harness-cli/index.js atlassian <recovery [outbox-entry-id]|mcp-tools|discover [--jira-project KEY] [--space-id ID]|link <request-id> --ticket <ticket-id>>
-  node tools/harness-cli/index.js operations flush <--request ID|--project ID>
-  node tools/harness-cli/index.js operations <audit|repair|prepare ID|annotate ID --file JSON> [--project ID]
-  node tools/harness-cli/index.js backup <create [--output FILE]|inspect --file FILE|restore --file FILE [--approve PREVIEW_ID]>
-  node tools/harness-cli/index.js cleanup [--dry-run] [--approve <id>]
-  node tools/harness-cli/index.js scan-drift
-  node tools/harness-cli/index.js recover
-
-[Evals, Provider & Diagnostics]
-  node tools/harness-cli/index.js eval <list|run|show|compare|review> [id] [--provider NAME --model NAME] [--cases ID,ID] [--live --max-requests N --max-attempts N]
-  node tools/harness-cli/index.js eval planning <list|run|import|show|compare|review> [id] [--responses-file <json>]
-  node tools/harness-cli/skill-eval.js [--skill <name>] <--cases|--responses <json-file>|--list-skills>
-  node tools/harness-cli/index.js provider <status|list|usage|check> [--provider openai|anthropic|gemini] [--json] [--cost]
-  node tools/harness-cli/index.js provider use <openai|anthropic|gemini> [--json]
-  node tools/harness-cli/index.js provider account-usage [--provider openai|anthropic|gemini] [--from YYYY-MM-DD --to YYYY-MM-DD] [--refresh]
-  node tools/harness-cli/index.js <validate-auto-fix <patch-file>|validate-l5-patch <patch-file>|validate-prompts|validate-api-retry|validate-recovery|validate-l5-soak [--cycles N]>
-`);
-}
+function usage(args) { return printHelp(log, args); }
 
 function checkGitPreflight() {
   if (!commandExists("git")) {
@@ -2697,6 +2481,7 @@ async function commandOrchestrateFromCli(args) {
     log,
     invokeAgent: async (role, prompt) => {
       const response = await commandRunAgent([
+        "--execution-mode", "orchestrate",
         "--type", role === "architect" ? "architect" : "default",
         "--role", role,
         "--task", resolveTaskId({ strict: true }),
@@ -2706,6 +2491,12 @@ async function commandOrchestrateFromCli(args) {
     }
   });
 }
+
+const { commandValidateAutoFix, commandValidateL5Patch, commandValidatePrompts, commandValidateApiRetry, commandValidateRecovery, commandValidateL5Soak } = createDiagnosticCommands({
+  ROOT, parseArgs, fail, log, validateAutoFixPatch, validateL5Patch, renderPrompt, readText, VALID_ROLES, postJson, assessRecovery,
+  getProviderRequestCount: () => providerRequestCount,
+  setProviderRequestCount: value => { providerRequestCount = value; }
+});
 
 async function main(argv = process.argv.slice(2)) {
   const [command, ...args] = argv;

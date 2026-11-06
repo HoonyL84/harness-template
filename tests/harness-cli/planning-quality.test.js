@@ -10,6 +10,8 @@ const { createRequestCommand, readPlan } = require("../../tools/harness-cli/requ
 const { createPlanningEvalCommand, grade } = require("../../tools/harness-cli/planning-eval");
 const { captureInput, validateOutput, safeFile, assertFreshInput } = require("../../tools/harness-cli/planning-contract");
 const { createAtlassianCommand } = require("../../tools/harness-cli/atlassian-command");
+const { requirePublishedDraftImported } = require("../../tools/harness-cli/jira-input");
+const { createStateTransitionNotifier } = require("../../tools/harness-cli/transition-notifier");
 const { writeJsonAtomic } = require("../../tools/harness-cli/control-plane-state");
 const { createSnapshot } = require("../../tools/harness-cli/backup-command");
 const { approveOnboardingProfile, createOnboardingProfile, writeOnboardingProfile } = require("../../tools/harness-cli/project-onboarding");
@@ -173,6 +175,21 @@ test("quality draft survives existing Jira publication/link and keeps old eviden
   assert.equal(readPlan(path.join(root, ".harness/local/requests/work.json")).tickets[0].source.issue_key, "DEMO-1");
   assert.deepEqual((await command(["planning", "work"])).evidence.previous_evidence, draft.evidence);
   assert.equal(calls, 2);
+  const source = linked.tickets[0].source;
+  const output = outputFor(input.input);
+  output.plan.tickets[0].priority = "P1";
+  const revised = await command(["draft", "work", "--output-file", file("output.json", output)]);
+  const inspection = await command(["planning", "work"]);
+  assert.deepEqual(inspection.plan.tickets[0].source, source);
+  assert.deepEqual(inspection.evidence.output.plan.tickets[0].source, source);
+  assert.deepEqual(inspection.evidence.previous_evidence, linked.planning_evidence);
+  assert.notEqual(revised.fingerprint, linked.content_fingerprint);
+  assert.doesNotThrow(() => requirePublishedDraftImported(root, inspection.plan));
+  assert.equal(calls, 2, "Revising a plan must not publish to Jira");
+  const before = fs.readFileSync(path.join(root, ".harness/local/requests/work.json"), "utf8");
+  output.plan.tickets[0].source = { ...source, issue_key: "DEMO-2" };
+  await assert.rejects(command(["draft", "work", "--output-file", file("output.json", output)]), /Jira source/);
+  assert.equal(fs.readFileSync(path.join(root, ".harness/local/requests/work.json"), "utf8"), before);
 });
 
 test("planning rejects source and state junctions without touching their targets", async t => {
@@ -220,6 +237,78 @@ test("API errors, invalid JSON and high-risk fast conflict never execute or sile
     assert.equal(calls, mode === "high" ? 0 : 1);
     assert.equal(fs.existsSync(path.join(root, ".harness/local/requests/work.json")), false);
   }
+});
+
+test("in-flight API output cannot overwrite a newly created, revised or approved draft", async t => {
+  for (const change of ["create", "revise", "approve"]) {
+    const { root, specification, file } = fixture(t);
+    let respond, entered, calls = 0;
+    const started = new Promise(resolve => { entered = resolve; });
+    const command = createRequestCommand({ root, parseArgs, log: () => {}, env: { HARNESS_AGENT_MODE: "api" }, invokeAgent: args => {
+      calls++;
+      entered();
+      return new Promise(resolve => { respond = () => resolve({ text: JSON.stringify(outputFor(JSON.parse(args.prompt))), response: {} }); });
+    } });
+    const captured = await command(["capture", "work", "--input-file", file("input.json", specification)]);
+    const output = outputFor(captured.input);
+    if (change !== "create") await command(["draft", "work", "--output-file", file("output.json", output)]);
+    const pending = command(["generate", "work", "--provider", "openai", "--live", "--approve-send", "--max-requests", "1", "--input-fingerprint", captured.input_fingerprint]);
+    await started;
+    if (change === "approve") command(["approve", "work"]);
+    else {
+      output.plan.tickets[0].priority = "P1";
+      output.plan.tickets[0].test_plan.unit.push("Human added boundary coverage");
+      await command(["draft", "work", "--output-file", file("output.json", output)]);
+    }
+    const requestPath = path.join(root, ".harness/local/requests/work.json");
+    const before = fs.readFileSync(requestPath, "utf8");
+    const rejected = assert.rejects(pending, /Planning draft changed concurrently/);
+    respond();
+    await rejected;
+    assert.equal(fs.readFileSync(requestPath, "utf8"), before);
+    assert.equal(calls, 1);
+    const attempts = fs.readdirSync(path.join(root, ".harness/local/planning")).filter(n => n.startsWith("planning-"))
+      .map(n => JSON.parse(fs.readFileSync(path.join(root, ".harness/local/planning", n)))).filter(r => r.status);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].status, "FAILED");
+    assert.match(attempts[0].error, /Planning draft changed concurrently/);
+    assert.ok(attempts[0].output, "Retain the rejected response for inspection, not automatic application");
+  }
+});
+
+test("quality draft and generate notifications use durable deduplication and distinguish missing input", async t => {
+  const { root, specification, file } = fixture(t);
+  let modelCalls = 0;
+  const command = createRequestCommand({ root, parseArgs, log: () => {}, env: { HARNESS_AGENT_MODE: "api" }, invokeAgent: async args => {
+    modelCalls++;
+    return { text: JSON.stringify(outputFor(JSON.parse(args.prompt))), response: {} };
+  } });
+  const delivered = [];
+  const notify = async (...args) => { delivered.push(args); return { sent: 1 }; };
+  const notifier = createStateTransitionNotifier({ root, parseArgs, notify });
+  const captured = await command(["capture", "work", "--input-file", file("input.json", specification)]);
+  assert.equal(await notifier("request", ["capture", "work"], captured), null);
+  const preview = await command(["generate", "work", "--provider", "openai"]);
+  assert.equal(await notifier("request", ["generate", "work"], preview), null);
+  assert.equal(modelCalls, 0);
+  const blocked = await command(["draft", "work", "--output-file", file("output.json", outputFor(captured.input, true))]);
+  await notifier("request", ["draft", "work"], blocked);
+  assert.match(delivered[0][1], /PLAN_INPUT_REQUIRED/);
+  assert.doesNotMatch(delivered[0][1], /PLAN_READY/);
+  const ready = await command(["draft", "work", "--output-file", file("output.json", outputFor(captured.input))]);
+  const first = await notifier("request", ["draft", "work"], ready);
+  assert.equal(first.status, "SENT");
+  assert.match(delivered[1][1], /PLAN_READY/);
+  assert.deepEqual(delivered[1][3], ["demo"]);
+  const restarted = createStateTransitionNotifier({ root, parseArgs, notify });
+  assert.equal((await restarted("request", ["draft", "work"], ready)).duplicate, true);
+  assert.equal(delivered.length, 2);
+  const generated = await command(["generate", "work", "--provider", "openai", "--live", "--approve-send", "--max-requests", "1", "--input-fingerprint", captured.input_fingerprint]);
+  assert.equal((await restarted("request", ["generate", "work"], generated)).status, "SENT");
+  assert.match(delivered[2][1], /PLAN_READY/);
+  assert.deepEqual(delivered[2][3], ["demo"]);
+  assert.equal(modelCalls, 1);
+  assert.equal(delivered.length, 3);
 });
 
 test("planning eval reuses offline import, bounded live engine, comparison and human review", async t => {
@@ -283,14 +372,24 @@ test("real CLI completes single/multi-project capture, draft and approval withou
     fs.cpSync(path.join(repository, "tools"), path.join(root, "tools"), { recursive: true });
     const env = { ...process.env, HARNESS_AGENT_MODE: "interactive", HARNESS_OFFLINE: "true", TELEGRAM_BOT_TOKEN: "your_token", TELEGRAM_CHAT_ID: "your_chat", SLACK_WEBHOOK_URL: "example" };
     delete env.NODE_V8_COVERAGE;
+    const diagnostics = [];
     const run = args => {
       const result = spawnSync(process.execPath, [path.join(root, "tools/harness-cli/index.js"), "request", ...args], { cwd: root, env, encoding: "utf8", timeout: 15000 });
       assert.equal(result.status, 0, result.stderr);
+      diagnostics.push(result.stderr);
       return result.stdout;
     };
     const captured = JSON.parse(run(["capture", "work", "--input-file", file("input.json", specification)]));
     const drafted = JSON.parse(run(["draft", "work", "--output-file", file("output.json", outputFor(captured.input))]));
     assert.equal(drafted.summary.length, count);
+    assert.match(diagnostics.at(-1), /notification pending/);
+    const alerts = path.join(root, ".harness/local/notifications/transitions");
+    const alertFiles = fs.readdirSync(alerts).filter(n => n.endsWith(".json"));
+    assert.equal(alertFiles.length, 1);
+    const alert = JSON.parse(fs.readFileSync(path.join(alerts, alertFiles[0])));
+    assert.equal(alert.status, "PENDING");
+    assert.match(alert.event.message, /PLAN_READY/);
+    assert.deepEqual(alert.project_ids.sort(), [...specification.projects].sort());
     assert.match(run(["approve", "work"]), /APPROVED/);
     assert.match(run(["ready", "work"]), /READY/);
     assert.equal(JSON.parse(run(["planning", "work"])).plan.status, "APPROVED");
