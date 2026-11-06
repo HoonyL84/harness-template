@@ -28,9 +28,14 @@ node tools/harness-cli/index.js atlassian recovery ENTRY_ID
 이 명령은 로컬 outbox에서 상태별 다음 명령만 안내한다. 재전송/삭제/승인을 실행하지 않는다.
 - PENDING: preview 후 현재 payload digest에 명시 승인 또는 기존 유효한 scoped consent로 sync.
 - REJECTED: 인증/권한/요청 문제를 해결한 뒤 retry-rejected ENTRY_ID --approve ENTRY_ID, 새 preview와 별도 게시 승인. 재큐 승인은 게시 승인이 아니다.
-- SENDING / NEEDS_RECONCILIATION: 실제 원격 marker/대상을 먼저 확인하고 reconcile ENTRY_ID --remote-id VERIFIED_ID. 확인 전에 재POST하지 않는다.
+- SENDING / NEEDS_RECONCILIATION: 먼저 `atlassian status`로 로컬 상태를 보고 실제 원격 marker/대상을 조회한다. 일치하는 원격 반영이 확인된 뒤에만 `reconcile ENTRY_ID --remote-id VERIFIED_ID`. 원격에서 찾지 못했다고 바로 재POST하지 않는다.
 - SUPERSEDED: 바뀐 코드/근거를 재검증·검수한 후 새 초안을 준비한다. 오래된 승인을 재사용하지 않는다.
 - SYNCED: 재시도하지 않는다. operations flush는 기존 유효한 동의 범위의 안전한 대기 건만 처리한다.
+
+대시보드와 실행/릴리스 실패 안내는 `Why`와 `Safe Next Action`을 함께 표시한다. 실행 소유권이 살아 있거나
+불확실할 때는 `runner status REQUEST_ID`가 먼저이며, lease가 만료됐다는 이유만으로 재실행하지 않는다.
+`dashboard --json`의 추가 `recovery` 필드는 같은 안내를 제공한다. 기존 상태/승인 기록은 수정하지 않는다.
+`operations audit`는 후속 기록을 로컬에 재구성할 수 있으므로 순수 조회가 아니다. 상태를 확인한 뒤 필요할 때 사용한다.
 
 ## 선택형 관측 비용
 

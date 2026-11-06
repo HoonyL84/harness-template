@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const { safeCaptureFollowups } = require("./operations-followup");
 const { isReadOnlyCommand } = require("./command-effects");
+const { executionAdvice, adviceText } = require("./safe-next-action");
 const fs = require("node:fs");
 const path = require("node:path");
 const { readJson, updateJsonLocked } = require("./control-plane-state");
@@ -422,6 +423,7 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
           return finalizeExecutionState(current, new Date(now()).toISOString());
         });
         log(`[${state.status}] ${claimedTicket.project_id}:${claimedTicket.ticket_id} blocked after ${attemptsMade} attempt(s)`);
+        log(adviceText(executionAdvice(state)));
         break;
       }
       if (selectedTicket) break;

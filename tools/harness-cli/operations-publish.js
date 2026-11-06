@@ -4,6 +4,7 @@ const path = require("node:path");
 const { readJson } = require("./control-plane-state");
 const { requireConsent } = require("./atlassian-consent");
 const { validateProjectId } = require("./project-registry");
+const { inspectionAdvice, adviceText } = require("./safe-next-action");
 
 /** A bounded delivery pass. Delivery failure never retries implementation or an uncertain POST. */
 async function publishFollowups({ root, env, atlassian, operations }, options) {
@@ -30,7 +31,7 @@ async function publishFollowups({ root, env, atlassian, operations }, options) {
     }
     processed++;
     try { await action(grant); result.recorded++; }
-    catch { result.deferred.push({ id, reason: "Not recorded; inspect operations audit / atlassian status. No automatic retry of rejected or uncertain writes." }); }
+    catch { result.deferred.push({ id, reason: "Not recorded; inspect atlassian status first, then operations audit if local follow-up reconstruction is needed. No automatic retry of rejected or uncertain writes." }); }
   };
   const sync = async (entry, grant) => {
     if (entry.operation === "transition" && outbox().some(e => e.id !== entry.id && e.transition?.issue_id === entry.transition.issue_id
@@ -70,8 +71,8 @@ function createPublicationHook({ parseArgs, flush, log }) {
     try {
       const result = await flush(["flush", "--request", request]);
       if (result.recorded) log(`[INFO] Recorded ${result.recorded} managed publications under standing consent.`);
-      if (result.deferred.length) log(`[WARN] ${result.deferred.length} publications pending inspection; use operations audit and atlassian status. Development outcome unchanged.`);
-    } catch { log("[WARN] Follow-up delivery pending; inspect operations audit. Development outcome unchanged."); }
+      if (result.deferred.length) log(`[WARN] ${result.deferred.length} publications pending inspection. Development outcome unchanged.\n${adviceText(inspectionAdvice("atlassian"))}`);
+    } catch { log(`[WARN] Follow-up delivery pending. Development outcome unchanged.\n${adviceText(inspectionAdvice("atlassian"))}`); }
   };
 }
 

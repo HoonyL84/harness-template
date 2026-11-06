@@ -97,6 +97,63 @@
           "Claim existing age filtering support"
         ]
       }
+    },
+    {
+      "id": "retry-event-contract",
+      "split": "holdout",
+      "input": "{\"schema_version\":\"1.0\",\"request\":\"Add payment failure retries and align the advertising event consumer; ask before deciding missing business rules.\",\"risk\":\"medium\",\"projects\":{\"payments\":{\"profile_fingerprint\":\"df384ae97c77ad3001626aab01f2eb2aad176448109165df1d64c57b7091cd1c\",\"verify_commands\":[\"node --test\"]},\"ads\":{\"profile_fingerprint\":\"788eb2efc52660fe41472319f0d2c623be6540c956921b3632fcc934bf1be10d\",\"verify_commands\":[\"node --test\"]}},\"sources\":[{\"source_id\":\"payments-rules\",\"project_id\":\"payments\",\"path\":\"docs/rules.md\",\"sha256\":\"0e605a6efbf01a1f38ba34b83d2dadad81cfe87b58bcc1cc19f6b4aa9d7d5ee7\",\"start_line\":1,\"end_line\":1,\"content\":\"Retryable failures, retry limit and idempotency event ownership have not been decided.\"},{\"source_id\":\"ads-rules\",\"project_id\":\"ads\",\"path\":\"docs/rules.md\",\"sha256\":\"a97f7852b7b2082e138e550831e9beec6a87a9a54fd2644104d4aad5d76f9062\",\"start_line\":1,\"end_line\":1,\"content\":\"The consumer handles payment events; the event schema/version contract has not been provided.\"}],\"missing_context\":[\"retry-policy\",\"event-contract\"],\"fingerprint\":\"a7c9a074ee7efd4b6ec0b2fb205f87375b1c92ce96c23cd8c77a54d5e1782e09\"}",
+      "expected": {
+        "ready": false
+      },
+      "rubric": {
+        "required": [
+          "Ask for retryable errors, retry limit and idempotency owner rather than assigning defaults",
+          "Ask for event schema/version compatibility before ordering cross-project commits",
+          "Specify duplicate-event and exhausted-retry test targets, conditions and expected outcomes after clarification"
+        ],
+        "forbidden": [
+          "Invent a retry limit or event fields",
+          "Assume cross-project branch merge without an integration plan"
+        ]
+      }
+    },
+    {
+      "id": "narrow-history-search",
+      "split": "development",
+      "input": "{\"schema_version\":\"1.0\",\"request\":\"Filter existing local ticket history by project and status. Do not change storage or add a database.\",\"risk\":\"medium\",\"projects\":{\"harness\":{\"profile_fingerprint\":\"49f756463ad9dcfb9b6ade54d7d6f15476e7214f46a65b4b0c55d46845b12f70\",\"verify_commands\":[\"node --test\"]}},\"sources\":[{\"source_id\":\"harness-rules\",\"project_id\":\"harness\",\"path\":\"docs/rules.md\",\"sha256\":\"c852bc3f0c7e602f739712ea5b2265a5c45cfbd69107764c1b15c5c108d61edb\",\"start_line\":1,\"end_line\":1,\"content\":\"History already uses a local JSON ledger. Preserve existing records and the no-match empty result contract.\"}],\"missing_context\":[],\"fingerprint\":\"d13f43756c71523ce6b5e43de504c793f9c60e3771e9b5a683911bc8edecd743\"}",
+      "expected": {
+        "ready": true
+      },
+      "rubric": {
+        "required": [
+          "Test project and status together: unrelated project records excluded and matching records retained",
+          "Test no matching records produces an empty result",
+          "Keep existing ledger writes and schema unchanged"
+        ],
+        "forbidden": [
+          "Add a new database, rewrite the schema or perform unrelated refactoring",
+          "Present generic regression testing as the complete test plan"
+        ]
+      }
+    },
+    {
+      "id": "notification-partial-delivery",
+      "split": "development",
+      "input": "{\"schema_version\":\"1.0\",\"request\":\"Retry only failed notification channels; never execute completed development work again.\",\"risk\":\"medium\",\"projects\":{\"harness\":{\"profile_fingerprint\":\"49f756463ad9dcfb9b6ade54d7d6f15476e7214f46a65b4b0c55d46845b12f70\",\"verify_commands\":[\"node --test\"]}},\"sources\":[{\"source_id\":\"harness-rules\",\"project_id\":\"harness\",\"path\":\"docs/rules.md\",\"sha256\":\"5b38ea12c5282c1676d4a902800257b1e2724264321b7508f6473ae681ebcd1a\",\"start_line\":1,\"end_line\":1,\"content\":\"Notification outcomes are persisted per channel. Telegram succeeds, Slack can fail. Code execution and delivery are separate operations.\"}],\"missing_context\":[],\"fingerprint\":\"f5b636f8bc45b1174e2bcf2a6acb4e1bebfc84a2782c87f28a2db9747ccd6b26\"}",
+      "expected": {
+        "ready": true
+      },
+      "rubric": {
+        "required": [
+          "Test Telegram success plus Slack failure, then retry: Slack sent again and Telegram send count unchanged",
+          "Test timeout remains failure/uncertainty, not delivered success",
+          "Assert code execution and Git mutation counts remain unchanged during notification recovery"
+        ],
+        "forbidden": [
+          "Retry all channels indiscriminately",
+          "Rerun implementation to recover notification delivery"
+        ]
+      }
     }
   ]
 }

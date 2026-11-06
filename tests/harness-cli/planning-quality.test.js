@@ -322,10 +322,10 @@ test("planning eval reuses offline import, bounded live engine, comparison and h
     return { text: JSON.stringify(outputFor(input, input.missing_context.length > 0 || input.request.includes("age targeting"))), response: {} };
   } });
   const bank = await command(["list"]);
-  assert.equal(bank.cases.length, 6);
+  assert.equal(bank.cases.length, 9);
   const rows = bank.cases.map(c => ({ id: c.id, text: JSON.stringify(outputFor(JSON.parse(c.input), !c.expected.ready)) }));
   const first = await command(["import", "--responses-file", file("responses.json", rows)]);
-  assert.equal(first.passed, 6); assert.equal(calls, 0); assert.equal(first.observed_total_tokens, null);
+  assert.equal(first.passed, 9); assert.equal(calls, 0); assert.equal(first.observed_total_tokens, null);
   assert.equal(first.latency_ms, null);
   assert.ok((await command(["show", first.id])).cases[0].rubric.required.length);
   const second = await command(["import", "--responses-file", file("responses.json", rows)]);
@@ -333,14 +333,31 @@ test("planning eval reuses offline import, bounded live engine, comparison and h
   const review = await command(["review", first.id, "--fingerprint", first.result_fingerprint, "--result", "accepted", "--reason", "Fixture structural acceptance only", "--minutes", "2"]);
   assert.equal(review.human_review, "accepted");
   const preview = await command(["run", "--provider", "openai", "--model", "test-model"]);
-  assert.equal(preview.api_calls, 0); assert.equal(preview.cases.length, 3);
-  const live = await command(["run", "--provider", "openai", "--model", "test-model", "--cases", bank.cases.map(c => c.id).join(","), "--live", "--max-requests", "6"]);
-  assert.equal(calls, 6); assert.equal(live.passed, 6);
+  assert.equal(preview.api_calls, 0); assert.equal(preview.cases.length, 5);
+  const live = await command(["run", "--provider", "openai", "--model", "test-model", "--cases", bank.cases.map(c => c.id).join(","), "--live", "--max-requests", "9"]);
+  assert.equal(calls, 9); assert.equal(live.passed, 9);
   await assert.rejects(command(["compare", live.id, first.id]), /identical/);
   assert.equal(grade(bank.cases[0], "bad JSON").passed, false);
   // A semantically bad but well-formed statement is deliberately left to human review.
   const semantic = outputFor(JSON.parse(bank.cases[0].input)); semantic.facts[0].statement = "A misleading interpretation";
   assert.equal(grade(bank.cases[0], JSON.stringify(semantic)).passed, true);
+  const narrow = bank.cases.find(c => c.id === "narrow-history-search");
+  const vague = outputFor(JSON.parse(narrow.input));
+  vague.plan.tickets[0].test_plan.unit = ["Run regression tests"];
+  vague.plan.tickets[0].scope.push("Add an unrelated database and refactor all storage");
+  assert.equal(grade(narrow, JSON.stringify(vague)).passed, true);
+  assert.ok(narrow.rubric.forbidden.some(rule => /database/.test(rule)));
+  const badSemantic = await command(["import", "--responses-file", file("vague.json", [{ id: narrow.id, text: JSON.stringify(vague) }])]);
+  assert.equal(badSemantic.passed, 1); assert.equal(badSemantic.human_review, "pending");
+  const rejected = await command(["review", badSemantic.id, "--fingerprint", badSemantic.result_fingerprint, "--result", "changes-requested",
+    "--reason", "narrow-history-search: specificity target=0 condition=0 outcome=0; unrequested storage expansion=1"]);
+  assert.equal(rejected.human_review, "changes-requested");
+  assert.equal(rejected.passed, 1); // Structural PASS must not be reinterpreted as semantic acceptance.
+  const missing = bank.cases.find(c => c.id === "retry-event-contract");
+  const assumed = outputFor(JSON.parse(missing.input));
+  assumed.plan.assumptions = ["Retry 3 times; invent the missing event schema"];
+  assert.equal(validateOutput(JSON.parse(missing.input), assumed).ready, false);
+  assert.ok(missing.rubric.forbidden.some(rule => /retry limit/.test(rule)));
   const changed = JSON.parse(fs.readFileSync(path.join(root, "evals/regression/planning-quality-cases.json")));
   changed.cases[0].rubric.required.push("New acceptance rule");
   fs.writeFileSync(path.join(root, "evals/regression/planning-quality-cases.json"), JSON.stringify(changed));
@@ -353,7 +370,7 @@ test("real CLI exposes planning capture and eval without provider tokens", { ski
   delete env.NODE_V8_COVERAGE;
   const result = spawnSync(process.execPath, [path.join(repository, "tools/harness-cli/index.js"), "eval", "planning", "list"], { cwd: repository, env, encoding: "utf8", timeout: 30000 });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).cases.length, 6);
+  assert.equal(JSON.parse(result.stdout).cases.length, 9);
 });
 
 test("real CLI completes single/multi-project capture, draft and approval without external effects", { skip: Boolean(process.env.NODE_V8_COVERAGE) }, t => {
@@ -393,6 +410,11 @@ test("real CLI completes single/multi-project capture, draft and approval withou
     assert.match(run(["approve", "work"]), /APPROVED/);
     assert.match(run(["ready", "work"]), /READY/);
     assert.equal(JSON.parse(run(["planning", "work"])).plan.status, "APPROVED");
+    const failure = spawnSync(process.execPath, [path.join(root, "tools/harness-cli/index.js"), "runner", "status", "not-created"], { cwd: root, env, encoding: "utf8", timeout: 15000 });
+    assert.notEqual(failure.status, 0);
+    assert.equal(failure.stdout, "");
+    assert.match(failure.stderr, /Why: .+\nSafe Next Action: node tools\/harness-cli\/index.js runner status not-created/);
+    assert.equal(failure.stderr.includes("runner reconcile"), false);
     for (const dir of ["executions", "worktrees"]) assert.equal(fs.existsSync(path.join(root, ".harness/local", dir)), false);
   }
 });
