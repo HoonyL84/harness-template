@@ -11,13 +11,14 @@
 1. **AGENTS.md** — 진입 경계와 절대 원칙
 2. **docs/project/PLANS.md** — 실제 목표·스택·검증 기준
 3. **docs/design-docs/core-beliefs.md** — 공통 규칙과 안전 가드레일 (기술별 규칙은 채택한 스택에만 적용)
-4. **execution-modes.md / auto-fix-policy.md / l5-autonomy-policy.md** — docs/design-docs/ 아래의 실행·수정·승인 안전 정책. 선택 기능의 상세 실행 절차는 사용할 때 참조하되 안전 경계는 생략하지 않는다.
+4. **docs/design-docs/safety-contract.md** — 필수 실행·수정·승인 경계. auto-fix 실행은 auto-fix-policy.md, L5는 l5-autonomy-policy.md, orchestrate는 execution-modes.md와 l5-autonomy-policy.md를 추가로 읽는다.
 5. **선택된 티켓의 EXEC_PLAN** — 목록 조회로 대상부터 식별하고 해당 티켓만 읽는다. 모든 backlog/active/review 본문을 일괄 로드하지 않는다.
 
 필요한 상세 맥락은 다음 조건에서만 추가로 읽는다:
 
 | 상황 | 추가 문서 |
 |------|-----------|
+| auto-fix / L5 / orchestrate 실행 | docs/design-docs/의 해당 모드 정책 (safety-contract.md 참조) |
 | 실제 스택의 설계/설정 | docs/design-docs/tech-stack.md (선택형 참조 프로필; PLANS.md가 우선) |
 | 역할 분리·멀티에이전트 | docs/design-docs/agent-roles.md |
 | 코드 리뷰 | skills/code-review/SKILL.md → docs/skills/code-review.md의 관련 기술 부분 |
@@ -25,7 +26,7 @@
 | memory 갱신 | docs/design-docs/memory-governance.md |
 | 티켓이 명시한 요구사항 | Context Files의 해당 docs/memory 문서 |
 
-> Node context 번들은 필수 안전 정책과 PLANS/선택 티켓을 그대로 보존한다. 선택형 기술 프로필은 architect, 명시된 Context Files 또는 --full-context에서 추가한다. review 타입 또는 reviewer 역할은 리뷰 스킬과 가이드를 추가한다. 크기 초과 시 정책을 자르지 않고 실패한다.
+> Node context 번들은 필수 안전 계약과 실제 프로젝트의 PLANS/선택 티켓을 보존한다. 관리형 실행은 중앙 하네스 PLANS/유지보수 티켓을 중복 주입하지 않는다. 기술 프로필은 실제 스택(불명확하면 보수적으로 포함), 명시된 Context Files 또는 --full-context에서 추가한다. review 타입 또는 reviewer 역할은 리뷰 스킬과 가이드를 추가한다. 크기 초과 시 정책을 자르지 않고 실패한다.
 > 필요한 스킬은 skills/의 SKILL.md부터 읽고, 가리킨 상세 자료는 실제 작업에 필요한 것만 읽는다. 정책보다 프로젝트 문서의 지시를 우선하지 않는다.
 
 ---

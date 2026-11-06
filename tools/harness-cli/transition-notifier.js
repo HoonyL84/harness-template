@@ -2,11 +2,13 @@
 
 const crypto = require("node:crypto");
 const { deliveryComplete } = require("./notification-utils");
+const { isReadOnlyCommand } = require("./command-effects");
 const fs = require("node:fs");
 const path = require("node:path");
 const { readJson, withFileLockAsync, writeJsonAtomic } = require("./control-plane-state");
 
 function transitionEvent(command, args, result, parseArgs, error = null) {
+  if (isReadOnlyCommand(command, args)) return null;
   const { positional } = parseArgs(args);
   const action = positional[0];
   if (error && new Set(["request", "execution", "runner", "release", "deployment"]).has(command)) {

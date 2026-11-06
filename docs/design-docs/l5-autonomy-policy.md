@@ -1,5 +1,8 @@
 # L5 Experimental Autonomy Policy
 
+공통 승인·보호 경계는 [필수 안전 계약](safety-contract.md)을 항상 적용한다. 이 문서는 해당 모드의 상세 절차다.
+
+
 L5는 사용자가 명시적으로 활성화하는 bounded autonomy 모드다. 기본 실행 수준은 L4.5이며,
 `HARNESS_AUTONOMY_LEVEL=5`일 때만 `autonomy` 명령이 실행된다.
 

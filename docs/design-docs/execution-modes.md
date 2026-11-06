@@ -1,5 +1,8 @@
 # Execution Modes
 
+공통 승인·보호 경계는 [필수 안전 계약](safety-contract.md)을 항상 적용한다. 이 문서는 해당 모드의 상세 절차다.
+
+
 이 문서는 하네스가 어떤 실행 환경에서 어떻게 동작해야 하는지 정의한다.
 목표는 특정 IDE나 특정 OS에 묶이지 않고, 같은 프로젝트 규칙을 Windows, macOS, Linux, GitHub Actions, API-key 기반 CLI에서 반복 가능하게 만드는 것이다.
 

@@ -5,13 +5,14 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 const { readJson } = require("./control-plane-state");
 const { readConnection } = require("./jira-input");
+const { DETAIL_FILES, modeFiles, needsStackProfile } = require("./context-policy");
 const { assertRemoteReferences, normalizeContextRefs, readReferencedFile, selectMarkdownSection } = require("./context-references");
 
 const DEFAULT_MAX_BYTES = 256 * 1024;
 const DEFAULT_MAX_FILES = 40;
 const TICKET_MAX_BYTES = 64 * 1024;
 const TICKET_MAX_FILES = 12;
-const CORE_DESIGN_FILES = new Set(["core-beliefs.md", "tech-stack.md", "agent-roles.md", "execution-modes.md", "auto-fix-policy.md", "l5-autonomy-policy.md"]);
+const CORE_DESIGN_FILES = new Set(["safety-contract.md", "core-beliefs.md", "tech-stack.md", ...DETAIL_FILES]);
 const PROJECT_CONTEXT_TRUST = Object.freeze({
   level: "untrusted-project-input",
   policy_precedence: "central-harness-policy",
@@ -142,6 +143,12 @@ function buildProjectContextBundle(project, options = {}) {
   }
   const refs = normalizeContextRefs(options.ticket && typeof options.ticket === "object" ? options.ticket.context_refs : undefined);
   const inventory = scanProjectContext(project.path, options);
+  const details = modeFiles(options.executionMode);
+  const selective = Boolean(ticket) && inventory.some(file => file.path === "docs/design-docs/safety-contract.md");
+  const modeOmitted = [];
+  if (selective) for (const name of details) {
+    if (!inventory.some(file => file.path === `docs/design-docs/${name}`)) throw new Error(`Required mode context missing: ${name}`);
+  }
   const referenced = new Map();
   for (const ref of refs.filter(item => item.path)) {
     const source = readReferencedFile(project.path, ref);
@@ -149,10 +156,21 @@ function buildProjectContextBundle(project, options = {}) {
     referenced.set(ref.path, { ...source, content });
     if (!inventory.some(file => file.path === ref.path)) inventory.push({ path: ref.path, category: "explicit-document", priority: 4, bytes: source.bytes, sha256: source.sha256 });
   }
-  const ranked = ticket || refs.length ? selectTicketFiles(inventory, ticket || options.ticket, refs) : inventory;
+  const candidates = inventory.filter(file => {
+    if (!selective || refs.some(ref => ref.path === file.path)) return true;
+    const name = path.posix.basename(file.path);
+    if (file.path !== `docs/design-docs/${name}`) return true;
+    const needed = name === "tech-stack.md" ? needsStackProfile(project.path, project.stacks)
+      : !DETAIL_FILES.includes(name) || details.includes(name)
+        || name === "agent-roles.md" && (options.type === "review" || options.role === "reviewer" || options.ticket?.ticket_kind === "design");
+    if (!needed) modeOmitted.push({ ...file, reason: "mode-or-stack-not-selected" });
+    return needed;
+  });
+  const hasTicket = Boolean(ticket || options.ticket || refs.length);
+  const ranked = hasTicket ? selectTicketFiles(candidates, ticket || options.ticket, refs) : candidates;
   const maxFiles = Number(options.maxFiles ?? (ticket ? TICKET_MAX_FILES : DEFAULT_MAX_FILES));
   const requiredCount = ranked.filter(file => file.required).length;
-  const selectedCount = ticket || refs.length ? Math.max(maxFiles, requiredCount) : maxFiles;
+  const selectedCount = hasTicket ? Math.max(maxFiles, requiredCount) : maxFiles;
   const files = ranked.slice(0, selectedCount);
   const warnings = contextWarnings(inventory);
   const profile = options.profile || null;
@@ -187,7 +205,7 @@ function buildProjectContextBundle(project, options = {}) {
   ].join("\n");
   const sections = [];
   const included = [];
-  const omitted = ranked.slice(selectedCount).map(file => ({ ...file, reason: ticket ? "ticket-file-limit" : "file-limit" }));
+  const omitted = [...modeOmitted, ...ranked.slice(selectedCount).map(file => ({ ...file, reason: ticket ? "ticket-file-limit" : "file-limit" }))];
   const riskFindings = [];
   let usedBytes = Buffer.byteLength(prefix, "utf8");
   if (usedBytes > maxBytes) throw new Error("Context metadata exceeds byte limit; increase maxBytes");
@@ -245,7 +263,7 @@ function buildProjectContextBundle(project, options = {}) {
     usedBytes += sectionBytes;
   }
 
-  if ((ticket || refs.length) && omitted.some(file => file.required)) {
+  if (hasTicket && omitted.some(file => file.required)) {
     throw new Error("Required project instructions do not fit ticket context; increase maxBytes or use --full-context");
   }
 

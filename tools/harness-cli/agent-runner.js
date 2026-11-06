@@ -2,6 +2,7 @@
 
 const crypto = require("node:crypto");
 const { safeCaptureFollowups } = require("./operations-followup");
+const { isReadOnlyCommand } = require("./command-effects");
 const fs = require("node:fs");
 const path = require("node:path");
 const { readJson, updateJsonLocked } = require("./control-plane-state");
@@ -308,7 +309,8 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
             ...claimedTicket,
             request_id: id,
             attempt: currentAttempt,
-            repair_required: repairRequired
+            repair_required: repairRequired,
+            full_context: Boolean(options["full-context"])
           });
           await requireJiraFresh(root, { tickets: [claimedTicket] }, { env, fetchImpl });
           const owner = readJson(filePath, null)?.tickets.find((item) => item.ticket_id === claimedTicket.ticket_id);
@@ -431,7 +433,7 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
   };
   return async args => {
     try { return await commandRunner(args); }
-    finally { safeCaptureFollowups(root, log); }
+    finally { if (!isReadOnlyCommand("runner", args)) safeCaptureFollowups(root, log); }
   };
 }
 

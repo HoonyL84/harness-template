@@ -8,14 +8,17 @@ const test = require("node:test");
 const { buildAgentContext, POLICY_FILES, REVIEW_FILES, TECH_STACK_FILE, resolveAgentTaskScope } = require("../../tools/harness-cli/agent-context");
 const { validateRepairResponse } = require("../../tools/harness-cli/repair-evidence");
 const { extractUnifiedDiff } = require("../../tools/harness-cli/agent-runner");
+const { DETAIL_FILES } = require("../../tools/harness-cli/context-policy");
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-lean-test-"));
-  for (const file of [...POLICY_FILES, ...REVIEW_FILES, "docs/project/PLANS.md", "docs/design-docs/tech-stack.md", "docs/design-docs/agent-roles.md", ".harness/tasks/active/demo.md"]) {
+  for (const file of [...POLICY_FILES, ...REVIEW_FILES, ...DETAIL_FILES.map(name => `docs/design-docs/${name}`), "docs/project/PLANS.md", "docs/design-docs/tech-stack.md", "docs/design-docs/agent-roles.md", ".harness/tasks/active/demo.md"]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), `# ${file}\nDo not bypass approvals.\n`);
   }
   fs.writeFileSync(path.join(root, "docs/design-docs/agent-roles.md"), "Optional role definitions.\n".repeat(50));
+  fs.writeFileSync(path.join(root, "package.json"), "{}");
+  fs.writeFileSync(path.join(root, "docs/design-docs/tech-stack.md"), "<!-- harness-profile: java-spring -->\nJava rules\n");
   return root;
 }
 
@@ -112,7 +115,8 @@ test("review type and explicit reviewer role load skill instructions without a s
     assert.ok(!context.files.includes(TECH_STACK_FILE));
     assert.ok(!context.omitted.some(item => REVIEW_FILES.includes(item.path)));
   }
-  assert.ok(buildAgentContext(root, { role: "architect" }).files.includes(TECH_STACK_FILE));
+  assert.ok(!buildAgentContext(root, { role: "architect" }).files.includes(TECH_STACK_FILE));
+  assert.ok(buildAgentContext(root, { role: "architect", stacks: ["gradle"] }).files.includes(TECH_STACK_FILE));
   fs.unlinkSync(path.join(root, REVIEW_FILES[0]));
   assert.throws(() => buildAgentContext(root, { type: "review" }), /Required context file missing/);
   assert.doesNotThrow(() => buildAgentContext(root));

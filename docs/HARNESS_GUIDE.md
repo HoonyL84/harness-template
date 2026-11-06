@@ -128,77 +128,10 @@ npm run harness -- check
 ```
 
 ### Step 5. 첫 티켓 생성 및 시작
+
+아래는 **하네스 자체 단일 저장소 작업** 예시다. 다중 프로젝트 등록·실행은 [개인 운영 가이드](HARNESS_PERSONAL_OPERATIONS_GUIDE.md), 신규 상세 계획은 [계획 품질 가이드](PLANNING_QUALITY_GUIDE.md)를 기준으로 한다. 기존 `request create/revise`는 호환 지원한다.
 ```bash
 npm run harness -- create-ticket user-auth feat --goal "JWT 기반 사용자 인증을 구현한다"
-
-# Git HEAD가 없는 신규 폴더는 승인된 계획 파일을 최초 기준 커밋으로 생성
-npm run harness -- bootstrap request new-app --path "/absolute/path/to/new-app" --summary "승인된 초기 계획" --message "docs: 초기 계획 수립"
-npm run harness -- bootstrap approve new-app --fingerprint <fingerprint>
-npm run harness -- bootstrap apply new-app --fingerprint <fingerprint>
-
-# 중앙 하네스에 독립 Git 프로젝트를 최초 1회 등록
-npm run harness -- project add ad-server --path "/absolute/path/to/ad-server"
-npm run harness -- project list
-npm run harness -- project check ad-server
-npm run harness -- project context ad-server
-npm run harness -- project context ad-server --bundle
-npm run harness -- project onboard ad-server
-npm run harness -- project profile ad-server
-npm run harness -- project onboard ad-server --approve
-
-# 승인된 프로젝트 프로필에 결속된 요청 계획
-npm run harness -- request create ad-cache-work --project ad-server --goal "광고 캐시 개선"
-npm run harness -- request show ad-cache-work
-# AI가 만든 상세 plan-file을 검토·수정한 뒤 승인 전 DRAFT 교체
-npm run harness -- request revise ad-cache-work --plan-file revised-plan.json
-npm run harness -- request approve ad-cache-work
-npm run harness -- request ready ad-cache-work
-
-# 프로젝트별 branch/worktree 준비
-npm run harness -- execution prepare ad-cache-work
-npm run harness -- execution status ad-cache-work
-
-# API 모드에서 승인 티켓을 중앙 runner가 격리 worktree에서 구현하고 실제 검증한 뒤 콘텐츠 지문에 결속
-npm run harness -- runner run ad-cache-work
-npm run harness -- runner status ad-cache-work
-# 프로세스 중단 뒤 만료된 실행/검증 lease 복구
-npm run harness -- runner reconcile ad-cache-work
-# 대화형 Codex 같은 host가 직접 구현할 때는 아래 명령으로 검증과 지문 기록 수행
-# npm run harness -- execution review-ready ad-cache-work --ticket ad-cache-work-ad-server
-
-# Runner는 L5 설정의 보호/고위험 경로를 검사한다. 고위험 패치는 저장 후 BLOCKED로
-# 중단하므로 오류에 나온 패치를 사람이 검토하고 승인된 대화형 작업으로 처리한다.
-# Runner와 review-ready는 검증 전후 지문이 달라지면 완료를 거부한다.
-# 검증은 추적 파일을 수정하지 않아야 하며, 생성물은 프로젝트 .gitignore로 관리한다.
-# VERIFYING 복구는 30분 만료 후 동일 호스트의 소유 프로세스 종료를 확인해야 한다.
-# 소유자 정보가 없는 기존 lease나 다른 호스트의 lease는 자동 복구하지 않고 직접 점검한다.
-
-# 전체 상태와 BLOCKED/REVIEW_READY 알림 확인
-npm run harness -- dashboard
-
-# 사용자 검토 수락은 Git 작업 승인과 별개. 실행 기록의 현재 지문을 사용
-npm run harness -- history review --project <project-id> --request ad-cache-work --ticket <ticket-id> --fingerprint <ticket-content-fingerprint> --result accepted --reason "diff와 검증 결과 확인"
-
-# 모든 티켓이 REVIEW_READY이고 최신 검토가 수락된 경우에만 관리형 Git 승인 요청 가능
-npm run harness -- release request ad-cache-work --approval ad-cache-commit --summary "diff, 테스트, 위험 검토 완료" --operation commit --message "feat: 광고 캐시 개선"
-npm run harness -- release approve ad-cache-commit --fingerprint <fingerprint>
-
-# 승인에 결속된 Git 작업을 정확히 한 번 실행. 승인 이후 내용 변경과 재사용은 차단
-npm run harness -- release apply ad-cache-commit --fingerprint <fingerprint>
-
-# 의존 티켓이 있으면 선행 티켓 commit 뒤 다음 실행 Wave 준비
-npm run harness -- execution advance ad-cache-work
-
-# 경력 증빙은 JSON 파일로 추가하고 VERIFIED + public 항목만 외부 출력
-npm run harness -- evidence add --file evidence.json
-npm run harness -- evidence search --project ad-server --technology Redis --query "캐시"
-npm run harness -- evidence export
-npm run harness -- evidence export --format json
-
-# 실제 배포 결과를 branch/commit/ticket과 함께 append-only 원장에 기록
-npm run harness -- deployment record --file deployment.json
-npm run harness -- deployment list --project ad-server --environment production
-npm run harness -- deployment show prod-2026.08.30
 
 npm run harness -- start-ticket user-auth
 # 여기서 구현 작업
@@ -229,26 +162,8 @@ git commit -m "chore(harness): user-auth 완료 기록"
 
 중요도는 P0/P1/P2/P3(기본 P2)이며 의존성이 충족된 티켓 사이에서만 적용합니다. DRAFT에서 `request priority <request-id> --ticket <ticket-id> --value P1`로 바꿀 수 있습니다. Jira 읽기 연동과 승인 흐름은 [개인 운영 가이드](HARNESS_PERSONAL_OPERATIONS_GUIDE.md)를 참고하세요.
 
-```json
-{
-  "goal": "광고 캐시 개선",
-  "tickets": [{
-    "ticket_id": "ad-cache-work-ad-server",
-    "project_id": "ad-server",
-    "goal": "광고 캐시 개선",
-    "context_summary": "현재 캐시 경로와 장애 시 fallback을 유지한다.",
-    "acceptance_criteria": ["캐시 hit/miss가 측정된다", "기존 fallback이 회귀하지 않는다"],
-    "implementation_steps": ["현재 호출 경로 확인", "최소 변경 구현", "검증 근거 기록"],
-    "test_plan": {
-      "unit": ["hit/miss 단위 테스트"],
-      "integration": ["Redis 연동 테스트"],
-      "regression": ["전체 테스트"],
-      "manual": []
-    },
-    "retry_policy": { "max_attempts": 3, "stop_on_same_error": true }
-  }]
-}
-```
+상세 계획 JSON과 승인 절차는 [계획 품질 가이드](PLANNING_QUALITY_GUIDE.md)를 참조한다.
+
 
 `request revise <id> --plan-file <json>`은 `DRAFT` 계획만 교체하며 새 fingerprint를 생성합니다. 승인된 계획은 수정할 수 없습니다. Runner의 `--max-attempts`는 승인 정책과 비교해 더 작은 값만 적용하므로 실행 시 상한을 우회해 늘릴 수 없습니다. 시도 횟수는 티켓 상태에 누적되고, 예산 소진 또는 동일 오류 반복 시 `BLOCKED`로 종료됩니다.
 `complete-task`와 L5 자율 실행 완료는 반드시 `verify --full`이 성공한 지문 상태에서만 허용됩니다.
@@ -371,113 +286,12 @@ AI_PROVIDER=anthropic bash scripts/run-agent.sh --type architect "설계해줘"
 
 ## ⚙️ 자동화 메커니즘
 
-### L4.5 제한적 자동 수정
+### 선택형 실행 모드
 
-API 모드에서 명시적으로 활성화하면 검증 실패 시 저위험 소스/테스트 패치를 생성해 적용하고 전체 검증을 다시 실행합니다.
-
-```bash
-npm run harness -- verify --auto-fix
-```
-
-- 기본 비활성화: `HARNESS_AUTO_FIX=false`
-- 최대 검증 횟수(1~5): `HARNESS_VERIFY_MAX_ATTEMPTS=2` 또는 `.harness/config.json`의 `verify.max_attempts`
-- 기존 소스/테스트 파일만 수정
-- 최대 5개 파일, 100KB
-- 설정, 의존성, CI, 스크립트, 인프라, migration, 비밀값 차단
-- 재검증 실패 시 자동 원복
-- 설정된 재시도가 모두 소진되면 active 티켓을 `blocked/`로 이동하고 실패 근거를 기록
-- 커밋, 푸시, 병합은 사람의 검토 후 수행
-
-상세 정책: [`docs/design-docs/auto-fix-policy.md`](design-docs/auto-fix-policy.md)
-
-### L5 Experimental 자율 실행
-
-L5는 사용자가 명시적으로 `HARNESS_AUTONOMY_LEVEL=5`를 설정해야 실행됩니다.
-
-```bash
-npm run harness -- autonomy
-npm run harness -- autonomy --status
-```
-
-대화형 모드는 현재 AI 세션이 체크포인트를 따라 진행하고, API 모드는 clean worktree에서
-티켓 선택, 구현 패치, 검증, 제한적 연속 실행을 수행합니다. CI, 의존성, 인프라,
-migration 같은 고위험 변경은 자동 적용하지 않고 승인을 기다립니다.
-
-상세 정책: [`docs/design-docs/l5-autonomy-policy.md`](design-docs/l5-autonomy-policy.md)
-
-세션이나 API 호출이 중단됐다면 변경을 지우지 말고 먼저 복구 진단을 실행합니다.
-
-```bash
-npm run harness -- recover
-```
-
-현재 체크포인트, active 티켓, Git 변경, 마지막 verify 지문을 대조해 안전한 다음 행동을 JSON으로 출력합니다.
-
-### 선택형 멀티에이전트 orchestration
-
-멀티에이전트는 기본 비활성화이며 기존 단일 에이전트 흐름을 바꾸지 않습니다. 프로젝트 설정에서 활성화한 뒤, 역할을 병렬 또는 격리 실행하려는 티켓에서만 명시적으로 시작합니다.
-
-```bash
-# adapter와 병렬 capability 확인
-npm run harness -- orchestrate --capabilities
-
-# 환경 capability에 따라 native, API, sequential fallback 선택
-npm run harness -- orchestrate optional-multi-agent --mode auto --max-workers 2
-
-# 상태 확인, 중단 후 재개, 승인
-npm run harness -- orchestrate --status <run-id>
-npm run harness -- orchestrate --resume <run-id>
-npm run harness -- orchestrate --approve <run-id>
-
-# 대화형 host가 planner/architect artifact를 기록한 뒤 단일 writer 구현
-npm run harness -- orchestrate --record <run-id> --role planner --artifact <file>
-npm run harness -- orchestrate --record <run-id> --role architect --artifact <file>
-npm run harness -- orchestrate --begin-review <run-id>
-
-# reviewer/verifier 기록 후 전체 검증과 마감
-npm run harness -- orchestrate --record <run-id> --role reviewer --artifact <file>
-npm run harness -- orchestrate --record <run-id> --role verifier --artifact <file>
-npm run harness -- verify --full --task <ticket>
-npm run harness -- orchestrate --finish <run-id>
-```
-
-실행 방식:
-
-| Mode | 동작 |
-|------|------|
-| Interactive Native | Codex 같은 host의 native adapter가 하위 에이전트 생성·메시지·대기·취소를 담당합니다. |
-| API Managed | `HARNESS_AGENT_MODE=api`에서 역할별 provider 요청을 실행하고 공통 artifact로 정규화합니다. |
-| Sequential Fallback | 하위 에이전트나 병렬 capability가 없으면 역할 요청을 하나씩 만들고, 호스트가 artifact를 기록한 뒤 다음 역할로 진행합니다. |
-
-Phase 1은 Planner/Architect와 Reviewer/Verifier 같은 읽기 중심 역할만 병렬화하고, workspace를 수정하는 Implementer는 하나로 제한합니다.
-
-Phase 2 multi-writer는 별도 opt-in입니다. 각 worker가 겹치지 않는 `owned_paths`, 동일한 base SHA, `.worktrees/orchestrate/<run-id>/` 아래의 격리 branch/worktree를 가져야 합니다. manifest, lockfile, DB migration, CI, scripts, 인프라, 보안 정책은 병렬 writer에 배정하지 않습니다.
-
-```bash
-npm run harness -- orchestrate --prepare-workers <run-id> --plan <worker-plan.json>
-# worker worktree에서 commit 후 verify --full을 실행한 다음 기록
-npm run harness -- orchestrate --record-worker <run-id> --worker <id> --commit <sha>
-npm run harness -- orchestrate --integrate <run-id> --approve-risk
-npm run harness -- orchestrate --begin-review <run-id>
-npm run harness -- orchestrate --promote <run-id> --approve-risk
-```
-
-다음 항목은 자동 통합하지 않고 사용자 승인을 기다립니다.
-
-- DB, dependency, CI/build, scripts, 인프라, 인증/권한/보안 변경
-- 파일 삭제 또는 이름 변경
-- 비용이 발생하는 외부 API 또는 secret 접근
-- worker 결과 통합, commit, push, PR merge
-- stale base, 소유 경로 이탈, 검증 실패, 통합 충돌
-
-승인된 결과도 integration branch에서 다시 검증해야 합니다.
-
-```bash
-npm run harness -- verify --full
-npm run harness -- complete-task <ticket>
-```
-
-worker별 검증이나 `verify --quick`은 최종 완료 조건이 아닙니다. 현재 통합 콘텐츠와 일치하는 `verify --full` 성공 지문이 있어야 `complete-task`가 허용됩니다.
+- [필수 안전 계약](design-docs/safety-contract.md)은 모든 실행에서 유지한다.
+- [L4.5 자동 수정](design-docs/auto-fix-policy.md), [L5](design-docs/l5-autonomy-policy.md), [멀티에이전트](design-docs/execution-modes.md)는 명시적으로 선택했을 때만 상세 절차를 읽는다.
+- L5·멀티에이전트는 Experimental/opt-in이며 검증 후에도 사용자 승인 없이 Git 반영하지 않는다.
+- 모드별 명령·한도·복구 절차는 위 원본 문서를 기준으로 한다. `help --all`에서도 기존 명령을 확인할 수 있다.
 
 ### Git Hooks (커밋 시 자동 실행)
 | Hook | 검사 항목 |
@@ -596,3 +410,13 @@ Full verification is never cached and remains the only completion gate. Quick ve
 `parallel_scripts` is empty by default. Add only npm scripts that are independent and safe to run concurrently. The Full verifier also skips a `build` script when it is only an exact alias of another selected script, such as `npm run lint`.
 
 Environment overrides are available as `HARNESS_VERIFY_QUICK_CACHE=true|false` and a comma-separated `HARNESS_VERIFY_PARALLEL_SCRIPTS=coverage,lint`.
+
+## 컨텍스트와 조회 비용
+
+- `context --json`은 실제 번들 바이트와 선택/생략 파일을 출력한다. 토큰 추정은 UTF-8 바이트/3이며 실제 과금량이 아니다.
+- 필수 `safety-contract.md`는 자르지 않는다. `--execution-mode auto-fix|l5|orchestrate`로 상세 정책을 추가하며 내부 실행 경로는 해당 값을 직접 전달한다.
+- 기술 프로필은 감지/등록된 스택에 맞춘다. 선택형 Java 템플릿 표식이 있는 프로필만 생략 대상이며, 프로젝트 자체 프로필은 유지한다. Java/Gradle/Maven 또는 불명확한 스택은 보수적으로 포함한다. 명시 참조와 `--full-context`는 선택을 확장하지만 안전 규칙을 해제하지 않는다.
+- 외부 프로젝트 문서는 계속 `untrusted-project-input`이다. 새 안전 계약이 없는 기존 프로젝트에서는 정책 문서를 자동 제외하지 않는다. 관리형 실행에는 중앙 유지보수 PLANS/티켓을 중복 주입하지 않는다.
+- 명시된 조회(`request show/ready/planning`, `execution/runner/release status`, `deployment list/show`)는 STARTED/성공/실패 감사만 남긴다. 전체 이력 재구성·followup 재생성·외부 알림은 생략한다. 조회 감사 원장 쓰기는 남으므로 디스크 I/O가 0이 되지는 않는다.
+- 상태 변경·복구는 기존 기록 경로를 유지한다. 수동 파일 수정/중단 뒤에는 `history refresh`, `operations audit/repair`로 조사한다. `operations audit`은 순수 조회가 아니다.
+- 기본 `help`는 일상 흐름만, `help --all`은 호환/복구/실험 명령까지 표시한다. 승인된 입력 문서가 바뀌면 새 capture/검토가 필요하며 과거 지문을 재작성하지 않는다.

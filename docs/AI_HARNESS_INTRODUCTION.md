@@ -29,6 +29,8 @@ Harness는 AI의 모든 파일 쓰기를 물리적으로 중계하거나 차단�
 
 ## 3. 현재 구현된 핵심 기능
 
+실행 명령과 옵션은 [일반 사용 가이드](HARNESS_GUIDE.md), [개인 운영 가이드](HARNESS_PERSONAL_OPERATIONS_GUIDE.md), `help --all`을 참조한다.
+
 ### 3.1 프로젝트 등록과 컨텍스트 격리
 
 - 여러 독립 Git 저장소를 중앙 레지스트리에 프로젝트 ID와 절대 경로로 등록한다.
@@ -36,16 +38,6 @@ Harness는 AI의 모든 파일 쓰기를 물리적으로 중계하거나 차단�
 - 프로젝트별 `AGENTS.md`, 계획 및 알려진 설계 문서를 제한된 크기의 컨텍스트 번들로 읽는다.
 - 관리 대상 프로젝트 문서는 `untrusted-project-input`으로 취급한다. 프로젝트 문서가 중앙 하네스의 승인 정책, 도구 권한 또는 비밀 접근 권한을 바꿀 수는 없다.
 - onboarding profile은 검토 전 `DRAFT`, 명시적 승인 후 `APPROVED`가 되며 프로젝트 Git 상태와 콘텐츠 지문에 결속된다.
-
-주요 명령:
-
-```bash
-npm run harness -- project add <project-id> --path "/absolute/project/path"
-npm run harness -- project check <project-id>
-npm run harness -- project context <project-id> --bundle
-npm run harness -- project onboard <project-id>
-npm run harness -- project onboard <project-id> --approve
-```
 
 ### 3.2 신규 프로젝트 Bootstrap
 
@@ -56,25 +48,14 @@ npm run harness -- project onboard <project-id> --approve
 - 적용되면 최초 commit, 중앙 프로젝트 등록과 `DRAFT` onboarding profile 생성을 수행한다.
 - 이미 Git HEAD가 있는 저장소는 최초 commit을 만들지 않고 등록 흐름으로 전환한다.
 
-```bash
-npm run harness -- bootstrap request <project-id> --path "/absolute/project/path" --summary "승인할 초기 계획" --message "docs: 초기 계획 수립"
-npm run harness -- bootstrap approve <project-id> --fingerprint <sha256>
-npm run harness -- bootstrap apply <project-id> --fingerprint <sha256>
-```
-
 ### 3.3 요청 계획과 티켓 승인
+
+신규 계획의 표준 경로는 [계획 품질 가이드](PLANNING_QUALITY_GUIDE.md)의 `request capture -> draft -> planning-review -> approve -> ready`다. 기존 `create/revise`는 호환 경로이며 기존 승인 근거를 자동 변환하지 않는다.
 
 - 사용자 목표를 하나 이상의 프로젝트 티켓으로 구조화한다.
 - 각 티켓은 목표, 프로젝트 맥락, 범위, 제외 범위, 인수 기준, 구현 단계, 테스트 계획, 의존성, 재시도 정책 및 실제 검증 명령을 가진다.
 - 계획은 onboarding profile 지문과 결속되며 사용자 승인 전에는 실행 준비 상태가 되지 않는다.
 - 승인 뒤 계획이나 프로젝트 상태가 바뀌면 stale/tampering 검사로 차단한다.
-
-```bash
-npm run harness -- request create <request-id> --project <project-id> --goal "목표"
-npm run harness -- request show <request-id>
-npm run harness -- request approve <request-id>
-npm run harness -- request ready <request-id>
-```
 
 복잡한 범위는 `--plan-file <json>`으로 여러 티켓과 의존성을 명시할 수 있다.
 
@@ -87,12 +68,6 @@ npm run harness -- request ready <request-id>
 - 교차 프로젝트 의존은 선행 프로젝트의 관리형 commit 존재를 완료 게이트로 확인하고, 대상 프로젝트 자체의 승인된 HEAD에서 작업한다.
 - 같은 프로젝트에서 여러 선행 branch가 합쳐지는 fan-in은 암묵적으로 merge하지 않는다. 통합 순서와 검증을 정의한 별도 티켓이 필요하다.
 
-```bash
-npm run harness -- execution prepare <request-id>
-npm run harness -- execution status <request-id>
-npm run harness -- execution advance <request-id>
-```
-
 ### 3.5 구현 Runner와 검증
 
 - 중앙 runner는 승인된 계획과 onboarding profile에 결속된 `PREPARED` 티켓만 선택한다.
@@ -102,23 +77,9 @@ npm run harness -- execution advance <request-id>
 - 실패하면 성공으로 위장하지 않고 재시도 가능한 상태 또는 `BLOCKED`와 실패 근거를 남긴다.
 - 각 티켓에는 승인 가능한 `retry_policy`가 포함된다. 새 계획의 기본값은 최대 3회(최초 1회 + 재시도 2회)와 동일 오류 조기 중단이다. 일반 사용자는 티켓마다 횟수를 입력하지 않으며 기존 명시적 한도와 고급 1~5회 설정은 유지된다.
 - Runner의 CLI 재시도 옵션은 승인된 티켓 정책을 높이지 못하고 더 낮은 실행 cap으로만 작동한다. 시도 횟수는 티켓에 누적되므로 프로세스를 다시 실행해도 예산이 초기화되지 않는다.
-- 한 티켓의 재시도 동안 프로젝트 컨텍스트는 한 번만 구성하고 직전 실패 증거를 다음 시도에 추가한다. 실행 상태에는 비교용 추정 입출력 토큰이 남지만 실제 공급자 청구량으로 간주하지 않는다.
-
-```bash
-npm run harness -- runner run <request-id>
-npm run harness -- runner reconcile <request-id>
-npm run harness -- execution review-ready <request-id> --ticket <ticket-id>
-```
+- 각 시도에서 필요한 프로젝트 컨텍스트를 구성하고 직전 실패 증거를 다음 시도에 추가한다. 실행 상태에는 비교용 추정 입출력 토큰이 남지만 실제 공급자 청구량으로 간주하지 않는다.
 
 단일 저장소용 기존 티켓 흐름도 유지된다.
-
-```bash
-npm run harness -- create-ticket <ticket> <type> --goal "목표"
-npm run harness -- start-ticket <ticket>
-npm run harness -- verify --quick --task <ticket>
-npm run harness -- verify --full --task <ticket>
-npm run harness -- complete-task <ticket>
-```
 
 `verify --quick`은 개발 피드백용이다. 완료 조건으로 인정되는 것은 현재 저장소 콘텐츠와 일치하는 `verify --full` 지문뿐이다.
 
@@ -131,12 +92,6 @@ npm run harness -- complete-task <ticket>
 - 요청 전체가 아닌 `REVIEW_READY` 티켓만 선택해 선행 티켓을 먼저 commit할 수 있다.
 - 승인 이후 worktree가 바뀌면 작업을 거부한다.
 
-```bash
-npm run harness -- release request <request-id> --ticket <ticket-id> --approval <approval-id> --summary "검토 내용" --operation commit --message "feat: 변경 내용"
-npm run harness -- release approve <approval-id> --fingerprint <sha256>
-npm run harness -- release apply <approval-id> --fingerprint <sha256>
-```
-
 중요한 한계: 이 게이트는 하네스 CLI를 통한 관리형 Git 작업을 통제한다. 사용자가 별도 터미널에서 직접 실행하는 raw `git commit`, `git push`를 운영체제 수준에서 차단하지는 않는다.
 
 ### 3.7 상태, 알림과 경력 근거
@@ -148,15 +103,6 @@ npm run harness -- release apply <approval-id> --fingerprint <sha256>
 - 경력 근거 ledger는 프로젝트, 티켓, 기술, 결과와 commit/PR 근거를 구조화해 검색·내보내기 한다.
 - 관리형 commit 성공 시 `DRAFT/private` evidence 초안을 자동 생성하되 검토 없이 공개하거나 검증 완료로 승격하지 않는다.
 - 외부 출력에는 `VERIFIED`이면서 `public`이고 실제 Git 근거 검증을 통과한 항목만 포함된다.
-
-```bash
-npm run harness -- dashboard
-npm run harness -- evidence add --file <evidence.json>
-npm run harness -- evidence search --project <project-id> --technology <name> --query "검색어"
-npm run harness -- evidence export
-npm run harness -- deployment record --file <deployment.json>
-npm run harness -- deployment list --project <project-id>
-```
 
 배포 원장은 실제 배포를 수행하지 않는다. 등록 프로젝트에 존재하는 commit인지 확인한 뒤 source branch, commit, ticket, 환경, 시각, 결과와 선택적 CI URL을 append-only로 기록한다.
 

@@ -6,6 +6,7 @@ const path = require("node:path");
 const { readJson, readJsonDirectory, updateJsonLocked } = require("./control-plane-state");
 const { validateProjectId } = require("./project-registry");
 const { safeCaptureFollowups } = require("./operations-followup");
+const { isReadOnlyCommand } = require("./command-effects");
 const { REPORT_ACTIONS, createOperationsReportCommand } = require("./operations-report");
 const { assertExecutionMatchesPlan } = require("./project-execution");
 const { readPlan } = require("./request-command");
@@ -138,17 +139,18 @@ function refreshHistory(root) {
 function withHistory(root, command, handler) {
   return async args => {
     const [action, subject] = args;
+    const readOnly = isReadOnlyCommand(command, args);
     const id = beginOperation(root, command, action || null, subject?.startsWith("--") ? null : subject || null);
     try {
       const result = await handler(args);
-      refreshHistory(root);
+      if (!readOnly) refreshHistory(root);
       finishOperation(root, id);
       return result;
     } catch (error) {
       finishOperation(root, id, error);
       throw error;
     } finally {
-      safeCaptureFollowups(root, message => process.stderr.write(`${message}\n`));
+      if (!readOnly) safeCaptureFollowups(root, message => process.stderr.write(`${message}\n`));
     }
   };
 }
