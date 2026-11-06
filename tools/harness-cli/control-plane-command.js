@@ -11,6 +11,8 @@ const { readPlan } = require("./request-command");
 const { requireJiraFresh } = require("./jira-input");
 const { requireAcceptedReview } = require("./work-history");
 const { dashboardOverview, overviewLines } = require("./dashboard-status");
+const { inspectionAdvice, executionAdvice, adviceText } = require("./safe-next-action");
+const { recoveryAdvice } = require("./publication-recovery");
 const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
 
 function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint, runGit, log, env = process.env, fetchImpl = globalThis.fetch, checkAtlassian }) {
@@ -264,28 +266,38 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
     const executions = readJsonDirectory(path.join(local, "executions"));
     const releases = readJsonDirectory(path.join(local, "releases"));
     const lines = bootstraps.filter((bootstrap) => !["APPLIED", "SKIPPED"].includes(bootstrap.status)).map((bootstrap) => {
-      if (bootstrap.status === "PENDING") return `${bootstrap.bootstrap_id}: PLAN_COMMIT_APPROVAL_REQUIRED\nFingerprint: ${bootstrap.fingerprint}\nNext: approve the initial plan commit`;
-      if (bootstrap.status === "APPROVED") return `${bootstrap.bootstrap_id}: PLAN_COMMIT_APPROVED\nNext: apply the one-time bootstrap approval`;
-      if (bootstrap.status === "FAILED") return `${bootstrap.bootstrap_id}: BOOTSTRAP_FAILED\nEvidence: ${bootstrap.result?.error || "unknown failure"}\nNext: inspect the repository and create a new bootstrap request`;
-      return `${bootstrap.bootstrap_id}: BOOTSTRAP_${bootstrap.status}`;
+      const next = adviceText(inspectionAdvice("bootstrap", bootstrap.bootstrap_id));
+      if (bootstrap.status === "PENDING") return `${bootstrap.bootstrap_id}: PLAN_COMMIT_APPROVAL_REQUIRED\nFingerprint: ${bootstrap.fingerprint}\n${next}`;
+      if (bootstrap.status === "APPROVED") return `${bootstrap.bootstrap_id}: PLAN_COMMIT_APPROVED\n${next}`;
+      if (bootstrap.status === "FAILED") return `${bootstrap.bootstrap_id}: BOOTSTRAP_FAILED\nEvidence: ${bootstrap.result?.error || "unknown failure"}\n${next}`;
+      return `${bootstrap.bootstrap_id}: BOOTSTRAP_${bootstrap.status}\n${next}`;
     });
     lines.push(...requests.filter((request) => !executions.some((state) => state.request_id === request.request_id)).map((request) => (
-      `${request.request_id}: ${request.status === "DRAFT" ? "PLAN_READY" : `PLAN_${request.status}`}\nNext: ${request.status === "DRAFT" ? "review and approve the plan" : "prepare project worktrees"}`
+      `${request.request_id}: ${request.status === "DRAFT" ? "PLAN_READY" : `PLAN_${request.status}`}\n${adviceText(inspectionAdvice("request", request.request_id))}`
     )));
     lines.push(...executions.map((state) => {
+      const next = adviceText(executionAdvice(state));
       const blocked = state.tickets.filter((ticket) => ticket.status === "BLOCKED");
-      if (blocked.length) return `${state.request_id}: BLOCKED\nEvidence: ${blocked.map((ticket) => `${ticket.ticket_id}=${ticket.error}`).join("; ")}\nNext: revise plan, refresh onboarding, or retry after resolving the cause`;
-      if (state.status === "REVIEW_READY") return `${state.request_id}: REVIEW_READY\nNext: review diff/tests and explicitly request release approval`;
+      if (blocked.length) return `${state.request_id}: BLOCKED\nEvidence: ${blocked.map((ticket) => `${ticket.ticket_id}=${ticket.error}`).join("; ")}\n${next}`;
+      if (state.status === "REVIEW_READY") return `${state.request_id}: REVIEW_READY\n${next}`;
       const ready = state.tickets.filter((ticket) => ticket.status === "REVIEW_READY" && !ticket.committed_sha);
-      if (ready.length) return `${state.request_id}: PARTIAL_REVIEW_READY\nTickets: ${ready.map((ticket) => ticket.ticket_id).join(", ")}\nNext: request a ticket-scoped commit approval, then advance the dependency wave`;
+      if (ready.length) return `${state.request_id}: PARTIAL_REVIEW_READY\nTickets: ${ready.map((ticket) => ticket.ticket_id).join(", ")}\n${next}`;
       const waiting = state.tickets.filter((ticket) => ticket.status === "WAITING_DEPENDENCY");
-      if (waiting.length) return `${state.request_id}: WAITING_DEPENDENCY\nTickets: ${waiting.map((ticket) => `${ticket.ticket_id} (${ticket.waiting_reason})`).join("; ")}\nNext: commit the required predecessor ticket or approve an explicit integration ticket`;
-      return `${state.request_id}: ${state.status}`;
+      if (waiting.length) return `${state.request_id}: WAITING_DEPENDENCY\nTickets: ${waiting.map((ticket) => `${ticket.ticket_id} (${ticket.waiting_reason})`).join("; ")}\n${next}`;
+      return `${state.request_id}: ${state.status}\n${next}`;
     }));
+    const recovery = {
+      executions: executions.map(state => ({ request_id: state.request_id, ...executionAdvice(state) })),
+      releases: releases.map(release => ({ approval_id: release.approval_id || release.request_id, ...inspectionAdvice("release", release.approval_id || release.request_id) })),
+      publications: (readJson(path.join(local, "atlassian/outbox.json"), { entries: [] }).entries || [])
+        .filter(entry => entry.status !== "SYNCED").map(recoveryAdvice)
+    };
+    lines.push(...recovery.publications.map(advice => `${advice.id || "unknown"}: ${advice.status}\n${adviceText(advice)}`));
     lines.push(...releases.map((release) => {
-      if (release.status === "PENDING") return `${release.request_id}: APPROVAL_REQUIRED\nFingerprint: ${release.fingerprint}\nNext: approve only after reviewing the release summary and worktree changes`;
-      if (release.status === "APPROVED") return `${release.request_id}: RELEASE_APPROVED\nNext: apply the one-time approval immediately before the managed Git operation`;
-      return `${release.request_id}: RELEASE_${release.status}`;
+      const next = adviceText(inspectionAdvice("release", release.approval_id || release.request_id));
+      if (release.status === "PENDING") return `${release.request_id}: APPROVAL_REQUIRED\nFingerprint: ${release.fingerprint}\n${next}`;
+      if (release.status === "APPROVED") return `${release.request_id}: RELEASE_APPROVED\n${next}`;
+      return `${release.request_id}: RELEASE_${release.status}\n${next}`;
     }));
     const summary = [...overviewLines(overview), ...lines].join("\n\n");
     const eventId = crypto.createHash("sha256").update(summary).digest("hex");
@@ -300,7 +312,7 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
       if (result?.sent > 0) writeJsonAtomic(eventPath, [...sent, eventId].slice(-100));
       return false;
     }, { ttlMs: 120_000 }) : false;
-    const result = { bootstraps, requests, executions, releases, overview, duplicate };
+    const result = { bootstraps, requests, executions, releases, overview, duplicate, recovery };
     log(options.json ? JSON.stringify(result, null, 2) : summary);
     return result;
   };

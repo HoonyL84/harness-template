@@ -8,6 +8,7 @@ const { createControlPlaneCommands } = require("../../tools/harness-cli/control-
 const { createProviderUsageService } = require("../../tools/harness-cli/provider-usage");
 const { auditTasks } = require("../../tools/harness-cli/operations-report");
 const { recoveryAdvice } = require("../../tools/harness-cli/publication-recovery");
+const { inspectionAdvice, executionAdvice, adviceText } = require("../../tools/harness-cli/safe-next-action");
 const { collectHistory } = require("../../tools/harness-cli/work-history");
 const now = () => new Date("2026-10-03T00:00:00Z");
 function fixture(t) {
@@ -49,8 +50,48 @@ test("review waiting tickets retain unmet conditions and remain searchable, neve
 test("recovery advice never retries uncertain writes or grants publishing approval", () => {
   const pending = recoveryAdvice({ id: "safe-id", status: "PENDING" }); assert.match(pending.commands[0], /preview/);
   const rejected = recoveryAdvice({ id: "safe-id", status: "REJECTED" }); assert.match(rejected.commands[0], /retry-rejected safe-id --approve safe-id/);
-  for (const status of ["SENDING", "NEEDS_RECONCILIATION"]) { const r = recoveryAdvice({ id: "safe-id", status }); assert.match(r.commands[0], /reconcile/); assert.equal(r.commands.some(c => /retry-rejected|sync --approve/.test(c)), false); }
+  for (const status of ["SENDING", "NEEDS_RECONCILIATION"]) {
+    const r = recoveryAdvice({ id: "safe-id", status });
+    assert.match(r.commands[0], /atlassian status$/); assert.match(r.next_action, /atlassian status$/);
+    assert.equal(r.commands.some(c => /reconcile|retry-rejected|sync --approve/.test(c)), false);
+    assert.match(r.after_inspection.condition, /verified/); assert.match(r.after_inspection.command, /reconcile/);
+  }
   assert.equal(recoveryAdvice({ id: "x; rm", status: "REJECTED" }).commands.length, 0);
+});
+
+test("safe next actions inspect uncertain executions and never interpolate unsafe identifiers", () => {
+  for (const status of ["RUNNING", "VERIFYING", "BLOCKED", "REVIEW_READY", "WAITING_DEPENDENCY", "PREPARED"]) {
+    const advice = executionAdvice({ request_id: "work", tickets: [{ status }] });
+    assert.equal(advice.next_action, "node tools/harness-cli/index.js runner status work");
+    assert.equal(advice.automatic_action, false); assert.match(adviceText(advice), /^Why: .+\nSafe Next Action:/);
+  }
+  assert.match(executionAdvice({ request_id: "work", tickets: [{ status: "BLOCKED", runner: { lease_id: "owner" } }] }).why, /may still own/);
+  for (const cmd of ["bootstrap", "runner", "execution", "request", "release", "atlassian", "operations"]) assert.ok(inspectionAdvice(cmd, "work"));
+  for (const id of ["x; touch pwned", "../outside", "--approve", true, undefined]) assert.equal(inspectionAdvice("runner", id), null);
+  assert.equal(inspectionAdvice("unknown", "work"), null); assert.equal(adviceText(null), "");
+  assert.equal(inspectionAdvice("toString", "work"), null);
+  assert.match(recoveryAdvice({ id: "safe-id", status: "toString" }).why, /unknown/);
+  assert.equal(executionAdvice({ request_id: "unsafe;" }), null);
+});
+
+test("dashboard shares inspection guidance without reconciling leases or uncertain outbox entries", async t => {
+  const f = fixture(t);
+  f.save(".harness/local/executions/work.json", { request_id: "work", status: "IN_PROGRESS", tickets: [{ status: "RUNNING", runner: { lease_id: "active-owner" } }] });
+  f.save(".harness/local/atlassian/outbox.json", { entries: [{ id: "lost", status: "NEEDS_RECONCILIATION", payload: "private" }] });
+  f.save(".harness/local/releases/different-approval.json", { request_id: "work", approval_id: "different-approval", status: "APPROVED" });
+  const paths = [".harness/local/executions/work.json", ".harness/local/atlassian/outbox.json"];
+  const before = paths.map(p => fs.readFileSync(path.join(f.root, p), "utf8"));
+  let text;
+  const commands = createControlPlaneCommands({ root: f.root, parseArgs, env: {}, runGit: () => ({ status: 0, stdout: "" }),
+    reviewFingerprint: () => { throw Error("dashboard must not fingerprint worktrees"); },
+    log: s => { text = s; }, notify: () => { throw Error("no notice"); }, fetchImpl: () => { throw Error("no request"); } });
+  const report = await commands.dashboard([]);
+  assert.deepEqual(report.recovery.executions[0], { request_id: "work", ...executionAdvice(report.executions[0]) });
+  assert.match(text, /Safe Next Action: node tools\/harness-cli\/index.js runner status work/);
+  assert.match(text, /Safe Next Action: node tools\/harness-cli\/index.js atlassian status/);
+  assert.match(text, /Safe Next Action: node tools\/harness-cli\/index.js release status different-approval/);
+  assert.equal(text.includes("private"), false); assert.equal(JSON.stringify(report.recovery).includes("private"), false);
+  assert.deepEqual(paths.map(p => fs.readFileSync(path.join(f.root, p), "utf8")), before);
 });
 test("cost is opt-in and never substitutes account balance; cached input is not double charged", t => {
   const f = fixture(t); pricing(f); const s = createProviderUsageService({ root: f.root, now });

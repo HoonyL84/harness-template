@@ -2578,6 +2578,9 @@ async function main(argv = process.argv.slice(2)) {
 if (require.main === module) {
   main().catch((error) => {
     process.stderr.write(`[FAIL] ${error.message}\n`);
+    const { inspectionAdvice, adviceText } = require("./safe-next-action");
+    const advice = inspectionAdvice(process.argv[2] === "release" && process.argv[3] === "request" ? "request" : process.argv[2], process.argv[4]);
+    if (advice) process.stderr.write(`${adviceText(advice)}\n`);
     process.exit(Number.isInteger(error.code) ? error.code : 1);
   });
 }

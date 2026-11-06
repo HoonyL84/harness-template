@@ -33,3 +33,13 @@ Arrays may be empty when not applicable, but each ticket requires a proposal lin
 Planning/design tickets require explicit docs/ Markdown deliverables, per the existing ticket contract.
 Only Git execution predecessors go into depends_on; document references and related work are not execution dependencies.
 Citation existence does not prove semantic correctness. Return uncertainty explicitly for human review.
+
+Quality guidance (not a phrase denylist):
+- Each test should name the target, input/precondition, and observable expected outcome.
+  "Run regression tests" alone does not explain which requirement is protected.
+- Keep changes traceable to the request. Do not add unrelated refactoring, schema changes
+  or dependencies merely because they seem helpful; separate optional ideas from approved scope.
+- If retry rules, event ownership or other business decisions are missing, ask a blocking
+  question. Do not turn an unresolved decision into an assumption or invented default.
+- Include negative/boundary cases relevant to the request. Distinguish document references
+  from commit dependencies and do not infer cross-project ordering without evidence.

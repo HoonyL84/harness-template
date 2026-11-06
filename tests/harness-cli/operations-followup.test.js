@@ -11,6 +11,8 @@ const { buildExecutionState } = require("../../tools/harness-cli/project-executi
 const { createAgentRunnerCommand } = require("../../tools/harness-cli/agent-runner");
 const { createPublicationHook } = require("../../tools/harness-cli/operations-publish");
 const { assertConsentedEntry, requireConsent } = require("../../tools/harness-cli/atlassian-consent");
+const { createControlPlaneCommands } = require("../../tools/harness-cli/control-plane-command");
+const { withHistory } = require("../../tools/harness-cli/work-history");
 function parseArgs(args) {
   const positional = [], options = {};
   for (let i = 0; i < args.length; i++) args[i].startsWith("--") ? options[args[i].slice(2)] = args[++i] : positional.push(args[i]);
@@ -41,13 +43,17 @@ function fixture(t, useMcp = false) {
     if (init.method === "POST") {
       posts++;
       if (postFailure === "lost") throw new Error("simulated lost acknowledgement");
-      if (postFailure) return new globalThis.Response("rejected", { status: postFailure });
+      if (postFailure && postFailure !== "transition-ack-lost") return new globalThis.Response("rejected", { status: postFailure });
       if (url.endsWith("/issue")) {
         const fields = JSON.parse(init.body).fields;
         issue = { id: "100", key: "DEMO-1", fields: { ...fields, status: { id: "0" }, updated: "v1" } };
         return new globalThis.Response(JSON.stringify({ id: "100", key: "DEMO-1" }));
       }
-      if (url.includes("transitions")) { issue.fields.status.id = JSON.parse(init.body).transition.id; issue.fields.updated += "x"; return new globalThis.Response(null, { status: 204 }); }
+      if (url.includes("transitions")) {
+        issue.fields.status.id = JSON.parse(init.body).transition.id; issue.fields.updated += "x";
+        if (postFailure === "transition-ack-lost") throw new Error("transition applied remotely but response lost");
+        return new globalThis.Response(null, { status: 204 });
+      }
       return new globalThis.Response('{"id":"200"}');
     }
     if (url.includes("/project/DEMO/statuses")) return new globalThis.Response(JSON.stringify([{ id: "1", statuses: [{ id: "3", name: "Review", statusCategory: { key: "indeterminate" } }] }]));
@@ -95,6 +101,89 @@ function fixture(t, useMcp = false) {
     grant, envelopes,
     history: createHistoryCommand(shared), issue: () => issue, setLive: v => { live = v; }, setFailure: v => { postFailure = v; }, posts: () => posts };
 }
+
+test("compositional: concurrent runners preserve lease/attempts while lost Jira delivery blocks later transitions", async t => {
+  const f = fixture(t); await f.grant(); await f.operations(["flush", "--request", "work"]);
+  const prepared = await f.prepareState("PREPARED"); prepared.tickets[0].runner.attempts = 0; writeJsonAtomic(f.stateFile, prepared);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  let calls = 0, applies = 0, verifies = 0, notifications = 0;
+  f.setFailure("transition-ack-lost");
+  const hook = createPublicationHook({ ...f, flush: f.operations });
+  const dependencies = { ...f, onProgress: id => hook("runner", ["run", id]),
+    invokeAgent: async () => { calls++; entered.resolve(); await release.promise; return "diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n"; },
+    notify: async () => { notifications++; return { sent: 1 }; },
+    runGit: args => { if (args[0] === "apply" && !args.includes("--check")) applies++; return { status: 0 }; },
+    runCommand: () => { verifies++; return { status: 0 }; }, tokenizeCommand: s => s.split(" ") };
+  const runnerA = withHistory(f.root, "runner", createAgentRunnerCommand(dependencies));
+  const running = runnerA(["run", "work"]);
+  try {
+    await Promise.race([entered.promise, running.then(() => { throw Error("runner ended before provider barrier"); })]);
+    const owner = readJson(f.stateFile).tickets[0];
+    assert.equal(owner.status, "RUNNING"); assert.equal(owner.runner.attempts, 1);
+    const uncertain = (await f.atlassian(["status"])).entries.find(e => e.operation === "transition" && e.status === "NEEDS_RECONCILIATION");
+    assert.ok(uncertain);
+    f.setFailure(null);
+    const runnerB = withHistory(f.root, "runner", createAgentRunnerCommand(dependencies));
+    await runnerB(["run", "work"]);
+    assert.deepEqual(readJson(f.stateFile).tickets[0].runner, owner.runner);
+    assert.equal(calls, 1); assert.equal(applies, 0); assert.equal(verifies, 0);
+    release.resolve();
+    assert.equal((await running).status, "REVIEW_READY");
+    await hook("runner", ["run", "work"]);
+    const transitions = (await f.atlassian(["status"])).entries.filter(e => e.operation === "transition");
+    assert.equal(transitions.find(e => e.id === uncertain.id).status, "NEEDS_RECONCILIATION");
+    assert.ok(transitions.some(e => e.id !== uncertain.id && e.status === "PENDING"));
+    assert.equal(f.issue().fields.status.id, "1");
+    // An independent result page may publish, but neither uncertain nor newer Jira transitions may POST.
+    assert.equal(transitions.filter(e => e.status === "SYNCED").length, 0);
+    const count = f.posts(); await f.operations(["flush", "--request", "work"]);
+    assert.equal(f.posts(), count);
+    assert.equal(calls, 1); assert.equal(applies, 1); assert.equal(verifies, 1); assert.equal(notifications, 1);
+    const final = readJson(f.stateFile).tickets[0];
+    assert.equal(final.runner.attempts, 1); assert.equal(final.runner.lease_id, null);
+    assert.deepEqual(final.runner.history.map(h => h.status), ["SUCCEEDED"]);
+    const ledger = readJson(path.join(f.local, "history/ledger.json"));
+    assert.equal(Object.keys(ledger.operations).length, 2);
+    assert.ok(Object.values(ledger.operations).every(o => o.status === "SUCCEEDED"));
+  } finally { release.resolve(); await running; }
+});
+
+test("compositional: runner verification, human acceptance and release reject changed bound inputs, not Jira comments", async t => {
+  for (const change of ["content", "summary", "description", "priority", "metadata"]) {
+    const f = fixture(t); await f.link();
+    const prepared = await f.prepareState("PREPARED"); prepared.tickets[0].runner.attempts = 0; writeJsonAtomic(f.stateFile, prepared);
+    const source = path.join(prepared.tickets[0].worktree, "src.js"); fs.writeFileSync(source, "original");
+    const fingerprint = () => require("node:crypto").createHash("sha256").update(fs.readFileSync(source)).digest("hex");
+    let calls = 0; const mutations = [];
+    const runGit = args => {
+      if (["add", "commit", "push", "merge"].includes(args[0])) mutations.push(args);
+      if (args[0] === "apply" && !args.includes("--check")) fs.writeFileSync(source, "implemented");
+      return { status: 0, stdout: args[0] === "branch" ? "codex/work/feature\n" : args[0] === "rev-parse" ? "abcdef123456\n" : args[0] === "status" && !mutations.some(m => m[0] === "commit") ? " M src.js\n" : "" };
+    };
+    const runner = createAgentRunnerCommand({ ...f, reviewFingerprint: fingerprint, runGit, runCommand: () => ({ status: 0 }),
+      notify: async () => ({ sent: 1 }), tokenizeCommand: s => s.split(" "),
+      invokeAgent: async () => { calls++; return "diff --git a/src.js b/src.js\n--- a/src.js\n+++ b/src.js\n"; } });
+    assert.equal((await runner(["run", "work"])).status, "REVIEW_READY");
+    const history = createHistoryCommand({ ...f, reviewFingerprint: fingerprint });
+    history(["review", "--project", "demo", "--request", "work", "--ticket", "feature", "--fingerprint", fingerprint(), "--result", "accepted", "--reason", "fixture human acceptance"]);
+    const control = createControlPlaneCommands({ ...f, reviewFingerprint: fingerprint, runGit });
+    const approval = await control.release(["request", "work", "--approval", "release-work", "--operation", "commit", "--message", "feat: fixture", "--summary", "reviewed"]);
+    await control.release(["approve", "release-work", "--fingerprint", approval.fingerprint]);
+    if (change === "content") fs.writeFileSync(source, "unreviewed edit");
+    else if (change === "summary") f.issue().fields.summary = "Different request";
+    else if (change === "description") f.issue().fields.description = "Different requirements";
+    else if (change === "priority") f.issue().fields.priority = { id: "9" };
+    else Object.assign(f.issue().fields, { updated: "v2", comment: { comments: [{ body: "FYI" }] } });
+    if (change === "metadata") {
+      assert.equal((await control.release(["apply", "release-work", "--fingerprint", approval.fingerprint])).status, "APPLIED");
+      assert.equal(mutations.length, 2);
+    } else {
+      await assert.rejects(control.release(["apply", "release-work", "--fingerprint", approval.fingerprint]), /changed after release approval|Jira inputs changed/);
+      assert.deepEqual(mutations, []);
+    }
+    assert.equal(calls, 1); assert.equal(readJson(f.stateFile).tickets[0].runner.attempts, 1);
+  }
+});
 
 test("published DRAFT links in place with unchanged plans, default attempts and a new approval fingerprint", async t => {
   const f = fixture(t), before = f.request(["show", "work"]);
