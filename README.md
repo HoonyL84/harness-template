@@ -161,7 +161,7 @@ Harness Node CLI: 계약 검사, 상태·예산·승인·증거 관리
 ### 용어 정의: L4.5와 L5
 
 - **L4.5 (제한적 자동 수정, Bounded Auto-Fix):** 검증(`verify --full`) 실패 시 신규 파일 생성·삭제·이름 변경이나 보호 경로 침범 없이, **허용된 소스/테스트 루트(`src/`, `app/`, `lib/`, `test/`, `tests/`, `__tests__/`) 내 기존 파일**에서 패치 크기 예산(최대 5개 파일, 100KB) 이내로만 자동 수정을 재시도하는 기능입니다([`auto-fix-policy.md`](docs/design-docs/auto-fix-policy.md), [`autonomy-recover-command.js`](tools/harness-cli/autonomy-recover-command.js)).
-- **L5 (승인 패스 자율 루프, Fast-Track Autonomy):** 사전 승인된 저위험 티켓의 범위(`owned_paths`)와 재시도 예산(기본 최대 3회 시도) 안에서 **구현 → 검증 → 재시도를 연속 수행**하고, 검증을 통과하면 중간 사람 검수 단계를 건너뛰어 최종 Git 반영 승인 단계로 직행하는 모드입니다(러너 전역 하드 캡은 테스트 픽스처·보일러플레이트 동반 수정을 고려해 최대 20개 파일 / 500KB로 두되, 실제 수정 범위는 티켓별 승인 경로로 좁게 제한됨; [`l5-autonomy-policy.md`](docs/design-docs/l5-autonomy-policy.md), [`agent-runner.js`](tools/harness-cli/agent-runner.js)).
+- **L5 (승인 패스 자율 루프, Fast-Track Autonomy):** 사전 승인된 저위험 티켓의 범위와 재시도 예산(기본 최대 3회 시도) 안에서 **구현 → 검증 → 재시도를 연속 수행**하고, 검증을 통과하면 중간 사람 검수 단계를 건너뛰어 최종 Git 반영 승인 단계로 직행하는 모드입니다(러너 전역 하드 캡은 테스트 픽스처·보일러플레이트 동반 수정을 고려해 최대 20개 파일 / 500KB로 두되, 실제 수정 범위는 보호·고위험 경로를 제외한 허용 경로(멀티에이전트 시 owned_paths)로 제한됨; [`l5-autonomy-policy.md`](docs/design-docs/l5-autonomy-policy.md), [`agent-runner.js`](tools/harness-cli/agent-runner.js)).
 
 ### 1. 두 가지 실행 모드 비교 (Strict vs 승인 패스)
 
