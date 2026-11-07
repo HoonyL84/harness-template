@@ -44,10 +44,9 @@ test("Node CI enforces the configured coverage threshold", () => {
 });
 
 test("verification failures share one unconditional exit path", () => {
-  const source = read("tools/harness-cli/index.js");
+  const source = read("tools/harness-cli/verify-command.js");
   const verifyBody = source.slice(
-    source.indexOf("async function commandVerify"),
-    source.indexOf("function inferRole")
+    source.indexOf("async function commandVerify")
   );
   const failureExits = verifyBody.match(/process\.exit\(failedStep\.status\)/g) || [];
   assert.equal(failureExits.length, 1);

@@ -213,7 +213,7 @@ function fingerprintError(error) {
    - 문서를 `instructions(P0) → plan(P1) → context-file(P2) → active-task(P3) → design/ADR(P4~5) → working/semantic/procedural/episodic 메모리(P6~9)` 순으로 분류합니다.
    - 티켓의 `title`, `goal`, `scope`, `owned_paths`에서 추출한 3글자 이상 키워드 토큰이 후보 문서의 경로·본문에 매칭되는 횟수로 `relevance_score`를 계산해, 동일 계층 내에서 관련도가 높은 문서부터 **64KB(최대 12개 파일) 예산** 안에 채웁니다.
    - 필수 안전 계약(`AGENTS.md`, `safety-contract.md`, `PLANS.md`)은 `required: true`로 고정하며, 필수 문서만으로 예산이 초과되면 문서를 임의로 자르지 않고 에러로 중단합니다.
-2. **비신뢰 입력 정규식 필터 (`detectContextRisks`):** 외부 프로젝트 문서와 Jira/Confluence 본문은 `untrusted-project-input`으로 격리하고, 시스템 지시 무시(`policy-override`), 환경변수/키 유출(`secret-access`), 파괴적 명령 유도(`tool-escalation`) 패턴을 스캔합니다.
+2. **비신뢰 입력 격리와 패치 단계 2중 차단 (`detectContextRisks` + `validateRunnerPatch`):** 외부 프로젝트 문서와 Jira/Confluence 본문은 `untrusted-project-input`으로 태깅하고 시스템 지시 무시(`policy-override`)·환경변수 유출(`secret-access`)·파괴적 명령 유도(`tool-escalation`) 패턴을 1차 스캔합니다. 설령 모델이 우회 인젝션에 속아 악성 응답을 생성하더라도, 실제 파일·Git 반영은 패치 적용 단계(`validateRunnerPatch`)의 보호 경로 및 `owned_paths` 검사에서 차단합니다.
 3. **실패 이력 연동 모델 라우팅 (`resolveModelTier`):** 작업 역할(`architect / implementer / reviewer`), 위험도(`low / medium / high`), 중요도(`P0~P3`), 범위 크기(`scopeCount`), 그리고 **재시도 횟수(`attempt >= 2`) 및 수선 필요 여부(`repairRequired`)**를 조합해 `fast / standard / strong` 티어를 결정론적으로 선택합니다. 1차 시도 실패 후 재시도 시 상위 모델 티어로 자동 승격하며, 고위험 티켓에 `fast` 티어를 강제 지정하면 거부합니다.
 
 ---
@@ -381,10 +381,10 @@ node tools/harness-cli/skill-eval.js --skill code-review --cases
 
 | 책임 | 핵심 구현 | 설계 이유/절충 |
 | --- | --- | --- |
-| CLI·설정 | [index.js](tools/harness-cli/index.js), [config.js](tools/harness-cli/config.js) | 공통 Node 구현, 셸 래퍼는 호환용 |
+| CLI·설정·검증 | [index.js](tools/harness-cli/index.js), [config.js](tools/harness-cli/config.js), [verify-command.js](tools/harness-cli/verify-command.js), [single-repo-task-command.js](tools/harness-cli/single-repo-task-command.js) | 엔트리포인트(`index.js`)는 라우팅만 담당하고 명령군별 모듈 분리 |
 | 계획·입력 근거 | [planning-contract.js](tools/harness-cli/planning-contract.js), [planning-command.js](tools/harness-cli/planning-command.js), [request-plan.js](tools/harness-cli/request-plan.js) | 구조 검증과 의미 검수 분리 |
 | 컨텍스트 선별 | [agent-context.js](tools/harness-cli/agent-context.js), [project-context.js](tools/harness-cli/project-context.js) | P0~P9 우선순위 + 키워드 점수로 64KB 예산 내 압축, 필수 안전 계약 고정 |
-| 실행·서킷 브레이커 | [agent-runner.js](tools/harness-cli/agent-runner.js), [project-execution.js](tools/harness-cli/project-execution.js) | Lease·시도 선기록·에러 SHA-256 지문 비교(`fingerprintError`)·소유 경로 검사 |
+| 실행·서킷 브레이커 | [agent-runner.js](tools/harness-cli/agent-runner.js), [project-execution.js](tools/harness-cli/project-execution.js), [autonomy-recover-command.js](tools/harness-cli/autonomy-recover-command.js) | Lease·시도 선기록·에러 SHA-256 지문 비교(`fingerprintError`)·소유 경로 검사 |
 | 승인·Git 반영 | [control-plane-command.js](tools/harness-cli/control-plane-command.js), [governance-ledger.js](tools/harness-cli/governance-ledger.js) | 사람 검수와 단발 Git 승인 분리 |
 | 영속성 | [control-plane-state.js](tools/harness-cli/control-plane-state.js) | 원자적 파일 저장과 로컬 잠금 |
 | 게시·알림 | [operations-publish.js](tools/harness-cli/operations-publish.js), [runner-notifications.js](tools/harness-cli/runner-notifications.js) | 개발 결과와 외부 전달 실패 분리 |
@@ -401,10 +401,10 @@ node tools/harness-cli/skill-eval.js --skill code-review --cases
 
 - **다중 사용자 기능 미포함 (개인용 로컬 Control Plane):** 중앙 DB나 원격 인증 서버 없이 로컬 파일 잠금 기반으로 동작합니다. 다수의 개발자가 동시 접속하는 사내 플랫폼(IDP)으로 확장하려면 **사용자별 RBAC(역할 기반 접근 제어), 원격 중앙 잠금 서버(Distributed Lock), 조직 단위 SSO/서명 검증**이 추가로 필요합니다.
 - **통제 경계 (Managed CLI vs OS Sandbox):** 하네스 CLI(`runner`, `execution`, `release`)를 거치는 관리형 경로에서는 미승인 변경과 소유 경로 이탈을 차단하지만, OS 커널 수준의 보안 샌드박스가 아니므로 사용자가 터미널에서 직접 실행하는 raw `git commit/push`나 직접 파일 편집까지 물리적으로 막지는 않습니다. Fingerprint는 변경 탐지용 해시이지 전자서명이 아닙니다.
-- **승인자 신원:** Fingerprint와 로컬 이력만으로는 누가 승인했는지 암호학적으로 증명할 수 없습니다. 팀 감사 근거로 쓰려면 작성자 인증과 서명, 중앙 저장이 필요하며 현재는 미구현입니다(로컬 파일 쓰기 권한이 있는 주체가 원장과 지문을 함께 재작성하는 행위는 방어 대상 밖).
+- **승인자 신원 및 로컬 원장 위협 모델:** Fingerprint는 SHA-256 해시이지 비밀키 기반 HMAC이나 전자서명이 아니므로, 로컬 파일 쓰기 권한이 있는 주체가 원장과 지문을 함께 재작성하는 행위는 탐지하지 못합니다. 팀 감사 근거로 쓰려면 작성자 인증과 서명, 중앙 저장이 필요하며 현재는 미구현입니다.
 - **Fast-Track 안전성:** 승인 패스의 안전은 대상 프로젝트의 테스트 품질에 의존합니다. 현재는 티켓 단위 `risk`와 전역 설정으로만 제어하며, 프로젝트 프로필 단위의 허용 플래그나 최소 커버리지 강제는 없습니다. 테스트가 약한 프로젝트는 Strict 모드로 제한해야 합니다.
 - **AI 코어 및 평가 규모의 한계:** 컨텍스트 선별은 파일시스템 기반의 결정론적 우선순위·키워드 매칭(`selectTicketFiles`)으로 구현되어 있으며, AST 구문 파싱이나 임베딩 벡터 검색은 포함하지 않습니다. 또한 계획 평가(`planning-eval.js`)는 9개 고정 합성 사례와 인간 루브릭을 결합한 회귀 검증용이며, 대규모 온라인 LLM-as-a-Judge 파이프라인을 대체하지 않습니다.
-- **측정 근거의 분리:** 설계상 수동 승인 게이트 수 축소(`4단계 → 1단계`)나 자동화 테스트 통과(`374건`)는 아키텍처 및 계약 검증 지표입니다. 장기 실사용에서의 실제 업무 시간·토큰·비용 절감률은 프로젝트별 운영 로그에서 별도로 측정해야 합니다.
+- **측정 근거의 분리:** 설계상 수동 승인 게이트 수 축소(`4단계 → 1단계`)나 자동화 테스트 통과(`374건`)는 아키텍처 및 계약 검증 지표입니다. 장기 실사용에서의 실제 업무 시간·토큰·비용 절감률은 [실사용 운영 지표 정의 및 비교 양식](docs/project/PERSONAL_OPERATIONS_VALIDATION.md#실사용-운영-지표-정의-metric-definitions-및-비교-측정-양식)을 기준으로 프로젝트별 운영 로그에서 별도로 측정해야 합니다.
 - **다음 과제:** 프로젝트 프로필에 `fast_track_allowed` 플래그 및 최소 커버리지 기준 추가, 승인 기록에 작성자 서명 도입.
 
 ---
