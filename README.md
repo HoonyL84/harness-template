@@ -229,14 +229,17 @@ function fingerprintError(error) {
 
 ## 실제 사용 흐름
 
-사용자가 대화창에 자연어로 작업을 지시하면, AI는 바로 코드를 수정하지 않고 티켓 후보와 **위험도(`risk`), 재시도 횟수(`max_attempts`), 승인 패스(Fast-Track) 가능 여부**를 먼저 리턴합니다.
+> **사람은 대화창에서 '1번(자연어 업무 지시)'과 '3번(재시도·승인 패스 조건 컨펌)'만 말로 수행합니다.**  
+> JSON 스펙 작성과 `capture ➔ draft ➔ approve --prepare` 등의 CLI 상태 전이 명령은 사람이 터미널에 직접 타이핑하는 것이 아니라, [`AGENTS.md`](AGENTS.md) 규칙에 따라 **AI 에이전트가 백그라운드에서 자동 오케스트레이션**합니다.
 
-1. **사용자 요청:** *"광고 어트리뷰션(Last-Click) 도메인 및 단위 테스트를 추가하고, 배포 스크립트(`scripts/deploy.sh`)의 헬스체크 옵션도 같이 수정해줘."*
-2. **AI 티켓 후보 리턴 (경로 기반 위험도 분리 시연):**
+사용자가 대화창에 오늘 처리할 복수의 업무를 자연어로 한 번에 던지면, AI는 바로 코드를 수정하지 않고 티켓 후보와 **위험도(`risk`), 재시도 횟수(`max_attempts`), 승인 패스(Fast-Track) 가능 여부**를 먼저 브리핑합니다.
+
+1. **사용자 요청 (자연어 일괄 지시):** *"광고 어트리뷰션(Last-Click) 도메인 및 단위 테스트를 추가하고, 배포 스크립트(`scripts/deploy.sh`)의 헬스체크 옵션도 같이 수정해줘."*
+2. **AI 티켓 후보 브리핑 (경로 기반 위험도 분리 시연):**
    - `event-attribution-last-click` (`project_id: ad-server`, `risk: low`, `max_attempts: 3`, 대상 경로 `src/main/...`, `src/test/...` ➔ **승인 패스(Fast-Track) 권장**)
    - `deploy-script-check` (`project_id: ad-server`, `risk: high`, `max_attempts: 2`, 대상 경로 `scripts/deploy.sh` ➔ **단순 옵션 수정이라도 고위험 세그먼트(`scripts/`, `deploy`)에 해당하므로 Fast-Track 불가 및 Strict 수동 승인 강제**)
-3. **사람의 조건 조정 및 승인:** *"어트리뷰션 테스트 티켓은 승인 패스로 바로 진행하고, 배포 스크립트 티켓은 재시도 1회로 줄여서 내 검수 받고 진행해줘."*
-4. **하네스 통제 실행:** 지정된 재시도 예산과 승인 모드를 계획 JSON에 동결(`approve`)한 뒤, 격리된 worktree에서 구현 및 `verify --full` 검증을 수행합니다(만약 Fast-Track 티켓 실행 도중 `scripts/`나 `migrations/` 경로를 건드리면 즉시 `APPROVAL_REQUIRED`로 강등되어 멈춥니다).
+3. **사람의 실행 조건 조정 및 컨펌:** *"어트리뷰션 테스트 티켓은 승인 패스로 바로 진행하고, 배포 스크립트 티켓은 재시도 1회로 줄여서 내 검수 받고 진행해줘."*
+4. **AI 백그라운드 통제 실행:** AI가 컨펌받은 재시도 예산과 승인 모드를 계획 JSON에 동결하고 `request approve <id> --prepare`로 모든 티켓의 격리 worktree(`.worktrees/`)를 일괄 생성한 뒤, 구현 및 `verify --full` 검증을 수행합니다(만약 Fast-Track 티켓 실행 도중 `scripts/`나 `migrations/` 경로를 건드리면 즉시 `APPROVAL_REQUIRED`로 강등되어 멈춥니다).
 
 ### 계획에서 실행까지의 상태 전이
 
@@ -264,14 +267,15 @@ function fingerprintError(error) {
 <summary><b>백그라운드 CLI 상태 전이 및 컨텍스트/프로바이더 명령어 보기 (클릭)</b></summary>
 
 ```bash
-# 1. 계획 캡처·초안·검수·승인·격리 실행 준비
+# 1. AI가 백그라운드에서 수행하는 계획 캡처·초안·검수·일괄 승인 및 격리 실행 준비
 npm run harness -- request capture work-01 --input-file .harness/local/input.json
 npm run harness -- request draft work-01 --output-file .harness/local/output.json
 npm run harness -- request planning work-01
 npm run harness -- request planning-review work-01 --review-file .harness/local/review.json
-npm run harness -- request approve work-01
-npm run harness -- request ready work-01
-npm run harness -- execution prepare work-01
+npm run harness -- request approve work-01 --prepare
+
+# (개별 단계 디버깅 시: request approve -> request ready -> execution prepare 분리 호출 가능)
+```
 
 # 2. 컨텍스트 번들 및 프로바이더 상태 조회
 npm run harness -- context --json
