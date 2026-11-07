@@ -29,7 +29,12 @@ function resolveRetryLimit(ticket, cliCap = null) {
 }
 
 function fingerprintError(error) {
-  const normalized = String(error?.message || error || "unknown error").trim().replace(/\s+/g, " ");
+  const normalized = String(error?.message || error || "unknown error")
+    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*Z?/g, "<ts>")
+    .replace(/(?:[A-Za-z]:)?[\\/][\w.\-\\/]*(?:tmp|temp|worktrees|harness-runner-|\.gradle|build[\\/]reports)[\w.\-\\/]*/gi, "<path>")
+    .replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds)\b/gi, "<duration>")
+    .replace(/\s+/g, " ")
+    .trim();
   return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 
@@ -260,6 +265,17 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
 
       const project = registry.projects[claimedTicket.project_id];
       const profile = profiles[claimedTicket.project_id];
+      if ((options["fast-track"] || claimedTicket.fast_track) && (!profile.execution_policy?.fast_track_allowed || claimedTicket.risk !== "low")) {
+        updateJsonLocked(filePath, null, (current) => {
+          const ticket = current.tickets.find((item) => item.ticket_id === claimedTicket.ticket_id);
+          ticket.status = "BLOCKED";
+          ticket.error = `Fast-track execution requires fast_track_allowed profile and low-risk ticket: ${claimedTicket.ticket_id}`;
+          ticket.runner = { ...ticket.runner, lease_id: null, failed_at: new Date(now()).toISOString() };
+          queueRunnerOutcome(current, ticket);
+          return finalizeExecutionState(current, new Date(now()).toISOString());
+        });
+        break;
+      }
       const baselineFingerprint = reviewFingerprint(claimedTicket.worktree);
       if (!baselineFingerprint) {
         updateJsonLocked(filePath, null, (current) => {
@@ -274,7 +290,7 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
       }
       let completed = false;
       let lastError;
-      let previousErrorFingerprint = claimedTicket.runner.last_error_fingerprint || null;
+      const seenErrorFingerprints = new Set();
       const failedRepairs = (claimedTicket.runner.history || []).filter(item => item.status === "FAILED" && item.patch_sha256);
       let repairRequired = failedRepairs.length > 0;
       let retryFeedback = repairRequired ? failedRepairs.at(-1).error : null;
@@ -369,11 +385,12 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
           completed = true;
         } catch (error) {
           lastError = error;
+          const attemptErrorFingerprint = fingerprintError(error);
           updateJsonLocked(filePath, null, (state) => {
             const ticket = state.tickets.find((item) => item.ticket_id === claimedTicket.ticket_id);
             if (ticket?.runner?.lease_id !== leaseId) throw new Error(`Runner lease changed for ticket: ${claimedTicket.ticket_id}`);
-            Object.assign(ticket.runner.history.at(-1), { status: "FAILED", error: error.message, finished_at: new Date(now()).toISOString() });
-            ticket.runner.last_error_fingerprint = fingerprintError(error);
+            Object.assign(ticket.runner.history.at(-1), { status: "FAILED", error: error.message, error_fingerprint: attemptErrorFingerprint, finished_at: new Date(now()).toISOString() });
+            ticket.runner.last_error_fingerprint = attemptErrorFingerprint;
             return state;
           });
           if (error.code === "APPROVAL_REQUIRED") {
@@ -398,11 +415,11 @@ function createAgentRunnerCommand({ root, parseArgs, invokeAgent, notify, review
           if (error.noRetry || ["EACCES", "EPERM", "AUTHENTICATION_REQUIRED", "BUDGET_EXHAUSTED"].includes(error.code)
               || [401, 403].includes(error.status)) break;
           const currentErrorFingerprint = fingerprintError(lastError);
-          if (claimedTicket.retry_policy?.stop_on_same_error !== false && currentErrorFingerprint === previousErrorFingerprint) {
+          if (claimedTicket.retry_policy?.stop_on_same_error !== false && seenErrorFingerprints.has(currentErrorFingerprint)) {
             lastError = new Error(`${lastError.message}; repeated error stopped further retries`);
             break;
           }
-          previousErrorFingerprint = currentErrorFingerprint;
+          seenErrorFingerprints.add(currentErrorFingerprint);
           retryFeedback = `Attempt ${claimedTicket.runner.attempts + attempt} failed. Correct only this failure while preserving the approved scope.\n${lastError.message}`;
           updateJsonLocked(filePath, null, (state) => {
             const ticket = state.tickets.find((item) => item.ticket_id === claimedTicket.ticket_id);

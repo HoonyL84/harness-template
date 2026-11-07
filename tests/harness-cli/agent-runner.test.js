@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { buildRunnerPrompt, createAgentRunnerCommand, reconcileExpiredLeases, resolveRetryLimit, validateRunnerPatch } = require("../../tools/harness-cli/agent-runner");
+const { buildRunnerPrompt, createAgentRunnerCommand, fingerprintError, reconcileExpiredLeases, resolveRetryLimit, validateRunnerPatch } = require("../../tools/harness-cli/agent-runner");
 const { buildExecutionState } = require("../../tools/harness-cli/project-execution");
 const { approveOnboardingProfile, createOnboardingProfile, writeOnboardingProfile } = require("../../tools/harness-cli/project-onboarding");
 const { emptyRegistry, writeRegistry } = require("../../tools/harness-cli/project-registry");
@@ -297,11 +297,69 @@ test("runner exhausts bounded retries and records BLOCKED evidence", async () =>
 test("runner enforces ticket retry policy, CLI caps, and repeated-error early stop", async () => {
   const first = fixture({ retryPolicy: { max_attempts: 5, stop_on_same_error: true } });
   let repeatedAttempts = 0;
-  const repeated = createAgentRunnerCommand({ root: first.root, parseArgs, invokeAgent: async () => { repeatedAttempts += 1; throw new Error("same provider failure"); }, notify: async () => {}, reviewFingerprint: () => "baseline", runCommand: () => ({ status: 0 }), runGit: () => ({ status: 0 }), tokenizeCommand: (value) => value.split(" "), log: () => {} });
+  const repeated = createAgentRunnerCommand({ root: first.root, parseArgs, invokeAgent: async () => { repeatedAttempts += 1; throw new Error(`2026-11-07T18:30:0${repeatedAttempts}.123Z fail in /tmp/worktrees/run-${repeatedAttempts}/test.js after ${repeatedAttempts * 15}ms`); }, notify: async () => {}, reviewFingerprint: () => "baseline", runCommand: () => ({ status: 0 }), runGit: () => ({ status: 0 }), tokenizeCommand: (value) => value.split(" "), log: () => {} });
   const repeatedState = await repeated(["run", "work", "--max-attempts", "5"]);
   assert.equal(repeatedAttempts, 2);
   assert.equal(repeatedState.tickets[0].runner.attempts, 2);
   assert.match(repeatedState.tickets[0].error, /repeated error/);
+  assert.equal(
+    fingerprintError(new Error("2026-11-07T18:00:00Z Failed in C:\\temp\\worktrees\\a\\foo.js after 12ms")),
+    fingerprintError(new Error("2026-11-07T19:59:59.999Z Failed in /tmp/worktrees/b/bar.js after 450 ms"))
+  );
+  assert.equal(
+    fingerprintError(new Error("> Task :test FAILED\nAdAttributionServiceTest > shouldCalculateRoas() FAILED\n  org.opentest4j.AssertionFailedError: expected: <200.0> but was: <150.0>\n  See report at: C:\\Users\\dev\\Ad-Server-Engine\\build\\reports\\tests\\test\\index.html\n  Daemon cache: /home/runner/.gradle/caches/8.10/workerMain\nBUILD FAILED in 1.4s")),
+    fingerprintError(new Error("> Task :test FAILED\nAdAttributionServiceTest > shouldCalculateRoas() FAILED\n  org.opentest4j.AssertionFailedError: expected: <200.0> but was: <150.0>\n  See report at: /var/lib/jenkins/workspace/build/reports/tests/test/index.html\n  Daemon cache: C:\\Users\\dev\\.gradle\\caches\\8.10\\workerMain\nBUILD FAILED in 890ms"))
+  );
+
+  const oscillating = fixture({ retryPolicy: { max_attempts: 5, stop_on_same_error: true } });
+  let oscillatingAttempts = 0;
+  const errors = ["assertion A failed", "assertion B failed", "assertion A failed", "assertion C failed"];
+  const oscRunner = createAgentRunnerCommand({ root: oscillating.root, parseArgs, invokeAgent: async () => { const msg = errors[oscillatingAttempts++]; throw new Error(msg); }, notify: async () => {}, reviewFingerprint: () => "baseline", runCommand: () => ({ status: 0 }), runGit: () => ({ status: 0 }), tokenizeCommand: (value) => value.split(" "), log: () => {} });
+  const oscState = await oscRunner(["run", "work", "--max-attempts", "5"]);
+  assert.equal(oscillatingAttempts, 3);
+  assert.match(oscState.tickets[0].error, /repeated error/);
+
+  // Human recovery reset: resuming a ticket in a new runner pass resets the in-pass fingerprint Set
+  const resumedState = JSON.parse(fs.readFileSync(path.join(oscillating.root, ".harness/local/executions/work.json"), "utf8"));
+  resumedState.tickets[0].status = "PREPARED";
+  resumedState.tickets[0].error = null;
+  fs.writeFileSync(path.join(oscillating.root, ".harness/local/executions/work.json"), JSON.stringify(resumedState));
+  let postRecoveryCalls = 0;
+  const resumedRunner = createAgentRunnerCommand({
+    root: oscillating.root,
+    parseArgs,
+    invokeAgent: async () => {
+      if (++postRecoveryCalls === 1) throw new Error("assertion A failed");
+      throw new Error("assertion D failed");
+    },
+    notify: async () => {},
+    reviewFingerprint: () => "baseline",
+    runCommand: () => ({ status: 0 }),
+    runGit: () => ({ status: 0 }),
+    tokenizeCommand: (value) => value.split(" "),
+    log: () => {}
+  });
+  await resumedRunner(["run", "work", "--max-attempts", "5"]);
+  assert.equal(postRecoveryCalls, 2);
+
+  // Fast-track execution gate before model invocation
+  const disallowedFt = fixture({ ticketMetadata: { risk: "low" } });
+  let ftModelCalls = 0;
+  const ftRunner = createAgentRunnerCommand({
+    root: disallowedFt.root,
+    parseArgs,
+    invokeAgent: async () => { ftModelCalls += 1; return "diff --git a/src/a.js b/src/a.js\n"; },
+    notify: async () => {},
+    reviewFingerprint: () => "baseline",
+    runCommand: () => ({ status: 0 }),
+    runGit: () => ({ status: 0 }),
+    tokenizeCommand: (value) => value.split(" "),
+    log: () => {}
+  });
+  const ftBlocked = await ftRunner(["run", "work", "--fast-track"]);
+  assert.equal(ftModelCalls, 0);
+  assert.equal(ftBlocked.tickets[0].status, "BLOCKED");
+  assert.match(ftBlocked.tickets[0].error, /fast_track_allowed/);
 
   const second = fixture({ retryPolicy: { max_attempts: 5, stop_on_same_error: false } });
   let cappedAttempts = 0;

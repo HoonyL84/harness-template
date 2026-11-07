@@ -22,7 +22,8 @@ function fingerprintProfile(profile) {
   return crypto.createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
 
-function createOnboardingProfile(project, diagnosis, contextFiles, warnings, now = new Date().toISOString()) {
+function createOnboardingProfile(project, diagnosis, contextFiles, warnings, now = new Date().toISOString(), policyOptions = {}) {
+  const fastTrackAllowed = Boolean(policyOptions.fastTrackAllowed);
   const profile = {
     schema_version: SCHEMA_VERSION,
     project_id: project.id,
@@ -50,7 +51,8 @@ function createOnboardingProfile(project, diagnosis, contextFiles, warnings, now
       require_clean_execution_tree: true,
       preserve_original_worktree: true,
       require_plan_approval: true,
-      require_commit_approval: true
+      require_commit_approval: true,
+      ...(fastTrackAllowed ? { fast_track_allowed: true } : {})
     }
   };
   profile.content_fingerprint = fingerprintProfile(profile);
@@ -78,13 +80,25 @@ function writeOnboardingProfile(profilePath, profile) {
   return updateJsonLocked(profilePath, null, () => profile);
 }
 
-function approveOnboardingProfile(existing, current, now = new Date().toISOString()) {
+function approveOnboardingProfile(existing, current, now = new Date().toISOString(), policyOptions = {}) {
   if (!existing) throw new Error("Run project onboard first and review the generated profile");
   if (existing.status !== "DRAFT") throw new Error("Only a DRAFT onboarding profile can be approved");
   if (existing.content_fingerprint !== current.content_fingerprint) {
     throw new Error("Project or context changed after onboarding. Regenerate and review the profile before approval");
   }
-  const approved = { ...existing, status: "APPROVED", approved_at: now };
+  const fastTrackAllowed = policyOptions.fastTrackAllowed !== undefined
+    ? Boolean(policyOptions.fastTrackAllowed)
+    : Boolean(existing.execution_policy?.fast_track_allowed);
+  const approved = {
+    ...existing,
+    status: "APPROVED",
+    approved_at: now,
+    execution_policy: {
+      ...existing.execution_policy,
+      ...(fastTrackAllowed ? { fast_track_allowed: true } : {})
+    }
+  };
+  if (!fastTrackAllowed) delete approved.execution_policy.fast_track_allowed;
   approved.content_fingerprint = fingerprintProfile(approved);
   return approved;
 }

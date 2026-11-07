@@ -114,3 +114,76 @@ test("managed release executes only the fingerprint-bound one-time Git operation
   currentFingerprint = "new-verified-content";
   assert.throws(() => commands.release(["request", "managed", "--approval", "unreviewed-commit", "--summary", "new change", "--operation", "commit", "--message", "feat: more"]), /accepted user review/);
 });
+
+test("managed release allows fast-track commit only when profile has fast_track_allowed=true and ticket is low-risk", () => {
+  const { approveOnboardingProfile, createOnboardingProfile, writeOnboardingProfile } = require("../../tools/harness-cli/project-onboarding");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-fast-track-release-"));
+  const local = path.join(root, ".harness", "local");
+  const fingerprint = () => "verified-fast-track";
+  reviewReadyFixture(root, "ft-work", [{ ticket_id: "low-ticket", project_id: "demo", goal: "Low risk unit test", risk: "low", verification: ["npm test"] }], fingerprint);
+  fs.writeFileSync(path.join(local, "projects.json"), JSON.stringify({ schema_version: "1.0", projects: { demo: { id: "demo", path: path.join(root, "demo"), stacks: ["node"] } } }));
+  const diagnosis = { path: path.join(root, "demo"), head: "abc", branch: "main", dirty: false, changed_paths: 0, worktree_fingerprint: "clean", remotes: {}, stacks: ["node"], verify_commands: ["npm test"] };
+  const draftDisallowed = createOnboardingProfile({ id: "demo" }, diagnosis, [], []);
+  writeOnboardingProfile(path.join(local, "profiles", "demo.json"), approveOnboardingProfile(draftDisallowed, draftDisallowed));
+  const logs = [];
+  const commands = createControlPlaneCommands({
+    root,
+    parseArgs,
+    reviewFingerprint: fingerprint,
+    runGit: (args) => ({ status: 0, stdout: args[0] === "branch" ? "codex/ft-work/low-ticket\n" : args[0] === "status" ? " M source.txt\n" : "sha123\n", stderr: "" }),
+    notify: async () => ({ sent: 0 }),
+    log: (line) => logs.push(line)
+  });
+  // Fail-closed when fast_track_allowed is not enabled on the profile
+  assert.throws(() => commands.release(["request", "ft-work", "--approval", "ft-blocked", "--summary", "try fast track", "--operation", "commit", "--message", "test: add unit test"]), /accepted user review/);
+
+  // Enable fast_track_allowed on onboarding profile and update plan/execution profile_fingerprint
+  const draftAllowed = createOnboardingProfile({ id: "demo" }, diagnosis, [], [], "2026-01-01T00:00:00Z", { fastTrackAllowed: true });
+  // Defect 2 guard: unapproved DRAFT profile with fast_track_allowed=true must NOT bypass review
+  writeOnboardingProfile(path.join(local, "profiles", "demo.json"), draftAllowed);
+  assert.throws(() => commands.release(["request", "ft-work", "--approval", "ft-draft-blocked", "--summary", "draft profile must fail", "--operation", "commit", "--message", "test: draft"]), /accepted user review/);
+
+  const approvedAllowed = approveOnboardingProfile(draftAllowed, draftAllowed, "2026-01-01T00:01:00Z", { fastTrackAllowed: true });
+  writeOnboardingProfile(path.join(local, "profiles", "demo.json"), approvedAllowed);
+  // Defect 2 guard: approved profile whose fingerprint does not match the ticket's bound profile_fingerprint must NOT bypass review
+  assert.throws(() => commands.release(["request", "ft-work", "--approval", "ft-unbound-blocked", "--summary", "unbound profile must fail", "--operation", "commit", "--message", "test: unbound"]), /accepted user review/);
+
+  const plan = approveRequestPlan(createRequestPlan({
+    requestId: "ft-work",
+    goal: "Approved work",
+    tickets: [{ ticket_id: "low-ticket", project_id: "demo", goal: "Low risk unit test", risk: "low", verification: ["npm test"] }],
+    profiles: { demo: approvedAllowed }
+  }));
+  const state = JSON.parse(fs.readFileSync(path.join(local, "executions", "ft-work.json"), "utf8"));
+  state.request_fingerprint = plan.content_fingerprint;
+  state.tickets[0].profile_fingerprint = approvedAllowed.content_fingerprint;
+  state.tickets[0].risk = "low";
+  state.tickets[0].verification.changed_paths = ["src/test.js"];
+  fs.writeFileSync(path.join(local, "requests", "ft-work.json"), JSON.stringify(plan));
+  fs.writeFileSync(path.join(local, "executions", "ft-work.json"), JSON.stringify(state));
+
+  // Defect 1 guard: explicit changes-requested review must block Fast-Track both at request and approve/apply time
+  const history = createHistoryCommand({ root, parseArgs, reviewFingerprint: fingerprint, log: () => {} });
+  const review = (result, reason) => history(["review", "--project", "demo", "--request", "ft-work", "--ticket", "low-ticket", "--fingerprint", "verified-fast-track", "--result", result, "--reason", reason]);
+  review("changes-requested", "Rejected by human reviewer");
+  assert.throws(() => commands.release(["request", "ft-work", "--approval", "ft-rejected-req", "--summary", "must reject", "--operation", "commit", "--message", "test: add unit test"]), /accepted user review/);
+
+  // Clear review history to simulate unreviewed Fast-Track request, then reject before approve/apply
+  fs.rmSync(path.join(local, "history", "ledger.json"), { force: true });
+  const pendingBeforeReject = commands.release(["request", "ft-work", "--approval", "ft-rejected-later", "--summary", "fast track requested", "--operation", "commit", "--message", "test: add unit test"]);
+  assert.equal(pendingBeforeReject.tickets[0].review_event_id, "FAST_TRACK_AUTO_PASS");
+  review("changes-requested", "Reviewer found issue before release approval");
+  assert.throws(() => commands.release(["approve", "ft-rejected-later", "--fingerprint", pendingBeforeReject.fingerprint]), /accepted user review/);
+  fs.rmSync(path.join(local, "history", "ledger.json"), { force: true });
+  commands.release(["approve", "ft-rejected-later", "--fingerprint", pendingBeforeReject.fingerprint]);
+  writeOnboardingProfile(path.join(local, "profiles", "demo.json"), draftAllowed);
+  assert.throws(() => commands.release(["apply", "ft-rejected-later", "--fingerprint", pendingBeforeReject.fingerprint]), /approved, fingerprint-bound/);
+  writeOnboardingProfile(path.join(local, "profiles", "demo.json"), approvedAllowed);
+
+  const pending = commands.release(["request", "ft-work", "--approval", "ft-commit", "--summary", "fast track ready", "--operation", "commit", "--message", "test: add unit test"]);
+  assert.equal(pending.tickets[0].review_event_id, "FAST_TRACK_AUTO_PASS");
+  assert.ok(logs.some((line) => line.includes("[RELEASE_SUMMARY] demo:low-ticket | changed_files=1 | owned_paths=PASS") && line.includes("mode=fast-track")));
+  commands.release(["approve", "ft-commit", "--fingerprint", pending.fingerprint]);
+  const applied = commands.release(["apply", "ft-commit", "--fingerprint", pending.fingerprint]);
+  assert.equal(applied.status, "APPLIED");
+});

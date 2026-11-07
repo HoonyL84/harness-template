@@ -1,13 +1,15 @@
 # Harness Engineering Template
 
 AI 코딩 에이전트(Cursor, Claude Code 등)를 다중 저장소 작업에 사용할 때 발생하는 **맥락 유실, 범위 이탈 수정, 검증 누락을 통제하기 위한 파일 기반 AI Engineering Control Plane**입니다.  
-외부 DB 서버 없이 개인 개발자의 로컬 다중 저장소 환경에서 즉시 동작하며, 여기서 구현한 **계획 지문 동결·격리 실행·감사 원장 구조**는 팀 단위 에이전트 거버넌스로 그대로 일반화됩니다.
+외부 DB 서버 없이 개인 개발자의 로컬 다중 저장소 환경에서 즉시 동작합니다. 여기서 구현한 **계획 지문 동결·격리 실행·감사 원장 구조**는 팀 단위 에이전트 거버넌스로 일반화 가능한 구조이며, 다중 사용자 팀 환경으로 확장하려면 RBAC·원격 중앙 잠금·작성자 서명 검증이 추가로 필요합니다.
+
+> **책임 범위 선언:** 하네스의 책임 범위는 검증과 감사 기록을 갖춘 **브랜치/PR 생성 및 병합 준비까지**입니다. 실제 서비스 운영 배포(CD)는 범위 밖이며, Git push나 PR 병합을 운영 배포 완료로 간주하지 않습니다.
 
 - **문제 (Problem):** 대화창 중심의 AI 개발은 승인한 계획과 실제 수정 파일의 일치 여부, 테스트 통과 근거, 실패 원인이 구조화된 기록으로 남지 않고, 반대로 모든 단계를 수동 검수하면 저위험 반복 작업에서 승인 피로도(Approval Fatigue)가 발생합니다.
-- **해법 (Solution):** 작업을 **계획·승인·격리 실행·검증·검수·릴리스·이력**의 원자적 상태 전이로 분리하되, 저위험 작업은 허용 경로(`owned_paths`)·완전 검증(`verify --full`)·재시도 예산 안에서 중간 검수를 건너뛰는 **승인 패스(Fast-Track)**로 실행합니다.
+- **해법 (Solution):** 작업을 **계획·승인·격리 실행·검증·검수·릴리스·이력**의 원자적 상태 전이로 분리하되, 저위험 작업은 승인된 범위·완전 검증(`verify --full`)·재시도 예산 안에서 중간 검수를 건너뛰는 **승인 패스(Fast-Track)**로 실행합니다.
 - **핵심 수치 (Verified Metrics):**
-  1. **설계상 수동 승인 게이트 축소 (`4단계 → 1단계`):** 저위험 티켓에서 `계획 → 구현 → 검수 → 릴리스` 4번의 수동 확인을 **최종 Git 반영 승인 1회**로 축소 (고위험 변경·동일 에러 2회 반복 시 즉시 `BLOCKED` 강등).
-  2. **검증 표본 (`66개 완료 티켓 / 374개 자동화 테스트`):** 단일 저장소 완료 티켓 **66건**(`.harness/tasks/archive/`), 계약·장애 주입 테스트 **374건**(`tests/harness-cli/`), 다중 프로젝트(Java/Node) 및 Jira·Confluence 실계정 리허설 통과.
+  1. **설계상 수동 승인 게이트 축소 (`4단계 → 2단계`):** 저위험 티켓에서 `계획 승인 → 구현 착수 → 결과 검수 → Git 릴리스 승인` 4번의 수동 확인 중 중간 2단계를 생략하고 **초기 계획 승인과 최종 Git 반영 승인 2회**로 축소 (고위험 경로 침범·동일 에러 2회 반복 시 즉시 `BLOCKED` 강등, 프로젝트 프로필의 `fast_track_allowed: true` 명시 승인 필요).
+  2. **검증 모수 구분 (`외부 실프로젝트 3건 / 다중 저장소 리허설 3건 / 자체 개발 66건 / 자동화 테스트 375건`):** 외부 Java/Spring 프로젝트(`Ad-Server-Engine`) 실코드 병합 **2개 티켓** + 고위험 경로(`scripts/deploy.sh`) 침범 시 서킷 브레이커 실발동 격리 **1개 티켓**, 분리된 다중 Git 저장소(`ads`·`payments`) 연동·차단 리허설 **3개 티켓**, 하네스 자체 개발 완료 티켓 **66건**(`.harness/tasks/archive/`, 중복 없음), 계약·장애 주입 자동화 테스트 **375건**(`tests/harness-cli/`).
   3. **결정론적 컨텍스트 예산 (`티켓당 64KB / 최대 12개 파일`):** 필수 안전 계약을 보존하면서 키워드 적합도(`relevance_score`) 기반으로 문서를 선별하고, 예산 초과 시 임의 절단 대신 즉시 중단.
 
 ```text
@@ -16,9 +18,9 @@ AI 코딩 에이전트(Cursor, Claude Code 등)를 다중 저장소 작업에 �
  2단계: 승인 (Human Gate)               (implementer)     5단계: 검수 (reviewer / 승인 패스)    7단계: 이력 (recorder/memory)
 ```
 
-- **왜 만들었나:** 반복되는 맥락 전달·작업 추적·검증 근거 정리 → [해결하는 문제](#해결하는-문제) / [실측 검증 요약](#실측-검증-요약-및-실제-실행-산출물)
+- **왜 만들었나:** 반복되는 맥락 전달·작업 추적·검증 근거 정리 → [실측 검증 요약](#실측-검증-요약-및-실제-실행-산출물) / [해결하는 문제](#해결하는-문제)
 - **어떻게 통제하나:** 승인 패스 조건, 서킷 브레이커, 핵심 알고리즘 → [자율성 레벨과 승인 패스](#자율성-레벨과-승인-패스-bounded-autonomy) / [핵심 알고리즘](#핵심-알고리즘-경로-통제컨텍스트-선별에러-지문화)
-- **어디까지 보장하나:** 코드로 강제하는 경계와 미지원 범위(다중 사용자 RBAC 등) → [지원 범위와 한계](#지원-범위와-한계)
+- **어디까지 보장하나:** 코드로 강제하는 경계와 미지원 범위(런타임 샌드박스·RBAC 등) → [지원 범위와 한계](#지원-범위와-한계)
 
 ---
 
@@ -44,54 +46,54 @@ AI 코딩 에이전트(Cursor, Claude Code 등)를 다중 저장소 작업에 �
 
 ## 실측 검증 요약 및 실제 실행 산출물
 
-설계상의 게이트 축소(`4단계 → 1단계`)와 별개로, 이 저장소에서 실제로 실행·검증된 기록([`PERSONAL_OPERATIONS_VALIDATION.md`](docs/project/PERSONAL_OPERATIONS_VALIDATION.md))은 다음과 같습니다.
+실제 프로젝트 적용 기록, 하네스 자체 개발 기록, 그리고 장애 주입 자동화 테스트 기록은 서로 다른 검증 근거이므로 아래와 같이 구분합니다([`PERSONAL_OPERATIONS_VALIDATION.md`](docs/project/PERSONAL_OPERATIONS_VALIDATION.md)).
 
-| 검증 범주 | 표본 및 범위 (`n`) | 통과 결과 | 검증 내용 및 중단(BLOCKED) 사유 확인 | 근거 위치 |
+| 검증 범주 | 표본 및 범위 (`n`) | 결과 | 중단(`BLOCKED`) 발동 건수 및 검증 내용 | 근거 위치 |
 | :--- | :--- | :--- | :--- | :--- |
-| **단일 저장소 아카이브 티켓** | **66건** | **66 / 66 완료** | 하네스 코어·역할·평가지표·런타임 구현 및 `verify --full` 통과 이력 | [`.harness/tasks/archive/`](.harness/tasks/archive/) |
-| **계약·장애 주입 자동화 테스트** | **374건** (42개 스위트) | **374 / 374 PASS** | Lease 동시성 충돌, 동일 에러 2회 반복(`same-error-repeat`), 고위험 경로(`APPROVAL_REQUIRED`), 지문 불일치, 원격 응답 유실(`SENDING`) 차단 검증 | [`tests/harness-cli/`](tests/harness-cli/) |
-| **다중 프로젝트 실코드 검증** | **3개 저장소 / 6개 티켓** | **전 건 검증 통과** | `harness-template`(Node), `ad-server-engine`(Java 21/Spring), `harness-payment-service` 간 티켓 분해 및 단위 테스트(15건 등) 통과 | `.harness/local/requests/` |
-| **계획 품질 루브릭 평가** | **9개 고정 사례** | **9 / 9 PASS** | 요구사항 분해, 선행 의존성, 범위 외 수정 억제, 필수 질문 누락 여부 채점 | [`planning-eval.js`](tools/harness-cli/planning-eval.js) |
-| **실계정 외부 연동 리허설** | **Jira 2건 · Confluence 2건** | **생성·조회·연결 확인** | 실제 Atlassian 클라우드 계정 대상 티켓/문서 게시 및 로컬 원장 대조 | [`PERSONAL_OPERATIONS_VALIDATION.md`](docs/project/PERSONAL_OPERATIONS_VALIDATION.md) |
+| **1. 외부 실프로젝트 적용** | **외부 저장소 1곳 (`ad-server`) / 3개 티켓** | **기능 병합 2건 / 서킷 브레이커 차단 1건** | **실발동 1건 (`APPROVAL_REQUIRED`, 가드 작동 확인용 의도적 유도).** `Ad-Server-Engine`(Java 21/Spring) 도메인·어트리뷰션 2건 단위 테스트(15/15) 통과 및 GitHub PR #1(`b687703`) 병합 + `scripts/deploy.sh` 수정 유도 티켓 1건 1차 시도에서 즉시 `BLOCKED` 격리 확인 | `.harness/local/requests/ad-domain-ml-upgrade.json`, `ad-server-deploy-guard-check.json` |
+| **2. 다중 저장소 연동·차단 리허설** | **분리 저장소 2곳 (`ads`, `payments`) / 3개 티켓** | **정상 연쇄 2건 통과 / 실패 주입 1건 차단** | `ads` ➔ `payments` 선행 SHA 의존성 통과(2건) 및 `payments:fail` 서킷 브레이커(`BLOCKED`) 격리 확인(1건) | `.harness/local/simulations/`, [`OPERATIONS_REHEARSAL_VALIDATION.md`](docs/project/OPERATIONS_REHEARSAL_VALIDATION.md) |
+| **3. 실계정 외부 연동 리허설** | **Jira 2건 · Confluence 2건** | **생성·조회·연결 확인** | **실발동 0건.** 개인 Atlassian 클라우드 계정 대상 실제 티켓/문서 게시 및 로컬 원장 대조 | [`PERSONAL_OPERATIONS_VALIDATION.md`](docs/project/PERSONAL_OPERATIONS_VALIDATION.md) |
+| **4. 하네스 자체 개발 티켓** | **`harness-template` 66건** (아카이브) | **66 / 66 완료** | 하네스 코어·역할·평가지표·런타임 기능을 개발하며 수행한 단일 저장소 티켓 및 `verify --full` 통과 기록 | [`.harness/tasks/archive/`](.harness/tasks/archive/) |
+| **5. 계약·장애 주입 자동화 테스트** | **375건** (42개 스위트) | **375 / 375 PASS** | 서킷 브레이커(`same-error-repeat`, `A → B → A` 진동 차단), 고위험 경로(`APPROVAL_REQUIRED`), `fast_track_allowed` 프로필 게이트, Lease 충돌, 응답 유실(`SENDING`) 차단 검증 | [`tests/harness-cli/`](tests/harness-cli/) |
+| **6. 계획 품질 루브릭 평가** | **9개 고정 합성 사례** | **9 / 9 PASS** | 요구사항 분해, 선행 의존성, 범위 외 수정 억제, 필수 질문 누락 여부 채점 | [`planning-eval.js`](tools/harness-cli/planning-eval.js) |
 
 <details>
-<summary><b>실제 생성된 멀티 프로젝트 티켓 JSON 및 검증 기록 예시 보기 (클릭)</b></summary>
+<summary><b>실제 멀티 프로젝트 요청 JSON 발췌 및 상태 전이·검증 기록 보기 (클릭)</b></summary>
 
-아래는 `ad-server-engine` 저장소의 2-Tier 광고 매칭 고도화 요청에서 생성·검증된 실제 티켓 스펙(`.harness/local/requests/ad-domain-ml-upgrade.json` 발췌)과 실행 검증 결과입니다.
+아래는 `ad-server`(`Ad-Server-Engine` 저장소) 고도화 요청(`.harness/local/requests/ad-domain-ml-upgrade.json`)에 기록된 실제 저위험 티켓 스펙 원문 발췌와 상태 전이 로그입니다.
 
 ```json
 {
-  "ticket_id": "ad-2tier-matching",
-  "project_id": "ad-server-engine",
-  "title": "1단계: 2-Tier 매칭 고도화 (LLM Query Expansion & Floor Price 필터)",
-  "status": "REVIEW_READY",
-  "priority": "P0",
-  "risk": "medium",
-  "execution_mode": "fast-track-eligible",
+  "ticket_id": "event-attribution-last-click",
+  "project_id": "ad-server",
+  "ticket_kind": "development",
+  "priority": "P1",
+  "risk": "low",
+  "risk_source": "explicit",
+  "risk_reason": "기존 노출/클릭 수집 파이프라인을 변경하지 않고 독립된 도메인 서비스와 단위 테스트를 추가한다.",
+  "labels": ["어트리뷰션", "이벤트정산"],
+  "goal": "모듈 06에 클릭 후 7일 룩백 윈도우 기반 Last-Click 전환 기여 분석 서비스(AdAttributionService)와 ROAS 산출 로직 및 POJO 단위 테스트를 추가한다.",
+  "scope": [
+    "AdAttributionService(7일 룩백 윈도우, Last-Click 매칭, ROAS 계산)",
+    "AdAttributionServiceTest 순수 POJO 단위 테스트 및 study/02,03,04,06 교재 업데이트"
+  ],
+  "exclusions": ["ad_event 테이블 DDL 변경 제외"],
   "retry_policy": {
     "max_attempts": 3,
     "stop_on_same_error": true
   },
-  "owned_paths": [
-    "src/main/java/com/example/adengine/matching/",
-    "src/test/java/com/example/adengine/matching/",
-    "study/03_two_tier_matching_engine.md"
-  ],
-  "verification_commands": [
-    ".\\gradlew.bat test --tests com.example.adengine.matching.*"
-  ],
-  "dependencies": []
+  "verification": [".\\gradlew.bat test"]
 }
 ```
 
 ```text
-[Execution & Verification Log Summary]
-- Request / Ticket : ad-domain-ml-upgrade / ad-2tier-matching
-- Owned Paths Check: PASS (5 files modified within src/*/adengine/matching/ and study/03_*)
-- High-Risk Check  : PASS (no DDL, infra, auth, or unapproved path segments touched)
-- Command Executed : .\gradlew.bat test --tests "com.example.adengine.matching.*" --tests "com.example.adengine.ranking.*" --tests "com.example.adengine.attribution.*"
-- Verification     : PASS (Exit Code 0, 15/15 unit tests passed, 0 retries needed)
-- Release Gate     : GitHub PR #1 merged (commit b687703) after human approval
+[Execution & State Transition Log Summary]
+- Request ID       : ad-domain-ml-upgrade (plan status: APPROVED, fingerprint: 53774787...cdc966)
+- Ticket ID        : event-attribution-last-click (project_id: ad-server, risk: low, max_attempts: 3)
+- Path & Risk Check: PASS (no protected or high-risk segments such as migrations/infra/deploy touched)
+- Verify Command   : .\gradlew.bat test --tests "com.example.adengine.attribution.*"
+- Verify Result    : PASS (Exit Code 0, 해당 티켓 AdAttributionServiceTest 2건 통과 / 요청 전체 회귀 테스트 15/15 통과, 재시도 0회, 서킷 브레이커 발동 0건)
+- State Transition : PREPARED ➔ RUNNING ➔ REVIEW_READY (검증 스냅샷) ➔ APPLIED (GitHub PR #1 병합, commit b687703)
 ```
 </details>
 
@@ -158,52 +160,59 @@ Harness Node CLI: 계약 검사, 상태·예산·승인·증거 관리
 
 ### 용어 정의: L4.5와 L5
 
-- **L4.5 (제한적 자동 수정, Bounded Auto-Fix):** 검증(`verify --full`) 실패 시 신규 파일 생성이나 보호 경로 침범 없이, **기존에 존재하는 허용 소스/테스트 파일 내부**에서 패치 크기 예산(기본 최대 3개 파일, 16KB) 이내로만 자동 수정을 재시도하는 기능입니다([`auto-fix-policy.md`](docs/design-docs/auto-fix-policy.md)).
-- **L5 (승인 패스 자율 루프, Fast-Track Autonomy):** 사전 승인된 티켓의 소유 경로(`owned_paths`)와 재시도 예산(기본 최대 3회) 안에서 **구현 → 검증 → L4.5 수정을 연속 수행**하고, 검증을 통과하면 중간 사람 검수 단계를 건너뛰어 최종 Git 반영 승인 단계로 직행하는 모드입니다([`l5-autonomy-policy.md`](docs/design-docs/l5-autonomy-policy.md)).
+- **L4.5 (제한적 자동 수정, Bounded Auto-Fix):** 검증(`verify --full`) 실패 시 신규 파일 생성·삭제·이름 변경이나 보호 경로 침범 없이, **허용된 소스/테스트 루트(`src/`, `app/`, `lib/`, `test/`, `tests/`, `__tests__/`) 내 기존 파일**에서 패치 크기 예산(최대 5개 파일, 100KB) 이내로만 자동 수정을 재시도하는 기능입니다([`auto-fix-policy.md`](docs/design-docs/auto-fix-policy.md), [`autonomy-recover-command.js`](tools/harness-cli/autonomy-recover-command.js)).
+- **L5 (승인 패스 자율 루프, Fast-Track Autonomy):** 사전 승인된 저위험 티켓의 범위(`owned_paths`)와 재시도 예산(기본 최대 3회 시도) 안에서 **구현 → 검증 → 재시도를 연속 수행**하고, 검증을 통과하면 중간 사람 검수 단계를 건너뛰어 최종 Git 반영 승인 단계로 직행하는 모드입니다(러너 전역 하드 캡은 테스트 픽스처·보일러플레이트 동반 수정을 고려해 최대 20개 파일 / 500KB로 두되, 실제 수정 범위는 티켓별 승인 경로로 좁게 제한됨; [`l5-autonomy-policy.md`](docs/design-docs/l5-autonomy-policy.md), [`agent-runner.js`](tools/harness-cli/agent-runner.js)).
 
 ### 1. 두 가지 실행 모드 비교 (Strict vs 승인 패스)
 
 | 구분 | 표준 모드 (Strict Governance) | 승인 패스 모드 (Fast-Track: L4.5 / L5) |
 | :--- | :--- | :--- |
-| **적용 대상** | **고위험 작업:** DB 스키마(DDL), 마이그레이션, 인프라(`infra/k8s/terraform`), 인증/보안(`auth/security`), 결제(`payment/billing`), 외부 유료 API | **저위험 / 명확한 스펙 작업:** 단위 기능 구현, 버그 픽스, 테스트 코드 보강, 소유 경로 내 리팩터링 |
-| **설계상 수동 게이트** | **4단계 수동 확인:** 계획 승인 ➔ 구현 착수 확인 ➔ 결과 검수 수락 ➔ Git 릴리스 승인 | **1단계 수동 확인 (중간 검수 패스):** 초기 계획에서 승인 패스를 허용하면, 검증 통과 시 중간 수락을 건너뛰고 **최종 Git 릴리스 승인 1회**만 수행 |
+| **적용 대상** | **고위험 작업:** 마이그레이션(`migrations`), 인프라/배포(`.github`, `infra`, `k8s`, `kubernetes`, `helm`, `terraform`, `deploy`, `scripts`), 의존성/환경 설정(`package.json`, `pom.xml`, `build.gradle`, `.env*`), 파일 삭제/이름 변경 | **저위험 / 명확한 스펙 작업:** 허용된 소스·테스트 경로 내의 단위 기능 구현, 버그 픽스, 테스트 코드 보강, 내부 리팩터링 |
+| **설계상 수동 게이트** | **4단계 수동 확인:** 계획 승인 ➔ 구현 착수 확인 ➔ 결과 검수 수락 ➔ Git 릴리스 승인 | **2단계 수동 확인 (중간 2단계 패스):** **초기 계획 승인** 후 구현 착수와 결과 검수 수락을 건너뛰고 **최종 Git 릴리스 승인**으로 직행 (`4단계 → 2단계`) |
 | **통제 경계** | 하네스 CLI 경로에서 미승인 상태 전이 및 지문 불일치 차단 | 허용 경로·검증 통과·예산 조건을 모두 충족할 때만 중간 검수 생략 허용 (이탈 시 즉시 `BLOCKED` 전환) |
 
 ### 2. 승인 패스 작동 조건과 서킷 브레이커 (Circuit Breaker)
 
-- **승인 패스 3대 필수 조건:**
-  1. **소유 경로 준수 (`owned_paths`):** 티켓 계획에 승인된 파일 경로 내부만 수정할 것.
-  2. **완전 검증 통과 (`verify --full`):** 프로젝트의 테스트·린트·빌드 명령이 Exit Code 0으로 통과할 것.
-  3. **재시도 예산 준수 (`Retry Budget`):** 티켓에 설정된 최대 시도 횟수(기본 3회) 및 L4.5 패치 한도 이내일 것.
-- **비상 정지 서킷 브레이커 (`BLOCKED` 강등):**
-  - 승인 패스 모드로 실행 중이더라도 **(1) 동일한 에러가 2회 연속 반복(`same-error-repeat`)**되거나, **(2) 고위험 경로 세그먼트 변경(`APPROVAL_REQUIRED`)이 감지**되면 남은 재시도 횟수를 소진하지 않고 **즉시 `BLOCKED` 상태로 전환**하여 사람을 호출합니다.
+- **승인 패스 4대 필수 조건:**
+  1. **프로젝트 프로필 명시 허용 (`fast_track_allowed: true`, Fail-Closed 기본값 `false`):** `project onboard <id> --allow-fast-track --approve`로 사람이 테스트 신뢰도를 확인하고 승인 패스를 열어둔 저장소일 것. 실행 시작(`runner run --fast-track`) 시점과 릴리스 요청(`release request`) 시점 양쪽에서 모두 검사하여 미허용 프로젝트의 불필요한 모델 호출을 차단합니다([`project-onboarding.js`](tools/harness-cli/project-onboarding.js), [`agent-runner.js`](tools/harness-cli/agent-runner.js), [`control-plane-command.js`](tools/harness-cli/control-plane-command.js)).
+  2. **승인된 경로 준수 (`owned_paths` 및 보호/고위험 경로 미침범):** 계획 단계에서 AI가 제안하고 사람이 승인(`approve`)해 확정한 파일 경로 내부만 수정할 것.
+  3. **완전 검증 통과 (`verify --full`):** 프로젝트의 테스트·린트·빌드 명령이 Exit Code 0으로 통과할 것.
+  4. **재시도 및 패치 예산 준수 (`Retry Budget`):** 티켓에 설정된 최대 시도 횟수(기본 3회) 및 패치 크기 한도 이내일 것.
+- **비상 정지 서킷 브레이커 (`BLOCKED` 강등) 및 릴리스 요약 출력:**
+  - 승인 패스 모드로 실행 중이더라도 **(1) 동일한 정규화 에러 지문이 재발(`same-error-repeat`, `A → B → A` 교차 반복 포함)**하거나, **(2) 고위험 경로 세그먼트·파일 삭제/모드 변경(`APPROVAL_REQUIRED`)이 감지**되면 남은 재시도 횟수를 소진하지 않고 **즉시 `BLOCKED` 상태로 전환**하여 사람을 호출합니다.
+  - 최종 Git 반영 요청(`release request`) 시점에는 1회 승인의 판단 품질을 높이기 위해 `[RELEASE_SUMMARY] project:ticket | changed_files=N | owned_paths=PASS | verify=... | mode=fast-track|human-reviewed` 한 줄 요약을 출력합니다.
 
 ---
 
 ## 핵심 알고리즘 (경로 통제·컨텍스트 선별·에러 지문화)
 
-래퍼(Wrapper)를 넘어 컨트롤 플레인이 결정론적으로 동작하기 위해 다음 3가지 핵심 로직을 코드로 구현했습니다.
+컨트롤 플레인이 결정론적으로 동작하기 위해 다음 3가지 핵심 로직을 코드로 구현했습니다.
 
-### 1. `owned_paths` 소유권 검증 및 고위험 경로 차단 ([`agent-runner.js`](tools/harness-cli/agent-runner.js), [`orchestration-command.js`](tools/harness-cli/orchestration-command.js))
+### 1. 경로 소유권 검증 및 고위험 경로 차단 ([`agent-runner.js`](tools/harness-cli/agent-runner.js), [`orchestration-command.js`](tools/harness-cli/orchestration-command.js), [`config.js`](tools/harness-cli/config.js))
 
-1. **경로 정규화 및 프리픽스 매칭 (`pathIsOwned`):** 수정된 파일 경로의 백슬래시(`\`)를 `/`로 정규화하고, 티켓에 선언된 `owned_paths` 배열과 정확히 일치하거나 하위 디렉터리 프리픽스(`owned.endsWith("/")`)에 속하는지 검사합니다.
-2. **보호 경로 및 패치 형태 검사 (`validateRunnerPatch`):**
-   - `.git/`, `.harness/`, `node_modules/`, `.env*` 접근, 상위 경로 이탈(`..`), Git 심볼릭 링크(`120000`), 바이너리 패치를 즉시 거부합니다.
-   - L4.5 `auto-fix` 단계에서는 `fs.existsSync`로 기존 파일 존재 여부를 확인하여 **신규 파일 생성을 차단**하고, `config.autoFix.maxFiles`(기본 3개) 및 `maxPatchBytes`(기본 16KB)를 넘으면 중단합니다.
-3. **고위험 세그먼트 감시:** 패치 경로에 `db/schema`, `migration`, `infra`, `terraform`, `k8s`, `auth`, `security`, `payment`, `billing` 세그먼트가 포함되면 재시도 루프를 즉시 멈추고 `APPROVAL_REQUIRED`로 분류합니다.
+1. **`owned_paths` 출처와 프리픽스 매칭 (`pathIsOwned`):** 작업 대상 경로(`scope` / `owned_paths`)는 계획 초안에서 AI가 제안하고 사람이 승인(`approve`)할 때 확정됩니다. 실행 시 수정된 파일 경로의 백슬래시(`\`)를 `/`로 정규화하고, 승인된 `owned_paths`와 일치하거나 하위 디렉터리 프리픽스(`owned.endsWith("/")`)에 속하는지 검사합니다.
+2. **보호 경로 및 패치 형태 검사 (`validateRunnerPatch` / `validateAutoFixPatch`):**
+   - `.git/`, `.harness/`, `observability/`, `node_modules/`, `.venv/`, `.env*` 접근, 상위 경로 이탈(`..`), Git 심볼릭 링크(`120000`), 바이너리 패치를 즉시 거부합니다.
+   - L4.5 `auto-fix`에서는 `src/`, `app/`, `lib/`, `test/`, `tests/`, `__tests__/` 내부의 기존 파일만 수정하도록 강제(신규 파일 생성·삭제 차단, 최대 5개 파일 / 100KB)합니다.
+3. **고위험 세그먼트 감시 (`DEFAULT_L5_HIGH_RISK_SEGMENTS`):** 패치 경로에 `.github`, `deploy`, `deployment`, `helm`, `infra`, `k8s`, `kubernetes`, `migrations`, `scripts`, `terraform` 세그먼트나 의존성 설정 파일(`package.json`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`)이 포함되면 재시도 루프를 즉시 멈추고 `APPROVAL_REQUIRED`로 분류합니다.
 
-### 2. 서킷 브레이커의 '동일 에러 2회 반복' 판정 ([`agent-runner.js#L31-L34`](tools/harness-cli/agent-runner.js))
+### 2. 서킷 브레이커의 '동일 에러 재발(`same-error-repeat`)' 판정 ([`agent-runner.js#L31-L39`](tools/harness-cli/agent-runner.js))
 
-실행 실패 시 에러 문자열의 앞뒤 공백과 연속된 공백/줄바꿈을 단일 공백(`" "`)으로 정규화한 뒤 SHA-256 해시를 계산합니다.
+실행 실패 시 에러 출력에 섞이는 **ISO 타임스탬프(`<ts>`), 임시/worktree 및 빌드 리포트·`.gradle` 캐시 경로(`<path>`), 실행 소요 시간(`<duration>`)**과 공백을 정규화한 뒤 SHA-256 해시를 계산합니다.
 
 ```javascript
 function fingerprintError(error) {
-  const normalized = String(error?.message || error || "unknown error").trim().replace(/\s+/g, " ");
+  const normalized = String(error?.message || error || "unknown error")
+    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*Z?/g, "<ts>")
+    .replace(/(?:[A-Za-z]:)?[\\/][\w.\-\\/]*(?:tmp|temp|worktrees|harness-runner-|\.gradle|build[\\/]reports)[\w.\-\\/]*/gi, "<path>")
+    .replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds)\b/gi, "<duration>")
+    .replace(/\s+/g, " ")
+    .trim();
   return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 ```
 
-- 매 시도 실패 시 `error_fingerprint`를 기록하고, `retry_policy.stop_on_same_error !== false`(기본값 `true`)인 상태에서 `ticket.runner.last_error_fingerprint === errorFingerprint`가 성립하면 **2번째 동일 에러에서 즉시 루프를 종료**하고 `blocked_reason = "same-error-repeat"`로 상태를 고정합니다.
+- 매 시도 실패 시 `error_fingerprint`를 이력에 기록하고, 해당 티켓의 현재 실행 패스 내 **이전 실패 시도 전체의 지문 집합(`seenErrorFingerprints` Set)**과 대조합니다. 따라서 연속 반복(`A → A`)뿐 아니라 `A → B → A` 형태의 교차 진동 루프가 발생해도 즉시 루프를 종료하고 `BLOCKED` 상태로 고정하며, 사람이 원인을 수정한 뒤 티켓을 재개(`PREPARED`)하면 새 실행 패스에서는 Set이 초기화됩니다.
 
 ### 3. 컨텍스트 선별·압축 및 모델 티어 라우팅 ([`project-context.js`](tools/harness-cli/project-context.js), [`model-router.js`](tools/harness-cli/model-router.js))
 
@@ -222,29 +231,31 @@ function fingerprintError(error) {
 
 사용자가 대화창에 자연어로 작업을 지시하면, AI는 바로 코드를 수정하지 않고 티켓 후보와 **위험도(`risk`), 재시도 횟수(`max_attempts`), 승인 패스(Fast-Track) 가능 여부**를 먼저 리턴합니다.
 
-1. **사용자 요청:** *"결제 실패 재시도 테스트를 보강하고, 광고 서버의 이벤트 처리도 관련 있으면 같이 확인해줘."*
-2. **AI 티켓 후보 리턴:**
-   - `payment-retry-test` (`risk: low`, `max_attempts: 3`, **승인 패스(Fast-Track) 권장**)
-   - `ad-event-check` (`risk: medium`, `max_attempts: 3`, 선행 관계 및 확인 질문 제시)
-3. **사람의 조건 조정 및 승인:** *"결제 테스트 티켓은 승인 패스로 바로 진행하고, 광고 서버 티켓은 재시도 2회로 줄여서 진행해줘."*
-4. **하네스 통제 실행:** 지정된 재시도 예산과 승인 패스 설정을 계획 JSON에 동결(`approve`)한 뒤, 격리된 worktree에서 구현 및 `verify --full` 검증을 수행합니다.
+1. **사용자 요청:** *"광고 어트리뷰션(Last-Click) 도메인 및 단위 테스트를 추가하고, 배포 스크립트(`scripts/deploy.sh`)의 헬스체크 옵션도 같이 수정해줘."*
+2. **AI 티켓 후보 리턴 (경로 기반 위험도 분리 시연):**
+   - `event-attribution-last-click` (`project_id: ad-server`, `risk: low`, `max_attempts: 3`, 대상 경로 `src/main/...`, `src/test/...` ➔ **승인 패스(Fast-Track) 권장**)
+   - `deploy-script-check` (`project_id: ad-server`, `risk: high`, `max_attempts: 2`, 대상 경로 `scripts/deploy.sh` ➔ **단순 옵션 수정이라도 고위험 세그먼트(`scripts/`, `deploy`)에 해당하므로 Fast-Track 불가 및 Strict 수동 승인 강제**)
+3. **사람의 조건 조정 및 승인:** *"어트리뷰션 테스트 티켓은 승인 패스로 바로 진행하고, 배포 스크립트 티켓은 재시도 1회로 줄여서 내 검수 받고 진행해줘."*
+4. **하네스 통제 실행:** 지정된 재시도 예산과 승인 모드를 계획 JSON에 동결(`approve`)한 뒤, 격리된 worktree에서 구현 및 `verify --full` 검증을 수행합니다(만약 Fast-Track 티켓 실행 도중 `scripts/`나 `migrations/` 경로를 건드리면 즉시 `APPROVAL_REQUIRED`로 강등되어 멈춥니다).
 
 ### 계획에서 실행까지의 상태 전이
 
 ```text
-입력 스냅샷 → 상세 초안 DRAFT → 계획 검수/수정 → APPROVED
+입력 스냅샷 → 상세 초안 DRAFT → 계획 검수/수정 → APPROVED (1차 수동 게이트: 계획 승인)
                                                |
-                                  실행 준비 PREPARED
+                                  실행 준비 PREPARED (중간 착수 확인 생략)
                                                |
                                       RUNNING + 검증 (verify --full)
                                        /          \
-                                  BLOCKED      REVIEW_READY ──[승인 패스 (Fast-Track)]──┐
-                                                  |                                    |
-                                       사람의 결과 수락 (Strict)                        |
-                                                  |                                    ▼
-                           별도 Git 승인 → APPLYING <──────────────────────────────────┘
-                                              |
-                                           APPLIED
+                                  BLOCKED      REVIEW_READY ──[승인 패스 (Fast-Track: 중간 검수 생략)]──┐
+                                                  |                                                  |
+                                       사람의 결과 수락 (Strict 수동 검수)                             |
+                                                  |                                                  ▼
+                                                  └──────> 별도 Git 릴리스 승인 (2차 수동 게이트) <───┘
+                                                                          |
+                                                                       APPLYING
+                                                                          |
+                                                                       APPLIED
 ```
 
 > 단계를 잘게 나눈 것은 **감사 단위와 지문 동결 단위**를 분리하기 위해서입니다. 일상 사용은 AI가 이 명령들을 오케스트레이션하고, 사람은 직접 개입·디버깅할 때만 개별 명령을 사용합니다.
@@ -302,7 +313,7 @@ Fingerprint는 승인한 입력과 실제 실행 대상이 달라졌는지 검�
 
 | 지문/기록 | 결속하는 주요 내용 | 변경되면 |
 | --- | --- | --- |
-| 계획·계획 근거 | 프로젝트, 티켓, 범위(`owned_paths`), 위험도, 검증 명령, 의존관계와 출처 근거 | 재검토/재승인 필요 |
+| 계획·계획 근거 | 프로젝트, 티켓, 범위(`scope`/`owned_paths`), 위험도, 검증 명령, 의존관계와 출처 근거 | 재검토/재승인 필요 |
 | 저장소 콘텐츠 | Git 상태 출력, 추적 파일과 ignore되지 않은 미추적 파일의 경로·내용/링크 정보 | 이전 검증/콘텐츠 승인 재사용 차단 |
 | 릴리스 승인 | 승인 ID, 요청/실행, Git 작업·메시지·대상 브랜치, worktree·기준점·검수 근거 | 다른 작업에 승인을 전용할 수 없음 |
 | Jira 입력 | 프로젝트와 이슈 식별, 제목·본문·우선순위 등 현재 구현이 결속하는 필드 | 실행/관리형 릴리스 전에 변경 여부 확인 |
@@ -349,7 +360,7 @@ Fingerprint는 승인한 입력과 실제 실행 대상이 달라졌는지 검�
 
 ## 실패와 복구
 
-실패 시 무조건 재시도하거나 `git reset --hard`로 작업 트리를 밀어버리지 않고, **Why + Safe Next Action**으로 원인 범주와 첫 확인 명령을 안내합니다.
+실패 시 무조건 재시도하거나 강제 리셋으로 작업 트리를 덮어쓰지 않고, **Why + Safe Next Action**으로 원인 범주와 첫 확인 명령을 안내합니다.
 
 | 상황 | 첫 확인 명령 | 확인 후의 판단 |
 | --- | --- | --- |
@@ -380,8 +391,8 @@ node tools/harness-cli/skill-eval.js --skill code-review --cases
 ## 구현 위치와 설계 선택
 
 | 책임 | 핵심 구현 | 설계 이유/절충 |
-| --- | --- | --- |
-| CLI·설정·검증 | [index.js](tools/harness-cli/index.js), [config.js](tools/harness-cli/config.js), [verify-command.js](tools/harness-cli/verify-command.js), [single-repo-task-command.js](tools/harness-cli/single-repo-task-command.js) | 엔트리포인트(`index.js`)는 라우팅만 담당하고 명령군별 모듈 분리 |
+| :--- | :--- | --- |
+| CLI·설정·검증 | [index.js](tools/harness-cli/index.js), [config.js](tools/harness-cli/config.js), [verify-command.js](tools/harness-cli/verify-command.js), [single-repo-task-command.js](tools/harness-cli/single-repo-task-command.js) | 엔트리포인트(`index.js`)는 라우팅을 담당하고 명령군별 모듈 분리 |
 | 계획·입력 근거 | [planning-contract.js](tools/harness-cli/planning-contract.js), [planning-command.js](tools/harness-cli/planning-command.js), [request-plan.js](tools/harness-cli/request-plan.js) | 구조 검증과 의미 검수 분리 |
 | 컨텍스트 선별 | [agent-context.js](tools/harness-cli/agent-context.js), [project-context.js](tools/harness-cli/project-context.js) | P0~P9 우선순위 + 키워드 점수로 64KB 예산 내 압축, 필수 안전 계약 고정 |
 | 실행·서킷 브레이커 | [agent-runner.js](tools/harness-cli/agent-runner.js), [project-execution.js](tools/harness-cli/project-execution.js), [autonomy-recover-command.js](tools/harness-cli/autonomy-recover-command.js) | Lease·시도 선기록·에러 SHA-256 지문 비교(`fingerprintError`)·소유 경로 검사 |
@@ -395,17 +406,18 @@ node tools/harness-cli/skill-eval.js --skill code-review --cases
 
 ## 지원 범위와 한계
 
-**구현된 범위:** 개인 개발자의 로컬 다중 저장소 등록·온보딩, 상세 계획/검수 감사 기록, 위험도 기반 실행(Strict 수동 검수 및 L4.5/L5 조건부 승인 패스)·Git 반영, 이력 추적 및 선택형 외부 연동(OpenAI/Anthropic/Gemini API, Jira/Confluence, Slack/Telegram, 암호화 백업).
+**구현된 범위:** 개인 개발자의 로컬 다중 저장소 등록·온보딩, 상세 계획/검수 감사 기록, 위험도 기반 실행(Strict 수동 검수 및 L4.5/L5 조건부 승인 패스)·Git 반영 준비(브랜치/PR), 이력 추적 및 선택형 외부 연동(OpenAI/Anthropic/Gemini API, Jira/Confluence, Slack/Telegram, 암호화 백업). **운영 배포(CD)는 책임 범위 밖입니다.**
 
-이 아키텍처가 다루는 문제(계획-실행 불일치 탐지, 소유 경로 격리, 실패 지점 재개, 감사 원장)는 팀 단위 AI 거버넌스로 일반화되지만, **현재 구현의 보장 범위와 한계는 다음과 같이 명확히 구분됩니다.**
+이 아키텍처가 다루는 문제(계획-실행 불일치 탐지, 소유 경로 격리, 실패 지점 재개, 감사 원장)는 팀 단위 AI 거버넌스로 일반화 가능하지만, **현재 구현의 보장 범위와 한계는 다음과 같이 명확히 구분됩니다.**
 
 - **다중 사용자 기능 미포함 (개인용 로컬 Control Plane):** 중앙 DB나 원격 인증 서버 없이 로컬 파일 잠금 기반으로 동작합니다. 다수의 개발자가 동시 접속하는 사내 플랫폼(IDP)으로 확장하려면 **사용자별 RBAC(역할 기반 접근 제어), 원격 중앙 잠금 서버(Distributed Lock), 조직 단위 SSO/서명 검증**이 추가로 필요합니다.
-- **통제 경계 (Managed CLI vs OS Sandbox):** 하네스 CLI(`runner`, `execution`, `release`)를 거치는 관리형 경로에서는 미승인 변경과 소유 경로 이탈을 차단하지만, OS 커널 수준의 보안 샌드박스가 아니므로 사용자가 터미널에서 직접 실행하는 raw `git commit/push`나 직접 파일 편집까지 물리적으로 막지는 않습니다. Fingerprint는 변경 탐지용 해시이지 전자서명이 아닙니다.
+- **통제 경계 (Managed CLI vs OS Sandbox) 및 런타임 코드 실행:** 하네스 CLI(`runner`, `execution`, `release`)를 거치는 관리형 경로에서는 미승인 변경과 소유 경로 이탈을 차단하지만, OS 커널/컨테이너 수준의 보안 샌드박스가 아닙니다. 따라서 사용자가 터미널에서 직접 실행하는 raw `git commit/push`를 막지 못하며, **패치 경로 검사는 수정되는 파일의 위치만 통제할 뿐 `verify --full` 실행 시 허용된 경로 내의 테스트·빌드 코드가 로컬 권한으로 수행하는 런타임 행위(파일 읽기, 외부 네트워크 호출 등)까지 차단하지는 못합니다.**
 - **승인자 신원 및 로컬 원장 위협 모델:** Fingerprint는 SHA-256 해시이지 비밀키 기반 HMAC이나 전자서명이 아니므로, 로컬 파일 쓰기 권한이 있는 주체가 원장과 지문을 함께 재작성하는 행위는 탐지하지 못합니다. 팀 감사 근거로 쓰려면 작성자 인증과 서명, 중앙 저장이 필요하며 현재는 미구현입니다.
-- **Fast-Track 안전성:** 승인 패스의 안전은 대상 프로젝트의 테스트 품질에 의존합니다. 현재는 티켓 단위 `risk`와 전역 설정으로만 제어하며, 프로젝트 프로필 단위의 허용 플래그나 최소 커버리지 강제는 없습니다. 테스트가 약한 프로젝트는 Strict 모드로 제한해야 합니다.
-- **AI 코어 및 평가 규모의 한계:** 컨텍스트 선별은 파일시스템 기반의 결정론적 우선순위·키워드 매칭(`selectTicketFiles`)으로 구현되어 있으며, AST 구문 파싱이나 임베딩 벡터 검색은 포함하지 않습니다. 또한 계획 평가(`planning-eval.js`)는 9개 고정 합성 사례와 인간 루브릭을 결합한 회귀 검증용이며, 대규모 온라인 LLM-as-a-Judge 파이프라인을 대체하지 않습니다.
-- **측정 근거의 분리:** 설계상 수동 승인 게이트 수 축소(`4단계 → 1단계`)나 자동화 테스트 통과(`374건`)는 아키텍처 및 계약 검증 지표입니다. 장기 실사용에서의 실제 업무 시간·토큰·비용 절감률은 [실사용 운영 지표 정의 및 비교 양식](docs/project/PERSONAL_OPERATIONS_VALIDATION.md#실사용-운영-지표-정의-metric-definitions-및-비교-측정-양식)을 기준으로 프로젝트별 운영 로그에서 별도로 측정해야 합니다.
-- **다음 과제:** 프로젝트 프로필에 `fast_track_allowed` 플래그 및 최소 커버리지 기준 추가, 승인 기록에 작성자 서명 도입.
+- **Fast-Track 안전성과 테스트 품질 의존성:** 프로젝트 온보딩 시 기본값을 `fast_track_allowed: false`(Fail-Closed)로 두고 사람이 명시적으로 `--allow-fast-track`을 승인한 프로젝트의 `risk: low` 티켓만 중간 검수 생략을 허용합니다. 다만 언어별 테스트 커버리지 수치 강제는 없으므로, 승인 패스의 실질 안전은 대상 프로젝트의 테스트 품질에 의존합니다.
+- **에러 지문(`fingerprintError`) 정규화 범위:** 서킷 브레이커는 ISO 타임스탬프, `ms/s` 소요 시간, 임시/worktree 경로를 정규화하고 이전 시도 Set 전체와 비교해 `A → B → A` 반복까지 차단하지만, 프레임워크 고유의 임의 메모리 주소나 동적 포트 번호가 에러 메시지에 매번 다르게 찍히는 경우까지는 정규화하지 못합니다.
+- **`owned_paths` 출처 및 컨텍스트 선별의 한계:** `owned_paths`와 작업 범위는 AI가 초안에서 제안하고 사람이 승인 시 확정합니다. 또한 컨텍스트 선별(`selectTicketFiles`)은 코드베이스 탐색이나 AST 구문 파싱, 임베딩 벡터 검색이 아니라 **등록된 문서 내 키워드 토큰 출현 빈도 합산(`relevance_score`)**으로 동작하므로 분량이 긴 문서에 점수가 유리할 수 있습니다. 계획 평가(`planning-eval.js`) 역시 9개 고정 합성 사례와 인간 루브릭을 결합한 회귀 검증용이며 대규모 온라인 LLM-as-a-Judge 파이프라인을 대체하지 않습니다.
+- **측정 근거의 분리:** 설계상 수동 승인 게이트 수 축소(`4단계 → 2단계`)나 자동화 테스트 통과(`375건`)는 아키텍처 및 계약 검증 지표입니다. 장기 실사용에서의 실제 업무 시간·토큰·비용 절감률은 [실사용 운영 지표 정의 및 비교 측정 규격](docs/project/PERSONAL_OPERATIONS_VALIDATION.md#실사용-운영-지표-정의-metric-definitions-및-비교-측정-규격)을 기준으로 프로젝트별 운영 로그에서 별도로 측정해야 합니다.
+- **다음 과제:** 프로젝트 프로필에 최소 테스트 커버리지 기준 선택형 연동, 승인 기록에 작성자 전자서명 도입, 외부 실프로젝트 누적 티켓 20건 이상 확대 및 하네스 미사용 대비 리드타임 실측 비교.
 
 ---
 

@@ -26,10 +26,14 @@ function appendHistory(root, event) {
   });
 }
 
-function requireAcceptedReview(root, requestId, ticket, fingerprints, eventId = null) {
+function latestUserReview(root, requestId, ticket) {
   const reviews = readJson(historyPath(root), emptyHistory()).events.filter(item => item.kind === "USER_REVIEW"
     && item.request_id === requestId && item.project_id === ticket.project_id && item.ticket_id === ticket.ticket_id);
-  const latest = reviews.at(-1);
+  return reviews.at(-1) || null;
+}
+
+function requireAcceptedReview(root, requestId, ticket, fingerprints, eventId = null) {
+  const latest = latestUserReview(root, requestId, ticket);
   if (!latest || latest.status !== "accepted" || !fingerprints.includes(latest.fingerprint)
     || (eventId && latest.event_id !== eventId)) {
     throw new Error(`Current accepted user review is required for ticket: ${ticket.ticket_id}`);
@@ -189,4 +193,4 @@ function createHistoryCommand({ root, parseArgs, log, reviewFingerprint }) {
   };
 }
 
-module.exports = { appendHistory, beginOperation, collectHistory, createHistoryCommand, filterHistory, finishOperation, refreshHistory, requireAcceptedReview, withHistory };
+module.exports = { appendHistory, beginOperation, collectHistory, createHistoryCommand, filterHistory, finishOperation, latestUserReview, refreshHistory, requireAcceptedReview, withHistory };
