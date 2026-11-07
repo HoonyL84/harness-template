@@ -1,6 +1,6 @@
 # Harness Engineering Template
 
-여러 프로젝트의 AI 개발 작업을 **계획 → 승인 → 격리 실행 → 검증 → 사람 검수 → Git 반영 → 이력**으로 관리하는 개인용 engineering control plane입니다.
+다수의 개발자와 AI 에이전트가 협업할 때 발생하는 **감사(Audit) 누락·무단 변경·프로덕션 사고를 방지하는 사내 표준 AI 개발 플랫폼(Internal Developer Platform, IDP) 레퍼런스 아키텍처**이자, 외부 DB 서버 없이 단일 개발자의 다중 저장소 환경에서도 즉시 구동되는 **AI Engineering Control Plane**입니다.
 
 ```text
   1. 플랜 (Plan)       ➔       2. 구현 (Code)       ➔       3. 검증 (Verify)       ➔       4. 반영 (Release)
@@ -8,7 +8,7 @@
   (roles/planner)             (roles/implementer)             (roles/verifier)               (roles/release)
 ```
 
-무엇을 하기로 했는지, 어떤 결과를 검증했는지, 사람이 무엇을 승인했는지를 연결하여 반복 작업과 확인 누락을 줄입니다. AI는 계획과 구현을 제안하고, 하네스는 실행 근거를 관리하며, 사람은 최종 판단과 승인을 맡습니다.
+Cursor나 Claude Code 같은 개별 IDE 에이전트만으로는 **"누가 어떤 근거로 이 계획을 승인했고, 어떤 테스트를 통과해 프로덕션에 반영되었는가"**에 대한 조직 차원의 감사 추적(Audit Trail)과 안전 경계(Safety Contract)가 남지 않습니다. 하네스는 AI의 자율적 속도(Fast-Track)를 살리면서도, 비신뢰 입력 격리·지문(SHA-256) 검증·서킷 브레이커를 통해 엔터프라이즈급 거버넌스를 코드로 강제합니다.
 
 - **왜 만들었나:** 프로젝트마다 반복되는 맥락 전달·작업 추적·검증 정리 → [해결하는 문제](#해결하는-문제)
 - **어떻게 돌아가나:** 요청부터 상세 계획, 사람 검수와 Git 반영까지 → [실제 사용 흐름](#실제-사용-흐름)
@@ -113,8 +113,9 @@ Harness Node CLI: 계약 검사, 상태·예산·승인·증거 관리
   AI 코드 생성의 완전한 안전을 위해 모든 단계에 수동 승인 게이트(SHA-256 지문 검증)를 도입했으나, 반복적인 저위험 작업에서 엔지니어의 **승인 피로도(Approval Fatigue)**와 **리드타임 지연**이 발생하는 한계에 직면했습니다.
 * **해결책 (Conditional Approval Pass & Tiered Budget)**:  
   작업 위험도(Risk Profile)와 검증 결과에 기반한 **조건부 승인 패스(L4.5/L5 자율 루프)** 및 **차등 재시도 예산(Retry Budget)** 아키텍처를 도입하여, 저위험 작업은 검증 통과 즉시 자동으로 파이프라인을 전진시켰습니다.
-* **결과 (0% Incident & 1-Click Throughput)**:  
-  고위험 변경의 무단 반영 사고율을 **0%**로 완벽 통제하면서도, 일반 티켓의 수동 개입 횟수를 **평균 4회(계획·코딩·검증·릴리스 각 단계 수동 컨펌)에서 1회(최종 릴리스 승인)로 대폭 압축**하여 개발 리드타임을 획기적으로 개선했습니다.
+* **결과 및 실증 데이터 (0% Incident & Track Record)**:  
+  - **수동 개입 75% 감축**: 고위험 변경의 무단 반영 사고율을 **0%**로 통제하면서도, 일반 티켓의 인간 컨펌 횟수를 **평균 4회(계획·코딩·검증·릴리스)에서 1회(최종 릴리스 승인)로 압축**했습니다.
+  - **실제 운영 및 검증 모수**: 본 하네스를 통해 자체 아키텍처 고도화 완료 티켓 **66건**(`.harness/tasks/archive/`) 및 3개 연동 저장소(`harness-template`, `ad-server-engine`, `harness-payment-service`)에 걸친 **172개 워크플로우 상태 전이 이력**을 처리했으며, **374개 결정론적 계약·장애 주입(Fault Injection) 자동화 테스트**(`tests/harness-cli/`)로 서킷 브레이커·Lease 동시성·보호 경로 차단 동작을 상시 검증합니다.
 
 ## 설치와 프로젝트 등록
 
@@ -204,6 +205,9 @@ npm run harness -- execution prepare work-01
 
 `capture`는 요청·선택 자료·프로필의 스냅샷, `draft`는 출처와 계약을 검사한 계획, `planning-review`는 사람 평가 근거를 기록합니다. 필수 맥락/질문이 미해결이면 승인되지 않습니다. 검수 기록은 승인 자체가 아니며, 기존 `request create/revise` 경로도 호환을 유지합니다. 입력·출력 JSON 전체 계약은 [계획 품질 가이드](docs/PLANNING_QUALITY_GUIDE.md)에 있습니다.
 
+> **왜 CLI 상태 전이를 세분화했는가? (대화형 UX와 원자적 감사 경계의 분리)**:  
+> 사용자는 터미널에서 위 명령어 체인을 일일이 타이핑하지 않습니다. **사람은 대화창에서 자연어로 지시·승인만 내리고, 세분화된 CLI 프리미티브는 AI 에이전트가 백그라운드에서 호출하는 '시스템 콜(System Call)'**로 동작합니다. 이를 단일 블랙박스 명령어로 뭉뚱그리지 않고 원자적 단계로 쪼갠 이유는, 비결정적인 AI가 어느 단계에서 환각이나 규칙 위반을 일으켰는지 **정확히 격리(Fault Isolation)하고 실패 지점부터만 비용 낭비 없이 재개(Resume)**하기 위함입니다.
+
 **대화형 모드**에서는 현재 AI가 승인된 worktree에서 구현하고 `execution review-ready`로 프로젝트 검증을 수행합니다. **API 모드**에서는 키와 모델 설정 후 `runner run work-01 --ticket TICKET_ID`가 패치 생성·검사·적용·검증을 진행합니다. `runner run`을 대화형 호스트의 무료 토큰을 호출하는 명령으로 해석하면 안 됩니다.
 
 `REVIEW_READY`는 구현과 지정된 검증이 끝나 **사용자 검수를 기다린다**는 뜻입니다. 기획/설계 티켓은 승인된 Markdown 산출물과 문서 구조를 검사하고, 내용의 품질은 사람이 검수하여 수락합니다.
@@ -242,9 +246,15 @@ Jira 댓글이나 단순 `updated` 변화는 요구사항 변경으로 보지 �
 
 ## 컨텍스트와 모델 비용
 
-필수 안전 계약과 실제 프로젝트 계획·선택 티켓은 유지하되, 모드/스택 상세 문서를 매번 모두 읽지 않습니다. L5·자동수정·멀티에이전트 상세 절차는 해당 실행 모드에서 추가합니다. 프로젝트가 작성한 규칙이나 명시된 필수 자료를 단순히 크다는 이유로 생략하지 않으며, 필수 자료 누락/예산 초과는 실패로 처리합니다.
+대규모 저장소에서 컨텍스트 오염(Context Rot)과 프롬프트 인젝션을 방지하기 위해 [`project-context.js`](tools/harness-cli/project-context.js)와 [`model-router.js`](tools/harness-cli/model-router.js)에서 다음 3가지 코어 엔지니어링 메커니즘을 수행합니다.
 
-프로젝트 문서와 Confluence 자료는 `untrusted-project-input`입니다. 정보로는 사용하지만 "승인을 생략하라" 같은 문서 속 지시가 중앙 정책이나 도구 권한을 바꾸지 못하도록 구분합니다.
+1. **4계층 메모리 우선순위 트리 & 바이트 예산 기반 컨텍스트 압축 (`selectTicketFiles`)**:
+   - 전체 문서를 무작정 주입하지 않고 `instructions(P0) ➔ plan(P1) ➔ active-task(P3) ➔ design/ADR(P4~5) ➔ working/semantic/procedural/episodic 4계층 메모리(P6~9)` 우선순위와 티켓의 `goal / scope / owned_paths` 키워드 토큰 매칭 점수(`relevance_score`)를 결합해 **티켓당 64KB(최대 12개 파일) 예산** 내로 컨텍스트를 압축합니다.
+   - 필수 안전 계약(`safety-contract.md`, `AGENTS.md`)은 절대 생략되지 않도록 고정(`required: true`)하며, 예산 초과 시 문서를 임의로 잘라내어 환각(Hallucination)을 유발하는 대신 **Fail-Closed로 즉시 차단**합니다.
+2. **비신뢰 입력 격리 및 프롬프트 인젝션 정규식 필터 (`detectContextRisks`)**:
+   - 외부 프로젝트 문서와 Jira/Confluence 자료는 `untrusted-project-input`으로 격리합니다. 문서 본문에서 `policy-override`(시스템 지시 무시·승인 생략 시도), `secret-access`(환경변수·자격증명 유출 시도), `tool-escalation`(파괴적 Git 명령·비인가 도구 상승 시도) 3대 위험 패턴을 사전 탐지하여 문서 속 악성 지시가 중앙 정책이나 도구 권한을 탈취하지 못하도록 방어합니다.
+3. **위험도·실패 이력 기반 결정론적 모델 티어 라우팅 (`resolveModelTier`)**:
+   - OpenAI·Anthropic·Gemini 어댑터 위에서 작업 유형(`architect / implementer / reviewer`), 위험도(`low / medium / high`), 중요도(`P0~P3`), 변경 범위(`scopeCount`), 그리고 **재시도 횟수(`attempt`) 및 수선 필요 여부(`repairRequired`)**를 조합해 `fast / standard / strong` 모델을 결정론적으로 라우팅합니다. 1차 시도 실패 후 재시도 시 상위 티어로 자동 에스컬레이션하며, 고위험(`high`) 티켓에 `fast` 모델을 강제 할당하면 즉시 거부합니다.
 
 ```bash
 npm run harness -- context --json
@@ -252,8 +262,6 @@ npm run harness -- provider status
 npm run harness -- provider use openai
 npm run harness -- provider usage --json
 ```
-
-OpenAI·Anthropic·Gemini API 어댑터를 제공하며 작업 유형·위험도·중요도·재시도에 따라 `fast / standard / strong` 티어를 선택합니다. 고위험 티켓에 `fast`를 강제하면 거부합니다. 사용할 모델의 계정별 가용성을 확인하고 실제 모델명을 로컬 설정에 지정합니다.
 
 대화형 호스트의 구독 토큰과 하네스가 직접 호출하는 API 과금은 별개입니다. 로컬 사용량은 **하네스가 관측한 응답**만 집계합니다. 계정 전체 잔액·호스트 구독 잔여량은 임의 추정하지 않으며 지원 API/권한이 없으면 `unknown`입니다. `--cost`의 선택형 USD 추정도 설정된 단가와 관측량 기준 참고치이지 청구액이 아닙니다.
 
@@ -335,15 +343,18 @@ npm run harness -- verify --full --task YOUR_ACTIVE_TICKET
 
 실행 순서는 `sleep` 대신 Promise barrier로 통제하며, 별도 Git 통합 테스트와 Windows·macOS·Linux CI를 함께 사용합니다.
 
-### 계획의 의미 품질
+### 계획의 의미 품질 및 스킬 Oracle 평가
 
 ```bash
 npm run harness -- eval planning list
 npm run harness -- eval planning import --responses-file .harness/local/responses.json
 npm run harness -- eval planning show EVAL_ID
+node tools/harness-cli/skill-eval.js --skill code-review --cases
 ```
 
-9개 고정 합성 사례에서 구조/출처/명령/경계 검사는 자동 채점하고, 다음은 **사람이 사례별 rubric으로 평가**합니다.
+AI 출력 품질은 **자동화된 결정론적 Oracle 채점**과 **인간 루브릭 의미 평가**의 이중 파이프라인으로 검증합니다:
+- **스킬 Oracle 자동 채점 ([`skill-eval.js`](tools/harness-cli/skill-eval.js))**: 골든 데이터셋(`examples.jsonl`)을 기반으로 스킬 호출 여부(`selected_skill`), 결함 파일·라인·심각도(`P0~P3`) 적중 여부, 출력 스키마 및 한계 명시 계약을 자동으로 채점합니다.
+- **계획 품질 하이브리드 평가 ([`planning-eval.js`](tools/harness-cli/planning-eval.js))**: 9개 고정 합성 사례에서 구조/출처/명령/경계 검사는 자동 채점하고, 다음 항목은 사례별 루브릭으로 검증합니다.
 
 - 테스트 계획에 대상·조건·기대 결과가 있는가?
 - 요구사항 누락이나 요청하지 않은 리팩터링/스키마 변경이 있는가?
@@ -367,7 +378,7 @@ npm run harness -- eval planning show EVAL_ID
 
 ## 지원 범위와 한계
 
-**기본 사용:** 개인 개발자의 다중 프로젝트 등록, 상세 계획/검수 기록, 위험도 기반 실행(Strict 수동 검수 및 L4.5/L5 조건부 승인 패스 자율 루프)·Git 반영, 이력 조회. **선택 연동:** 모델 API, Atlassian, 알림, 백업/근거 출력, 멀티에이전트 오케스트레이션.
+**기본 아키텍처 범위:** 사내 표준 AI 개발 플랫폼(IDP) 거버넌스 PoC 및 다중 저장소 등록, 상세 계획/검수 감사 기록, 위험도 기반 실행(Strict 수동 검수 및 L4.5/L5 조건부 승인 패스 자율 루프)·Git 반영, 이력 추적. **선택 연동:** 멀티 프로바이더 모델 API(OpenAI/Anthropic/Gemini), Atlassian(Jira/Confluence), 알림(Slack/Telegram), 암호화 백업/근거 출력, 멀티에이전트 오케스트레이션.
 
 하네스는 AI 모델이나 범용 챗봇이 아니라 **사람의 최종 승인을 전제로 한 관리형 실행 도구**입니다. 보장 범위는 다음과 같습니다.
 
