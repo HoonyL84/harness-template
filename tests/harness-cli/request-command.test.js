@@ -70,3 +70,20 @@ test("request revise replaces only a DRAFT plan with an editable ticket retry po
   command(["approve", "planned-work"]);
   assert.throws(() => command(["revise", "planned-work", "--plan-file", planFile]), /Only a DRAFT/);
 });
+
+test("request approve --prepare validates readiness and invokes prepareExecution in one step", async () => {
+  const { root } = setup();
+  const preparedCalls = [];
+  const logs = [];
+  const command = createRequestCommand({
+    root,
+    parseArgs,
+    log: (msg) => logs.push(msg),
+    prepareExecution: (args) => { preparedCalls.push(args); return { status: "PREPARED" }; }
+  });
+  command(["create", "batch-work", "--project", "demo", "--goal", "Batch approve and prepare"]);
+  const approved = await command(["approve", "batch-work", "--prepare"]);
+  assert.equal(approved.status, "APPROVED");
+  assert.deepEqual(preparedCalls, [["prepare", "batch-work"]]);
+  assert.ok(logs.some((line) => line.includes("[READY] Request plan batch-work is approved and profile-bound")));
+});

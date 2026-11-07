@@ -29,7 +29,7 @@ function readPlan(filePath) {
   return plan;
 }
 
-function createRequestCommand({ root, parseArgs, log, invokeAgent, env = process.env, fetchImpl = globalThis.fetch }) {
+function createRequestCommand({ root, parseArgs, log, invokeAgent, prepareExecution = null, env = process.env, fetchImpl = globalThis.fetch }) {
   const planning = createPlanningCommand({ root, log, invokeAgent, env });
   const localRoot = path.join(root, ".harness", "local");
   const registryPath = path.join(localRoot, "projects.json");
@@ -138,6 +138,14 @@ function createRequestCommand({ root, parseArgs, log, invokeAgent, env = process
           return approveRequestPlan(validateRequestPlan(current));
         });
         log(`[APPROVED] Request plan ${id} (${plan.content_fingerprint.slice(0, 12)})`);
+        if (options.prepare || options["prepare-all"]) {
+          const projectIds = [...new Set(plan.tickets.map((ticket) => ticket.project_id))];
+          requireRequestReady(plan, loadProfiles(projectIds));
+          log(`[READY] Request plan ${id} is approved and profile-bound`);
+          if (typeof prepareExecution === "function") {
+            return Promise.resolve(prepareExecution(["prepare", id])).then(() => plan);
+          }
+        }
         return plan;
       };
       return snapshot.tickets.some((ticket) => ticket.source?.kind === "jira")

@@ -605,7 +605,6 @@ const commandBootstrap = createProjectBootstrapCommand({
   log
 });
 
-const commandRequest = createRequestCommand({ root: ROOT, parseArgs, log, invokeAgent: invokeBoundedAgent });
 const commandExecution = createExecutionCommand({
   root: ROOT,
   parseArgs,
@@ -614,6 +613,13 @@ const commandExecution = createExecutionCommand({
   runGit: runExternalGit,
   tokenizeCommand,
   log
+});
+const commandRequest = createRequestCommand({
+  root: ROOT,
+  parseArgs,
+  log,
+  invokeAgent: invokeBoundedAgent,
+  prepareExecution: commandExecution
 });
 const controlPlane = createControlPlaneCommands({
   root: ROOT,
