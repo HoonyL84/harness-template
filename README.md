@@ -175,7 +175,7 @@ Harness Node CLI: 계약 검사, 상태·예산·승인·증거 관리
 
 - **승인 패스 4대 필수 조건:**
   1. **프로젝트 프로필 명시 허용 (`fast_track_allowed: true`, Fail-Closed 기본값 `false`):** `project onboard <id> --allow-fast-track --approve`로 사람이 테스트 신뢰도를 확인하고 승인 패스를 열어둔 저장소일 것. 실행 시작(`runner run --fast-track`) 시점과 릴리스 요청(`release request`) 시점 양쪽에서 모두 검사하여 미허용 프로젝트의 불필요한 모델 호출을 차단합니다([`project-onboarding.js`](tools/harness-cli/project-onboarding.js), [`agent-runner.js`](tools/harness-cli/agent-runner.js), [`control-plane-command.js`](tools/harness-cli/control-plane-command.js)).
-  2. **승인된 경로 준수 (`owned_paths` 및 보호/고위험 경로 미침범):** 계획 단계에서 AI가 제안하고 사람이 승인(`approve`)해 확정한 파일 경로 내부만 수정할 것.
+  2. **보호 및 고위험 경로 미침범 (단일 작업자 블랙리스트 vs 멀티에이전트 `owned_paths`):** 기본 단일 작업자 모드(`validateRunnerPatch`)는 보호·고위험 경로만 차단하는 **블랙리스트 방식**으로 동작하여 연관 테스트·헬퍼 파일 수정을 유연하게 허용하며, 엄격한 `owned_paths` 프리픽스 격리(화이트리스트)는 멀티에이전트 동시 쓰기(`--multi-writer`) 모드에서만 강제합니다.
   3. **완전 검증 통과 (`verify --full`):** 프로젝트의 테스트·린트·빌드 명령이 Exit Code 0으로 통과할 것.
   4. **재시도 및 패치 예산 준수 (`Retry Budget`):** 티켓에 설정된 최대 시도 횟수(기본 3회) 및 패치 크기 한도 이내일 것.
 - **비상 정지 서킷 브레이커 (`BLOCKED` 강등) 및 릴리스 요약 출력:**
@@ -190,7 +190,7 @@ Harness Node CLI: 계약 검사, 상태·예산·승인·증거 관리
 
 ### 1. 경로 소유권 검증 및 고위험 경로 차단 ([`agent-runner.js`](tools/harness-cli/agent-runner.js), [`orchestration-command.js`](tools/harness-cli/orchestration-command.js), [`config.js`](tools/harness-cli/config.js))
 
-1. **`owned_paths` 출처와 프리픽스 매칭 (`pathIsOwned`):** 작업 대상 경로(`scope` / `owned_paths`)는 계획 초안에서 AI가 제안하고 사람이 승인(`approve`)할 때 확정됩니다. 실행 시 수정된 파일 경로의 백슬래시(`\`)를 `/`로 정규화하고, 승인된 `owned_paths`와 일치하거나 하위 디렉터리 프리픽스(`owned.endsWith("/")`)에 속하는지 검사합니다.
+1. **단일 작업자 블랙리스트 vs 멀티에이전트 `owned_paths` 격리 (`validateRunnerPatch` / `pathIsOwned`):** 기본 단일 작업자 실행에서는 수정할 때마다 막히지 않도록 보호·고위험 경로만 차단하고 일반 소스·테스트 파일 수정을 허용합니다. 반면 멀티에이전트(`orchestrate --multi-writer`) 모드에서는 두 에이전트의 충돌을 막기 위해 계획 승인 시 확정한 `owned_paths`와 일치하거나 하위 디렉터리 프리픽스(`owned.endsWith("/")`)에 속하는지 화이트리스트로 검사합니다.
 2. **보호 경로 및 패치 형태 검사 (`validateRunnerPatch` / `validateAutoFixPatch`):**
    - `.git/`, `.harness/`, `observability/`, `node_modules/`, `.venv/`, `.env*` 접근, 상위 경로 이탈(`..`), Git 심볼릭 링크(`120000`), 바이너리 패치를 즉시 거부합니다.
    - L4.5 `auto-fix`에서는 `src/`, `app/`, `lib/`, `test/`, `tests/`, `__tests__/` 내부의 기존 파일만 수정하도록 강제(신규 파일 생성·삭제 차단, 최대 5개 파일 / 100KB)합니다.
@@ -218,7 +218,8 @@ function fingerprintError(error) {
 
 별도의 벡터 DB 없이 로컬 파일시스템에서 즉시 재현 가능하도록 **우선순위 트리(P0~P9) + 키워드 토큰 적합도(`relevance_score`)** 알고리즘을 사용합니다.
 
-1. **우선순위 및 키워드 점수 결합 (`selectTicketFiles`):**
+1. **우선순위 및 키워드 점수 결합 (`selectTicketFiles`, 정책·설계 문서 한정):**
+   - **64KB(최대 12개 파일) 선별 대상은 `AGENTS.md`, `PLANS.md`, `docs/`, `memory/` 등 정책·설계 마크다운 문서에 한정**되며, 실제 소스코드(`.java`, `.js` 등)는 잘라내지 않고 격리된 `.worktrees/` 전체에서 에이전트가 자체 Grep/AST 탐색으로 제약 없이 읽습니다.
    - 문서를 `instructions(P0) → plan(P1) → context-file(P2) → active-task(P3) → design/ADR(P4~5) → working/semantic/procedural/episodic 메모리(P6~9)` 순으로 분류합니다.
    - 티켓의 `title`, `goal`, `scope`, `owned_paths`에서 추출한 3글자 이상 키워드 토큰이 후보 문서의 경로·본문에 매칭되는 횟수로 `relevance_score`를 계산해, 동일 계층 내에서 관련도가 높은 문서부터 **64KB(최대 12개 파일) 예산** 안에 채웁니다.
    - 필수 안전 계약(`AGENTS.md`, `safety-contract.md`, `PLANS.md`)은 `required: true`로 고정하며, 필수 문서만으로 예산이 초과되면 문서를 임의로 자르지 않고 에러로 중단합니다.
@@ -275,7 +276,6 @@ npm run harness -- request planning-review work-01 --review-file .harness/local/
 npm run harness -- request approve work-01 --prepare
 
 # (개별 단계 디버깅 시: request approve -> request ready -> execution prepare 분리 호출 가능)
-```
 
 # 2. 컨텍스트 번들 및 프로바이더 상태 조회
 npm run harness -- context --json
@@ -419,7 +419,7 @@ node tools/harness-cli/skill-eval.js --skill code-review --cases
 - **승인자 신원 및 로컬 원장 위협 모델:** Fingerprint는 SHA-256 해시이지 비밀키 기반 HMAC이나 전자서명이 아니므로, 로컬 파일 쓰기 권한이 있는 주체가 원장과 지문을 함께 재작성하는 행위는 탐지하지 못합니다. 팀 감사 근거로 쓰려면 작성자 인증과 서명, 중앙 저장이 필요하며 현재는 미구현입니다.
 - **Fast-Track 안전성과 테스트 품질 의존성:** 프로젝트 온보딩 시 기본값을 `fast_track_allowed: false`(Fail-Closed)로 두고 사람이 명시적으로 `--allow-fast-track`을 승인한 프로젝트의 `risk: low` 티켓만 중간 검수 생략을 허용합니다. 다만 언어별 테스트 커버리지 수치 강제는 없으므로, 승인 패스의 실질 안전은 대상 프로젝트의 테스트 품질에 의존합니다.
 - **에러 지문(`fingerprintError`) 정규화 범위:** 서킷 브레이커는 ISO 타임스탬프, `ms/s` 소요 시간, 임시/worktree 경로를 정규화하고 이전 시도 Set 전체와 비교해 `A → B → A` 반복까지 차단하지만, 프레임워크 고유의 임의 메모리 주소나 동적 포트 번호가 에러 메시지에 매번 다르게 찍히는 경우까지는 정규화하지 못합니다.
-- **`owned_paths` 출처 및 컨텍스트 선별의 한계:** `owned_paths`와 작업 범위는 AI가 초안에서 제안하고 사람이 승인 시 확정합니다. 또한 컨텍스트 선별(`selectTicketFiles`)은 코드베이스 탐색이나 AST 구문 파싱, 임베딩 벡터 검색이 아니라 **등록된 문서 내 키워드 토큰 출현 빈도 합산(`relevance_score`)**으로 동작하므로 분량이 긴 문서에 점수가 유리할 수 있습니다. 계획 평가(`planning-eval.js`) 역시 9개 고정 합성 사례와 인간 루브릭을 결합한 회귀 검증용이며 대규모 온라인 LLM-as-a-Judge 파이프라인을 대체하지 않습니다.
+- **`owned_paths` 출처 및 문서 컨텍스트 선별의 한계:** `owned_paths`(멀티에이전트용)와 작업 범위는 AI가 초안에서 제안하고 사람이 승인 시 확정합니다. 또한 정책·설계 마크다운 문서 선별(`selectTicketFiles`, 64KB/12개 파일)은 임베딩 벡터 검색이 아니라 **등록된 문서 내 키워드 토큰 출현 빈도 합산(`relevance_score`)**으로 동작하므로 분량이 긴 문서에 점수가 유리할 수 있습니다(단, 소스코드 탐색은 `.worktrees/` 내에서 에이전트가 직접 수행). 계획 평가(`planning-eval.js`) 역시 9개 고정 합성 사례와 인간 루브릭을 결합한 회귀 검증용이며 대규모 온라인 LLM-as-a-Judge 파이프라인을 대체하지 않습니다.
 - **측정 근거의 분리:** 설계상 수동 승인 게이트 수 축소(`4단계 → 2단계`)나 자동화 테스트 통과(`375건`)는 아키텍처 및 계약 검증 지표입니다. 장기 실사용에서의 실제 업무 시간·토큰·비용 절감률은 [실사용 운영 지표 정의 및 비교 측정 규격](docs/project/PERSONAL_OPERATIONS_VALIDATION.md#실사용-운영-지표-정의-metric-definitions-및-비교-측정-규격)을 기준으로 프로젝트별 운영 로그에서 별도로 측정해야 합니다.
 - **다음 과제:** 프로젝트 프로필에 최소 테스트 커버리지 기준 선택형 연동, 승인 기록에 작성자 전자서명 도입, 외부 실프로젝트 누적 티켓 20건 이상 확대 및 하네스 미사용 대비 리드타임 실측 비교.
 
