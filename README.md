@@ -2,6 +2,12 @@
 
 여러 프로젝트의 AI 개발 작업을 **계획 → 승인 → 격리 실행 → 검증 → 사람 검수 → Git 반영 → 이력**으로 관리하는 개인용 engineering control plane입니다.
 
+```text
+  1. 플랜 (Plan)       ➔       2. 구현 (Code)       ➔       3. 검증 (Verify)       ➔       4. 반영 (Release)
+"무엇을 만들지 정의"          "티켓 기준으로 코딩"            "테스트/빌드/리뷰 통과"          "PR 생성 및 머지"
+  (roles/planner)             (roles/implementer)             (roles/verifier)               (roles/release)
+```
+
 무엇을 하기로 했는지, 어떤 결과를 검증했는지, 사람이 무엇을 승인했는지를 연결하여 반복 작업과 확인 누락을 줄입니다. AI는 계획과 구현을 제안하고, 하네스는 실행 근거를 관리하며, 사람은 최종 판단과 승인을 맡습니다.
 
 - **왜 만들었나:** 프로젝트마다 반복되는 맥락 전달·작업 추적·검증 정리 → [해결하는 문제](#해결하는-문제)
@@ -58,6 +64,22 @@ Harness Node CLI: 계약 검사, 상태·예산·승인·증거 관리
 - **사람**은 요구사항 경계, 고위험 판단, 최종 수락과 릴리스 책임을 가집니다.
 
 중앙 하네스와 관리 대상 프로젝트는 별도 저장소입니다. 기존 프로젝트에 하네스 전체를 복사하지 않아도 등록·프로필 승인으로 연결할 수 있습니다. 기존 단일 저장소 티켓 흐름도 유지합니다.
+
+### 워크플로우 단계와 AI 역할(Role) & 스킬(Skill) 연동
+
+하네스의 7단계 흐름은 시스템 내부의 **에이전트 역할(`prompts/system/roles/`)** 및 **전용 스킬(`skills/`)**과 1:1로 직접 연결되어 동작합니다:
+
+| 단계 | 주요 업무 | 담당 AI 역할 (Role) | 호출 스킬 / 하네스 엔진 | 산출물 및 통제 |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. 계획 (Plan)** | 목표 구체화, 선행 의존성 및 테스트 계획 수립 | `planner`, `architect` | `request draft` 분석기 | `.harness/local/requests/` 티켓 사양 JSON |
+| **2. 승인 (Approve)** | 변경 범위, 비용, 아키텍처 위험도 검토 | **사람 (Human Gatekeeper)** | `request approve` | Fingerprint 지문 동결 (무단 변경 차단) |
+| **3. 격리 실행 (Execute)** | 작업 브랜치/Worktree에서 최소 범위 코딩 | `implementer` | Git Worktree 격리 실행기 | `.worktrees/` 격리 폴더 내 안전한 코드 구현 |
+| **4. 검증 (Verify)** | 프로젝트 단위/통합 테스트, 린트, 빌드 실행 | `verifier` | 프로젝트 고유 검증 명령 | `harness verify --full` (Exit Code 0 확인) |
+| **5. 사람 검수 (Review)** | diff 기반 버그, 회귀, 테스트 누락 정밀 점검 | `reviewer` | `skills/code-review` | Severity별 Findings 및 검수 리포트 |
+| **6. Git 반영 (Release)** | 안전 정책 준수 하에 커밋, PR 발행 및 머지 | `release` | `docs/skills/git-workflow` | GitHub PR 생성 및 `main` 안전 병합 |
+| **7. 이력 (Audit)** | 실행 이력, 성과 메트릭, 결정 사항 영구 기록 | `recorder`, `memory` | `history refresh` 원장 기록기 | `.harness/local/history.jsonl` 감사 원장 |
+
+행동 책임은 **역할(Role)**로 주입되고, 정밀 진단은 **스킬(Skill)**로 호출되며, 안전선은 **하네스 CLI**가 통제합니다.
 
 ## 설치와 프로젝트 등록
 
