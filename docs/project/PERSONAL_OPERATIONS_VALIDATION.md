@@ -78,7 +78,7 @@
 
 ---
 
-## 실사용 운영 지표 정의 (Metric Definitions) 및 비교 측정 양식
+## 실사용 운영 지표 정의 (Metric Definitions) 및 비교 측정 규격
 
 향후 실사용 로그 누적 시 숫자의 정의가 흔들리지 않도록 핵심 지표를 다음과 같이 고정한다.
 
@@ -86,20 +86,19 @@
 
 | 지표명 | 산식 및 판정 기준 | 측정 목적 |
 | :--- | :--- | :--- |
-| **1. 사고 (Incident)** | ① 고위험 경로(`db/schema`, `infra`, `auth`, `payment` 등)나 `owned_paths` 외부 파일이 **사람의 사전 승인 없이 커밋/PR에 반영된 건수**, 또는 ② `main` 병합 후 기존 테스트/빌드가 깨져 **롤백(Revert)한 건수** | 권한 경계 및 사전 검증 게이트의 실질 방어력 확인 |
+| **1. 사고 (Incident)** | ① 고위험 경로(`.github`, `infra`, `k8s`, `migrations`, `deploy`, `scripts` 등)나 승인 범위 외부 파일이 **사람의 사전 승인 없이 커밋/PR에 반영된 건수**, 또는 ② `main` 병합 후 기존 테스트/빌드가 깨져 **롤백(Revert)한 건수** | 권한 경계 및 사전 검증 게이트의 실질 방어력 확인 |
 | **2. 승인 패스(Fast-Track) 통과율** | `Fast-Track 대상 저위험 티켓 중 중간 수동 개입 없이 REVIEW_READY(검증 통과)에 도달한 티켓 수 / 전체 Fast-Track 시도 티켓 수 (%)` | L4.5/L5 자율 루프의 실질 자동화 성공률 측정 |
-| **3. 서킷 브레이커(`BLOCKED`) 사유 분포** | `BLOCKED` 전환 건수를 4개 코드 사유로 분류:<br>① `same-error-repeat` (동일 에러 SHA-256 지문 2회 연속)<br>② `APPROVAL_REQUIRED` (고위험 경로·비소유 경로 침범)<br>③ `verify-failed-budget` (재시도 예산 소진)<br>④ `dependency-or-lease` (선행 SHA 미충족·Lease 충돌) | 무작정 재시도하지 않고 조기 중단한 근거 분포 확인 |
+| **3. 서킷 브레이커(`BLOCKED`) 사유 분포** | `BLOCKED` 전환 건수를 4개 코드 사유로 분류:<br>① `same-error-repeat` (동일 에러 SHA-256 지문 2회 연속)<br>② `APPROVAL_REQUIRED` (고위험 경로·파일 삭제/모드 변경 감지)<br>③ `verify-failed-budget` (재시도 예산 소진)<br>④ `dependency-or-lease` (선행 SHA 미충족·Lease 충돌) | 무작정 재시도하지 않고 조기 중단한 근거 분포 확인 |
 | **4. 검수 재작업률 (Review Rework Rate)** | `REVIEW_READY 도달 후 사람이 changes-requested(수정 요청)를 반환한 티켓 수 / 전체 검수 티켓 수 (%)` | 테스트(`verify --full`)는 통과했으나 의미적 요구사항이 어긋난 비율 |
-| **5. 리드타임 및 수동 개입 횟수** | 티켓당 **사람이 직접 판단/명령을 내린 횟수**(계획 승인, 중간 수락, 릴리스 승인) 및 **요청부터 PR 병합까지 걸린 시간(분)** | 설계상 게이트 축소(`4단계 → 1단계`)가 실제 개입 감소로 이어지는지 측정 |
+| **5. 리드타임 및 수동 개입 횟수** | 티켓당 **사람이 직접 판단/명령을 내린 횟수**(계획 승인, 중간 수락, 릴리스 승인) 및 **요청부터 PR 병합까지 걸린 시간(분)** | 설계상 게이트 축소(`4단계 → 2단계`)가 실제 개입 감소로 이어지는지 측정 |
 
-### 2. Without Harness vs With Harness 비교 기록 양식 (실사용 3~5건 누적용)
+### 2. 실사용 티켓 검증 기록 (`ad-domain-ml-upgrade`)
 
-동일하거나 유사한 난이도의 기능/버그 티켓을 일반 대화형 에이전트(Cursor/Claude Code 단독)와 하네스(Fast-Track)로 각각 수행할 때 아래 표에 기록한다.
+동일하거나 유사한 난이도의 기능/버그 티켓을 수행할 때 아래 항목(실행 방식, 수동 개입 횟수, 범위 외 파일 수정/검증 누락 건수, 검수 후 재작업 횟수, 서킷 브레이커 발동 여부)을 사실대로 기록한다. 미측정 시간은 임의 기입하지 않는다.
 
-| 작업 ID / 대상 프로젝트 / 업무 내용 | 실행 방식 | 수동 개입 횟수 (맥락 재설명 포함) | 범위 외 파일 수정 / 검증 누락 건수 | 검수 후 재작업(Rework) 횟수 | 총 소요 시간 (분) | 비고 (서킷 브레이커 작동 여부 및 차단 사유) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Case 1:** `ad-server-engine` (`ad-2tier-matching` 등) | **With Harness** | 2회 (계획 승인 + PR 병합 승인) | 0건 (`owned_paths` 5개 파일 내 통과) | 0회 (`15/15` 테스트 1차 통과) | 측정값 기입 | `REVIEW_READY` ➔ PR #1 병합 (`b687703`) |
-| **Case 1 비교군:** (유사 난이도 기능/버그 티켓) | **Without Harness** | _회 | _건 | _회 | _분 | |
-| **Case 2:** (추후 실사용 티켓 기입) | **Without Harness** | _회 | _건 | _회 | _분 | |
-| **Case 2:** (추후 실사용 티켓 기입) | **With Harness** | _회 | _건 | _회 | _분 | |
+| 요청 / 티켓 ID (`project_id`) | 위험도 및 실행 방식 | 수동 개입 횟수 | 범위 외 수정 / 검증 누락 | 재작업(Rework) 및 서킷 브레이커 | 검증 및 릴리스 근거 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `ad-domain-ml-upgrade` / `serving-matching-ranking-ml-llm` (`ad-server`) | `risk: medium` (Strict Governance) | 계획 승인 + 결과 확인 + PR 병합 승인 | 0건 (승인 범위 내 수정) | 재시도 0회, 서킷 브레이커 발동 0건 | `.\gradlew.bat test` (15/15 PASS) ➔ PR #1 병합 (`b687703`) |
+| `ad-domain-ml-upgrade` / `event-attribution-last-click` (`ad-server`) | `risk: low` (Fast-Track 대상) | 계획 승인 + PR 병합 승인 | 0건 (승인 범위 내 수정) | 재시도 0회, 서킷 브레이커 발동 0건 | `.\gradlew.bat test` (15/15 PASS) ➔ PR #1 병합 (`b687703`) |
+| `ad-server-deploy-guard-check` / `deploy-script-healthcheck-guard` (`ad-server`) | `risk: low` ➔ 고위험 경로 침범 (가드 검증용 의도적 유도) | 계획 승인 후 1차 시도에서 자동 중단(`BLOCKED`) | `scripts/deploy.sh` 수정 시도 **사전 차단 (Git 미적용)** | **서킷 브레이커 실발동 1건 (`APPROVAL_REQUIRED`, 의도적 유도)**, 1회 시도 후 즉시 정지 | `.harness/local/executions/ad-server-deploy-guard-check.json` |
 

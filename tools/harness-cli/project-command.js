@@ -126,16 +126,23 @@ function createProjectCommand({ root, parseArgs, runGit, log }) {
       if (!project) throw new Error(`Unknown project: ${id}`);
       const diagnosis = inspectGitProject(project.path, runGit);
       const files = discoverProjectContext(project.path);
-      const current = createOnboardingProfile(project, diagnosis, files, contextWarnings(files));
       const targetPath = profilePath(id);
+      const existingDraft = options.approve ? readOnboardingProfile(targetPath) : null;
+      const fastTrackAllowed = options["allow-fast-track"] !== undefined
+        ? Boolean(options["allow-fast-track"])
+        : Boolean(existingDraft?.execution_policy?.fast_track_allowed);
+      const current = createOnboardingProfile(project, diagnosis, files, contextWarnings(files), new Date().toISOString(), {
+        fastTrackAllowed: Boolean(existingDraft?.execution_policy?.fast_track_allowed)
+      });
       if (options.approve) {
-        const approved = updateJsonLocked(targetPath, null, (existing) => approveOnboardingProfile(existing, current));
-        print(options.json ? approved : `[APPROVED] ${id} onboarding profile ${approved.content_fingerprint.slice(0, 12)}`, options.json);
+        const approved = updateJsonLocked(targetPath, null, (existing) => approveOnboardingProfile(existing, current, new Date().toISOString(), { fastTrackAllowed }));
+        print(options.json ? approved : `[APPROVED] ${id} onboarding profile ${approved.content_fingerprint.slice(0, 12)} (fast_track_allowed=${Boolean(approved.execution_policy?.fast_track_allowed)})`, options.json);
         return approved;
       }
-      writeOnboardingProfile(targetPath, current);
-      print(options.json ? current : `[DRAFT] ${id} onboarding profile generated\n  fingerprint: ${current.content_fingerprint}\n  context warnings: ${current.context.warnings.length}\n  dirty source tree: ${current.git.dirty}`, options.json);
-      return current;
+      const draft = options["allow-fast-track"] ? createOnboardingProfile(project, diagnosis, files, contextWarnings(files), new Date().toISOString(), { fastTrackAllowed: true }) : current;
+      writeOnboardingProfile(targetPath, draft);
+      print(options.json ? draft : `[DRAFT] ${id} onboarding profile generated\n  fingerprint: ${draft.content_fingerprint}\n  context warnings: ${draft.context.warnings.length}\n  dirty source tree: ${draft.git.dirty}\n  fast_track_allowed: ${Boolean(draft.execution_policy?.fast_track_allowed)}`, options.json);
+      return draft;
     }
 
     if (action === "profile") {

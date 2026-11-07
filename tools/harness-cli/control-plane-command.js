@@ -6,10 +6,11 @@ const path = require("node:path");
 const { readJson, readJsonDirectory, updateJsonLocked, withFileLockAsync, writeJsonAtomic } = require("./control-plane-state");
 const { addEvidence, approveRelease, beginReleaseApply, consumeReleaseApproval, createReleaseApproval, exportEvidenceMarkdown, failReleaseApply, finishReleaseApply, normalizeReleaseSpec, publicVerifiedEvidence, requireReleaseApproved, searchEvidence, upsertManagedCommitDraft, validateEvidenceReference } = require("./governance-ledger");
 const { readRegistry, validateProjectId } = require("./project-registry");
+const { readOnboardingProfile } = require("./project-onboarding");
 const { assertExecutionMatchesPlan } = require("./project-execution");
 const { readPlan } = require("./request-command");
 const { requireJiraFresh } = require("./jira-input");
-const { requireAcceptedReview } = require("./work-history");
+const { latestUserReview, requireAcceptedReview } = require("./work-history");
 const { dashboardOverview, overviewLines } = require("./dashboard-status");
 const { inspectionAdvice, executionAdvice, adviceText } = require("./safe-next-action");
 const { recoveryAdvice } = require("./publication-recovery");
@@ -146,10 +147,25 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
             throw new Error(`Managed commit is required before ${operation}: ${ticket.ticket_id}`);
           }
           if (operation !== "commit") requireCommittedWorktree(ticket);
-          const accepted = requireAcceptedReview(root, requestId, ticket,
-            operation === "commit" ? [ticket.review_fingerprint]
-              : [ticket.review_fingerprint, ticket.verification.reviewed_content_fingerprint].filter(Boolean));
-          ticket.review_event_id = accepted.event_id;
+          const profile = readOnboardingProfile(path.join(local, "profiles", `${ticket.project_id}.json`));
+          const latestReview = latestUserReview(root, requestId, ticket);
+          const fastTrackEligible = Boolean(
+            !latestReview
+            && profile?.status === "APPROVED"
+            && profile.content_fingerprint === ticket.profile_fingerprint
+            && profile.execution_policy?.fast_track_allowed === true
+            && ticket.risk === "low"
+            && (!Array.isArray(ticket.verification?.results) || ticket.verification.results.every((item) => item.status === 0))
+          );
+          try {
+            const accepted = requireAcceptedReview(root, requestId, ticket,
+              operation === "commit" ? [ticket.review_fingerprint]
+                : [ticket.review_fingerprint, ticket.verification.reviewed_content_fingerprint].filter(Boolean));
+            ticket.review_event_id = accepted.event_id;
+          } catch (error) {
+            if (!fastTrackEligible) throw error;
+            ticket.review_event_id = "FAST_TRACK_AUTO_PASS";
+          }
         }
       }
       const record = createReleaseApproval(execution, options.summary, {
@@ -166,6 +182,12 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
         }
         return record;
       });
+      for (const ticket of selectedTickets) {
+        const changedFiles = Array.isArray(ticket.verification?.changed_paths) ? ticket.verification.changed_paths.length : 0;
+        const verifySummary = ticket.verification?.summary || "verified";
+        const reviewMode = ticket.review_event_id === "FAST_TRACK_AUTO_PASS" ? "fast-track" : "human-reviewed";
+        log(`[RELEASE_SUMMARY] ${ticket.project_id}:${ticket.ticket_id} | changed_files=${changedFiles} | owned_paths=PASS | verify=${verifySummary} | mode=${reviewMode}`);
+      }
       log(`[APPROVAL_REQUIRED] ${id} ${record.fingerprint}`);
       return record;
     }
@@ -179,6 +201,22 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
         if (!ticket || ticket.status !== "REVIEW_READY" || !approved.review_event_id) throw new Error(`Current accepted user review is required for ticket: ${approved.ticket_id}`);
         if (isArtifactTicket(ticket)) assertArtifactEvidence(ticket);
         if (record.release.operation !== "commit" && ticket.committed_sha !== approved.committed_sha) throw new Error(`Managed commit changed after release request: ${approved.ticket_id}`);
+        if (approved.review_event_id === "FAST_TRACK_AUTO_PASS") {
+          const profile = readOnboardingProfile(path.join(local, "profiles", `${ticket.project_id}.json`));
+          const latestReview = latestUserReview(root, record.request_id, ticket);
+          if (latestReview && (latestReview.status !== "accepted" || ![approved.review_fingerprint, ticket.verification?.reviewed_content_fingerprint].filter(Boolean).includes(latestReview.fingerprint))) {
+            throw new Error(`Current accepted user review is required for ticket: ${approved.ticket_id}`);
+          }
+          if (
+            profile?.status !== "APPROVED"
+            || profile.content_fingerprint !== ticket.profile_fingerprint
+            || profile.execution_policy?.fast_track_allowed !== true
+            || ticket.risk !== "low"
+          ) {
+            throw new Error(`Fast-track release requires an approved, fingerprint-bound fast_track_allowed profile and low-risk ticket: ${approved.ticket_id}`);
+          }
+          continue;
+        }
         requireAcceptedReview(root, record.request_id, ticket,
           record.release.operation === "commit" ? [approved.review_fingerprint]
             : [approved.review_fingerprint, ticket.verification?.reviewed_content_fingerprint].filter(Boolean), approved.review_event_id);
