@@ -20,3 +20,7 @@
 ## 2026-10-03 상태 정돈
 
 위 8개 티켓의 운영 수락 근거가 충분하지 않아 자동 마감하지 않았다. 원문을 보존해 review/로 이동하고 Operational Review에 잔여 조건을 명시했다. 작업 중 티켓과 구분되며 history audit-tasks/search와 dashboard에서 조회한다. 운영 조건 충족 후 from-review로 재개해 fresh Full 검증과 사용자 검수 후 마감한다.
+
+## 2026-11-10 active 8개 완료 티켓 마감 정돈
+
+`active/`에 남아 있던 `planning-quality-contract`, `planning-quality-approval`, `planning-quality-api`, `planning-quality-evaluation`, `planning-quality-rehearsal`, `operational-binding`(`main` 병합: `9295633`, PR #54) 및 `planning-flow-fixes`, `harness-focused-context`(`main` 병합: `133f929`, PR #55) 8개 티켓은 원래 수용 기준(Acceptance Criteria)이 모두 충족되었고 유료 API·실계정 외부 게시는 원래 제외 범위(Out of Scope)임을 확인했다. 현재 콘텐츠 기준 Full 검증 및 사용자 최종 수락을 거쳐 `archive/`로 정상 마감했으며, 향후 실계정 운영이나 유료 모델 품질 비교가 필요한 경우 별도 후속 티켓으로 분리한다.
