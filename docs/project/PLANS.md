@@ -21,7 +21,7 @@
 8. 커밋 근거가 연결되면 경력 기록을 `VERIFIED`로 확정한다.
 
 ## 로드맵
-- **로컬 구현: 컨텍스트/조회 경량화**: `harness-focused-context` 티켓. 필수 안전 계약 보존, 모드/스택별 로딩, 조회 감사 유지 및 불필요한 재구성 제거, 도움말/진단 분리. 기존 승인 근거와 개인 파일은 변경하지 않는다.
+- **컨텍스트/조회 경량화 구현·검증 완료**: `harness-focused-context` 티켓. 필수 안전 계약 보존, 모드/스택별 로딩, 조회 감사 유지 및 불필요한 재구성 제거, 도움말/진단 분리. 기존 승인 근거와 개인 파일은 변경하지 않는다.
 
 - **로컬 구현·리허설 완료**: [계획 작성 품질 고도화](PLANNING_QUALITY_UPGRADE_PLAN.md), [사용 가이드](../PLANNING_QUALITY_GUIDE.md), [검증 기록](PLANNING_QUALITY_VERIFICATION.md). 기존 대화형 흐름에 입력 스냅샷·출처 검사·인간 검수·기존 eval 확장을 연결했다. 최종 Full 지문·실제 유료 모델 평가·원격 게시·Git 반영을 서로 구분한다.
 - **운영 보강 구현 및 검증**: [개인 다중 프로젝트 운영 보강](OPERATIONS_COMPLETENESS_PLAN.md), [Jira + Confluence 설계](CONFLUENCE_PERSONAL_OPERATIONS.md), [사용 가이드](../HARNESS_PERSONAL_OPERATIONS_GUIDE.md). Jira 입출력/승인, 중요도/기본 3회 시도, 이력/검색/컨텍스트, Atlassian 연결 도우미, 3사 진단·관측/관리자 usage 및 Gemini 요청 수 조회를 구현했다. [운영 근거 보고서](../OPERATIONS_EVIDENCE_GUIDE.md)는 티켓별 지표·수용 기준 근거와 새 PC 절차를 제공한다. 실제 계정 리허설, 깨끗한 control-root 테스트, 새 기기 재현 및 사용자 최종 검수는 서로 다른 근거로 기록하며 전체 로드맵 완료를 뜻하지 않는다.
