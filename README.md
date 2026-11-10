@@ -9,7 +9,7 @@ AI 코딩 에이전트(Cursor, Claude Code 등)를 다중 저장소 작업에 �
 - **해법 (Solution):** 작업을 **계획·승인·격리 실행·검증·검수·릴리스·이력**의 원자적 상태 전이로 분리하되, 저위험 작업은 승인된 범위·완전 검증(`verify --full`)·재시도 예산 안에서 중간 검수를 건너뛰는 **승인 패스(Fast-Track)**로 실행합니다.
 - **핵심 수치 (Verified Metrics):**
   1. **설계상 수동 승인 게이트 축소 (`4단계 → 2단계`):** 저위험 티켓에서 `계획 승인 → 구현 착수 → 결과 검수 → Git 릴리스 승인` 4번의 수동 확인 중 중간 2단계를 생략하고 **초기 계획 승인과 최종 Git 반영 승인 2회**로 축소 (고위험 경로 침범·동일 에러 2회 반복 시 즉시 `BLOCKED` 강등, 프로젝트 프로필의 `fast_track_allowed: true` 명시 승인 필요).
-  2. **검증 모수 구분 (`외부 실프로젝트 3건 / 다중 저장소 리허설 3건 / 자체 개발 66건 / 자동화 테스트 375건`):** 외부 Java/Spring 프로젝트(`Ad-Server-Engine`) 실코드 병합 **2개 티켓** + 고위험 경로(`scripts/deploy.sh`) 침범 시 서킷 브레이커 실발동 격리 **1개 티켓**, 분리된 다중 Git 저장소(`ads`·`payments`) 연동·차단 리허설 **3개 티켓**, 하네스 자체 개발 완료 티켓 **66건**(`.harness/tasks/archive/`, 중복 없음), 계약·장애 주입 자동화 테스트 **375건**(`tests/harness-cli/`).
+  2. **검증 모수 구분 (`외부 실프로젝트 3건 / 다중 저장소 리허설 3건 / 자체 개발 아카이브 79건 / 자동화 테스트 376건`):** 외부 Java/Spring 프로젝트(`Ad-Server-Engine`) 실코드 병합 **2개 티켓** + 고위험 경로(`scripts/deploy.sh`) 침범 시 서킷 브레이커 실발동 격리 **1개 티켓**, 분리된 다중 Git 저장소(`ads`·`payments`) 연동·차단 리허설 **3개 티켓**, Git에 기록된 하네스 자체 개발 티켓 아카이브 **79건**(`.harness/tasks/archive/`, 2026-11-10 기준), 계약·장애 주입 자동화 테스트 **376건**(`tests/harness-cli/`). 아카이브 문서 수는 외부 실무 적용 건수나 생산성 측정값과 구분합니다.
   3. **결정론적 컨텍스트 예산 (`티켓당 64KB / 최대 12개 파일`):** 필수 안전 계약을 보존하면서 키워드 적합도(`relevance_score`) 기반으로 문서를 선별하고, 예산 초과 시 임의 절단 대신 즉시 중단.
 
 ```text
@@ -53,9 +53,9 @@ AI 코딩 에이전트(Cursor, Claude Code 등)를 다중 저장소 작업에 �
 | **1. 외부 실프로젝트 적용** | **외부 저장소 1곳 (`ad-server`) / 3개 티켓** | **기능 병합 2건 / 서킷 브레이커 차단 1건** | **실발동 1건 (`APPROVAL_REQUIRED`, 가드 작동 확인용 의도적 유도).** `Ad-Server-Engine`(Java 21/Spring) 도메인·어트리뷰션 2건 단위 테스트(15/15) 통과 및 GitHub PR #1(`b687703`) 병합 + `scripts/deploy.sh` 수정 유도 티켓 1건 1차 시도에서 즉시 `BLOCKED` 격리 확인 | `.harness/local/requests/ad-domain-ml-upgrade.json`, `ad-server-deploy-guard-check.json` |
 | **2. 다중 저장소 연동·차단 리허설** | **분리 저장소 2곳 (`ads`, `payments`) / 3개 티켓** | **정상 연쇄 2건 통과 / 실패 주입 1건 차단** | `ads` ➔ `payments` 선행 SHA 의존성 통과(2건) 및 `payments:fail` 서킷 브레이커(`BLOCKED`) 격리 확인(1건) | `.harness/local/simulations/`, [`OPERATIONS_REHEARSAL_VALIDATION.md`](docs/project/OPERATIONS_REHEARSAL_VALIDATION.md) |
 | **3. 실계정 외부 연동 리허설** | **Jira 2건 · Confluence 2건** | **생성·조회·연결 확인** | **실발동 0건.** 개인 Atlassian 클라우드 계정 대상 실제 티켓/문서 게시 및 로컬 원장 대조 | [`PERSONAL_OPERATIONS_VALIDATION.md`](docs/project/PERSONAL_OPERATIONS_VALIDATION.md) |
-| **4. 하네스 자체 개발 티켓** | **`harness-template` 66건** (아카이브) | **66 / 66 완료** | 하네스 코어·역할·평가지표·런타임 기능을 개발하며 수행한 단일 저장소 티켓 및 `verify --full` 통과 기록 | [`.harness/tasks/archive/`](.harness/tasks/archive/) |
-| **5. 계약·장애 주입 자동화 테스트** | **375건** (42개 스위트) | **375 / 375 PASS** | 서킷 브레이커(`same-error-repeat`, `A → B → A` 진동 차단), 고위험 경로(`APPROVAL_REQUIRED`), `fast_track_allowed` 프로필 게이트, Lease 충돌, 응답 유실(`SENDING`) 차단 검증 | [`tests/harness-cli/`](tests/harness-cli/) |
-| **6. 계획 품질 루브릭 평가** | **9개 고정 합성 사례** | **9 / 9 PASS** | 요구사항 분해, 선행 의존성, 범위 외 수정 억제, 필수 질문 누락 여부 채점 | [`planning-eval.js`](tools/harness-cli/planning-eval.js) |
+| **4. 하네스 자체 개발 티켓** | **Git에 기록된 아카이브 79건** (2026-11-10 기준) | **티켓별 완료·검증 기록 보관** | 하네스 코어·역할·평가지표·런타임 기능을 개발하며 남긴 단일 저장소 티켓. 개별 완료 근거와 검증 범위는 해당 기록에서 확인 | [`.harness/tasks/archive/`](.harness/tasks/archive/) |
+| **5. 계약·장애 주입 자동화 테스트** | **376건** (59개 테스트 파일) | **376 / 376 PASS** | 서킷 브레이커(`same-error-repeat`, `A → B → A` 진동 차단), 고위험 경로(`APPROVAL_REQUIRED`), `fast_track_allowed` 프로필 게이트, Lease 충돌, 응답 유실(`SENDING`) 차단 검증 | [`tests/harness-cli/`](tests/harness-cli/) |
+| **6. 계획 품질 평가 체계** | **9개 고정 합성 사례** | **자동 계약 검사 + 사람 루브릭** | 구조·출처·경계는 자동 검사하고, 요구사항 누락·테스트 구체성·불필요한 범위 확장은 사람이 평가. 모의 응답의 회귀 통과를 실모델 품질 점수로 해석하지 않음 | [`planning-eval.js`](tools/harness-cli/planning-eval.js) |
 
 <details>
 <summary><b>실제 멀티 프로젝트 요청 JSON 발췌 및 상태 전이·검증 기록 보기 (클릭)</b></summary>
@@ -138,6 +138,15 @@ Harness Node CLI: 계약 검사, 상태·예산·승인·증거 관리
 
 중앙 하네스와 관리 대상 프로젝트는 별도 저장소입니다. 기존 프로젝트에 하네스 전체를 복사하지 않아도 등록·프로필 승인으로 연결할 수 있습니다.
 
+### 작업 유형별 실행 지침과 증거 기반 리뷰
+
+작업 지침은 [공통 원칙](docs/design-docs/core-beliefs.md)과 [Implementer 역할](prompts/system/roles/implementer.md)에 짧게 유지합니다. 별도 플레이북 선택 엔진이나 외부 플러그인은 추가하지 않았습니다.
+
+- **버그 수정:** 실패하는 테스트 또는 명확한 재현 조건을 먼저 확보하고 근본 원인을 수정합니다.
+- **리팩토링:** 외부 입출력과 관측 가능한 동작을 보존하고 기능 변경과 분리합니다.
+- **기능 추가:** 수용 기준을 작은 검증 단위로 나누고 실패·경계 조건도 확인합니다.
+- **동작 증명과 리뷰:** 실행한 검증 결과를 남기고, [리뷰 스킬](skills/code-review/SKILL.md)은 경계값·부분 실패·경쟁 상태·계약 우회를 살핍니다. 코드·호출 경로·테스트 근거가 있는 결함만 findings로 보고하며 추측과 스타일 선호는 구분합니다. 리뷰 스킬 본문은 리뷰 유형/역할의 컨텍스트에만 추가합니다.
+
 ### 4대 국면과 7단계 세부 상태·역할(Role)·스킬(Skill) 매핑
 
 상단 요약 다이어그램의 **4대 국면(계획·구현·검증·반영)**은 내부적으로 **7개의 세부 상태 전이 단계**로 나뉘며, 각 단계는 에이전트 역할(`prompts/system/roles/`) 및 스킬(`skills/`)과 연결됩니다(1단계와 7단계는 복수 역할 수행).
@@ -150,7 +159,7 @@ Harness Node CLI: 계약 검사, 상태·예산·승인·증거 관리
 | **3. 검증** | **4단계: 검증 (Verify)** | 프로젝트 단위/통합 테스트, 린트, 빌드 실행 | `verifier` | 프로젝트 고유 검증 명령 | `harness verify --full` (Exit Code 0 확인) |
 | **3. 검증** | **5단계: 검수 (Review)** | diff 기반 회귀·누락 점검 (저위험 시 승인 패스 가능) | `reviewer` / **사람** | `skills/code-review` | Severity별 Findings 또는 승인 패스 기록 |
 | **4. 반영** | **6단계: Git 반영 (Release)** | 안전 정책 준수 하에 커밋, PR 발행 및 머지 | `release` | `docs/skills/git-workflow` | 단발성 릴리스 승인 소비 및 PR 병합 |
-| **4. 반영** | **7단계: 이력 (Audit)** | 실행 이력, 메트릭, 의사결정 노트 갱신 | `recorder`, `memory` | `history refresh` 원장 기록기 | `.harness/local/history.jsonl` 감사 원장 |
+| **4. 반영** | **7단계: 이력 (Audit)** | 실행 이력, 메트릭, 의사결정 노트 갱신 | `recorder`, `memory` | `history refresh` 원장 기록기 | `.harness/local/history/ledger.json` 감사 원장 |
 
 ---
 
@@ -353,10 +362,14 @@ Fingerprint는 승인한 입력과 실제 실행 대상이 달라졌는지 검�
 | 저장 위치 | 내용 |
 | --- | --- |
 | `.harness/tasks/` | 단일 저장소의 `backlog`, `active`, `review`, `blocked`, `archive` Markdown 티켓 |
-| `.harness/local/` | 프로젝트 등록·프로필, 요청/실행, 승인, 검수/작업 이력(`history.jsonl`), outbox, 평가 결과 |
+| `.harness/local/` | 프로젝트 등록·프로필, 요청/실행, 승인, 검수/작업 이력(`history/ledger.json`), outbox, 평가 결과 |
 | `.worktrees/` | 관리형 티켓 작업 공간 |
 | `observability/` | 검증·실행·사용량 로그와 메트릭 |
-| `memory/`, `docs/` | 정책, 설계 결정, 프로젝트 문서와 4계층 메모리 노트 |
+| `memory/`, `docs/` | 정책, 설계 결정, 프로젝트 문서와 선택형 4계층 메모리 노트 |
+
+티켓은 구현 여부뿐 아니라 **원래 수용 기준과 사용자 수락**으로 마감합니다. 2026-11-10에는 main 반영과 검증을 완료한 active 티켓 8개를 아카이브하고, 별도 운영 검수 조건이 남은 review 티켓 8개는 보존했습니다([상태 점검 기록](docs/project/TASK_STATUS_AUDIT.md)). 유료 API·실계정 게시가 원래 제외 범위였다면 이를 새 마감 조건으로 추가하지 않으며, 필요할 때 별도 후속 티켓으로 만듭니다.
+
+프로젝트와 무관한 개인 파일은 정확한 경로를 로컬 `.git/info/exclude`에 등록해 실수로 스테이징할 위험을 줄일 수 있습니다. 이 설정은 원격에 공유되지 않으며, 명시적 강제 추가까지 막는 보안 장치는 아닙니다.
 
 로컬 상태(`.harness/local/`)와 비밀값은 Git에서 제외합니다. 다른 PC로 이전할 때는 승인형 암호화 백업([`STATE_BACKUP.md`](docs/STATE_BACKUP.md)) 복원 후 경로 재등록과 기준점 검증을 수행하며, 복원된 과거 승인으로 새 환경의 작업을 자동 실행하지는 않습니다.
 
@@ -420,7 +433,7 @@ node tools/harness-cli/skill-eval.js --skill code-review --cases
 - **Fast-Track 안전성과 테스트 품질 의존성:** 프로젝트 온보딩 시 기본값을 `fast_track_allowed: false`(Fail-Closed)로 두고 사람이 명시적으로 `--allow-fast-track`을 승인한 프로젝트의 `risk: low` 티켓만 중간 검수 생략을 허용합니다. 다만 언어별 테스트 커버리지 수치 강제는 없으므로, 승인 패스의 실질 안전은 대상 프로젝트의 테스트 품질에 의존합니다.
 - **에러 지문(`fingerprintError`) 정규화 범위:** 서킷 브레이커는 ISO 타임스탬프, `ms/s` 소요 시간, 임시/worktree 경로를 정규화하고 이전 시도 Set 전체와 비교해 `A → B → A` 반복까지 차단하지만, 프레임워크 고유의 임의 메모리 주소나 동적 포트 번호가 에러 메시지에 매번 다르게 찍히는 경우까지는 정규화하지 못합니다.
 - **`owned_paths` 출처 및 문서 컨텍스트 선별의 한계:** `owned_paths`(멀티에이전트용)와 작업 범위는 AI가 초안에서 제안하고 사람이 승인 시 확정합니다. 또한 정책·설계 마크다운 문서 선별(`selectTicketFiles`, 64KB/12개 파일)은 임베딩 벡터 검색이 아니라 **등록된 문서 내 키워드 토큰 출현 빈도 합산(`relevance_score`)**으로 동작하므로 분량이 긴 문서에 점수가 유리할 수 있습니다(단, 소스코드 탐색은 `.worktrees/` 내에서 에이전트가 직접 수행). 계획 평가(`planning-eval.js`) 역시 9개 고정 합성 사례와 인간 루브릭을 결합한 회귀 검증용이며 대규모 온라인 LLM-as-a-Judge 파이프라인을 대체하지 않습니다.
-- **측정 근거의 분리:** 설계상 수동 승인 게이트 수 축소(`4단계 → 2단계`)나 자동화 테스트 통과(`375건`)는 아키텍처 및 계약 검증 지표입니다. 장기 실사용에서의 실제 업무 시간·토큰·비용 절감률은 [실사용 운영 지표 정의 및 비교 측정 규격](docs/project/PERSONAL_OPERATIONS_VALIDATION.md#실사용-운영-지표-정의-metric-definitions-및-비교-측정-규격)을 기준으로 프로젝트별 운영 로그에서 별도로 측정해야 합니다.
+- **측정 근거의 분리:** 설계상 수동 승인 게이트 수 축소(`4단계 → 2단계`)나 자동화 테스트 통과(`376건`)는 아키텍처 및 계약 검증 지표입니다. 장기 실사용에서의 실제 업무 시간·토큰·비용 절감률은 [실사용 운영 지표 정의 및 비교 측정 규격](docs/project/PERSONAL_OPERATIONS_VALIDATION.md#실사용-운영-지표-정의-metric-definitions-및-비교-측정-규격)을 기준으로 프로젝트별 운영 로그에서 별도로 측정해야 합니다.
 - **다음 과제:** 프로젝트 프로필에 최소 테스트 커버리지 기준 선택형 연동, 승인 기록에 작성자 전자서명 도입, 외부 실프로젝트 누적 티켓 20건 이상 확대 및 하네스 미사용 대비 리드타임 실측 비교.
 
 ---
