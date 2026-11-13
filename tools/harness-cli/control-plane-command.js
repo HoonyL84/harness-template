@@ -11,7 +11,7 @@ const { assertExecutionMatchesPlan } = require("./project-execution");
 const { readPlan } = require("./request-command");
 const { requireJiraFresh } = require("./jira-input");
 const { latestUserReview, requireAcceptedReview } = require("./work-history");
-const { dashboardOverview, overviewLines } = require("./dashboard-status");
+const { dashboardOverview, executionStatusLabel, formatExecutionBlock, formatRequestBlock, overviewLines } = require("./dashboard-status");
 const { inspectionAdvice, executionAdvice, adviceText } = require("./safe-next-action");
 const { recoveryAdvice } = require("./publication-recovery");
 const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
@@ -310,20 +310,14 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
       if (bootstrap.status === "FAILED") return `${bootstrap.bootstrap_id}: BOOTSTRAP_FAILED\nEvidence: ${bootstrap.result?.error || "unknown failure"}\n${next}`;
       return `${bootstrap.bootstrap_id}: BOOTSTRAP_${bootstrap.status}\n${next}`;
     });
+    const requestsById = new Map(requests.map((request) => [request.request_id, request]));
     lines.push(...requests.filter((request) => !executions.some((state) => state.request_id === request.request_id)).map((request) => (
-      `${request.request_id}: ${request.status === "DRAFT" ? "PLAN_READY" : `PLAN_${request.status}`}\n${adviceText(inspectionAdvice("request", request.request_id))}`
+      formatRequestBlock(request, adviceText(inspectionAdvice("request", request.request_id)))
     )));
-    lines.push(...executions.map((state) => {
-      const next = adviceText(executionAdvice(state));
-      const blocked = state.tickets.filter((ticket) => ticket.status === "BLOCKED");
-      if (blocked.length) return `${state.request_id}: BLOCKED\nEvidence: ${blocked.map((ticket) => `${ticket.ticket_id}=${ticket.error}`).join("; ")}\n${next}`;
-      if (state.status === "REVIEW_READY") return `${state.request_id}: REVIEW_READY\n${next}`;
-      const ready = state.tickets.filter((ticket) => ticket.status === "REVIEW_READY" && !ticket.committed_sha);
-      if (ready.length) return `${state.request_id}: PARTIAL_REVIEW_READY\nTickets: ${ready.map((ticket) => ticket.ticket_id).join(", ")}\n${next}`;
-      const waiting = state.tickets.filter((ticket) => ticket.status === "WAITING_DEPENDENCY");
-      if (waiting.length) return `${state.request_id}: WAITING_DEPENDENCY\nTickets: ${waiting.map((ticket) => `${ticket.ticket_id} (${ticket.waiting_reason})`).join("; ")}\n${next}`;
-      return `${state.request_id}: ${state.status}\n${next}`;
-    }));
+    const orderedExecutions = [...executions].sort((a, b) => Number(executionStatusLabel(a) === "COMPLETED") - Number(executionStatusLabel(b) === "COMPLETED"));
+    lines.push(...orderedExecutions.map((state) => (
+      formatExecutionBlock(state, requestsById.get(state.request_id), adviceText(executionAdvice(state)))
+    )));
     const recovery = {
       executions: executions.map(state => ({ request_id: state.request_id, ...executionAdvice(state) })),
       releases: releases.map(release => ({ approval_id: release.approval_id || release.request_id, ...inspectionAdvice("release", release.approval_id || release.request_id) })),

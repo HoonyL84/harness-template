@@ -143,7 +143,8 @@ function validateOutput(input, output) {
   if (!text(output.plan.goal) || !["assumptions", "exclusions"].every(k => Array.isArray(output.plan[k]) && output.plan[k].every(text))) throw new Error("Invalid planning goal/assumptions/exclusions");
   if (ids.size !== tickets.length) throw new Error("Duplicate planning ticket IDs");
   for (const t of tickets) {
-    if (Object.keys(t).some(k => !["ticket_id", "project_id", "ticket_kind", "deliverables", "goal", "priority", "risk", "risk_reason", "labels", "scope", "exclusions", "acceptance_criteria", "implementation_steps", "test_plan", "verification", "depends_on", "retry_policy", "context_summary", "context_refs", "source"].includes(k))) throw new Error("Unexpected planning ticket field");
+    if (Object.keys(t).some(k => !["ticket_id", "project_id", "title", "ticket_kind", "deliverables", "goal", "priority", "risk", "risk_reason", "labels", "scope", "exclusions", "acceptance_criteria", "implementation_steps", "test_plan", "verification", "depends_on", "retry_policy", "context_summary", "context_refs", "source"].includes(k))) throw new Error("Unexpected planning ticket field");
+    if (t.title !== undefined && !text(t.title)) throw new Error("Invalid planning ticket title");
     if (!ID.test(t.ticket_id) || !input.projects[t.project_id] || !text(t.goal) || !["low", "medium", "high"].includes(t.risk) || !text(t.risk_reason)
       || !["development", "planning", "design"].includes(t.ticket_kind) || !["P0", "P1", "P2", "P3"].includes(t.priority) || !strings(t.labels) || t.labels.length > 3
       || !["scope", "acceptance_criteria", "implementation_steps"].every(k => strings(t[k])) || !Array.isArray(t.exclusions) || !t.exclusions.every(text)

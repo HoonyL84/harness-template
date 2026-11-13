@@ -10,6 +10,7 @@ function buildExecutionState(plan, root, now = new Date().toISOString()) {
   const tickets = plan.tickets.map((ticket) => ({
     ticket_id: ticket.ticket_id,
     project_id: ticket.project_id,
+    ...(ticket.title ? { title: ticket.title } : {}),
     ticket_kind: normalizeTicketKind(ticket.ticket_kind),
     ...ticketRiskMetadata(ticket),
     deliverables: [...(ticket.deliverables || [])],
@@ -96,7 +97,7 @@ function assertExecutionMatchesPlan(state, plan, root) {
   const expected = buildExecutionState(plan, root);
   if (state.tickets.length !== expected.tickets.length) throw new Error("Execution ticket set changed after planning");
   const immutableFields = ["project_id", "depends_on", "verification_commands", "branch"];
-  const optionalImmutableFields = ["goal", "scope", "exclusions", "context_summary", "acceptance_criteria", "implementation_steps", "test_plan", "retry_policy"];
+  const optionalImmutableFields = ["title", "goal", "scope", "exclusions", "context_summary", "acceptance_criteria", "implementation_steps", "test_plan", "retry_policy"];
   for (const expectedTicket of expected.tickets) {
     const ticket = state.tickets.find((item) => item.ticket_id === expectedTicket.ticket_id);
     if (!ticket) throw new Error(`Execution ticket changed after planning: ${expectedTicket.ticket_id}`);

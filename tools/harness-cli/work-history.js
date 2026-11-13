@@ -11,6 +11,7 @@ const { REPORT_ACTIONS, createOperationsReportCommand } = require("./operations-
 const { assertExecutionMatchesPlan } = require("./project-execution");
 const { readPlan } = require("./request-command");
 const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
+const { extractTicketTitle, isValidLocalTaskName, normalizeTaskName } = require("./task-format");
 
 const digest = value => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const historyPath = root => path.join(root, ".harness", "local", "history", "ledger.json");
@@ -18,7 +19,11 @@ const emptyHistory = () => ({ schema_version: "1.0", events: [], operations: {} 
 
 /** Append immutable evidence once; failure propagates to the managed caller. */
 function appendHistory(root, event) {
-  const normalized = { ...event, project_id: validateProjectId(event.project_id), ticket_id: validateProjectId(event.ticket_id) };
+  const projectId = validateProjectId(event.project_id);
+  const ticketId = projectId === "harness" && isValidLocalTaskName(normalizeTaskName(event.ticket_id))
+    ? normalizeTaskName(event.ticket_id)
+    : validateProjectId(event.ticket_id);
+  const normalized = { ...event, project_id: projectId, ticket_id: ticketId };
   const id = digest(normalized);
   return updateJsonLocked(historyPath(root), emptyHistory(), state => {
     if (!state.events.some(item => item.event_id === id)) state.events.push({ ...normalized, event_id: id });
@@ -73,7 +78,7 @@ function collectHistory(root, { includeSaved = true } = {}) {
     const execution = state?.tickets?.find(item => item.ticket_id === ticket.ticket_id);
     const shared = { project_id: ticket.project_id, ticket_id: ticket.ticket_id, request_id: plan.request_id,
       ticket_kind: ticket.ticket_kind || "development", deliverables: ticket.deliverables || [],
-      priority: ticket.priority || "P2", title: ticket.goal, technologies: registry.projects[ticket.project_id]?.stacks || [],
+      priority: ticket.priority || "P2", title: ticket.title || ticket.goal, technologies: registry.projects[ticket.project_id]?.stacks || [],
       source: path.join(local, "requests", `${plan.request_id}.json`),
       remote_records: outbox.entries.filter(e => e.project_id === ticket.project_id &&
         (e.request_id === plan.request_id && e.ticket_id === ticket.ticket_id || e.service === "jira" && e.remote_id && e.remote_id === ticket.source?.issue_id))
@@ -99,11 +104,12 @@ function collectHistory(root, { includeSaved = true } = {}) {
       for (const name of fs.readdirSync(dir).filter(n => n.endsWith(".md"))) {
         const file = path.join(dir, name);
         if (fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > 256 * 1024) continue;
-        const ticketId = name.slice(0, -3);
-        if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(ticketId)) continue;
+        const rawId = name.slice(0, -3);
+        if (!isValidLocalTaskName(rawId)) continue;
+        const ticketId = normalizeTaskName(rawId);
         const content = fs.readFileSync(file, "utf8");
         events.push({ project_id: projectId, ticket_id: ticketId, request_id: "legacy", kind: "LEGACY_TICKET",
-          status: status.toUpperCase(), priority: null, title: content.match(/## Goal\s*\r?\n-?\s*([^\r\n]+)/)?.[1] || ticketId,
+          status: status.toUpperCase(), priority: null, title: extractTicketTitle(content, ticketId),
           timestamp: fs.statSync(file).mtime.toISOString(), timestamp_basis: "file-mtime-not-completion", source: file,
           technologies: registry.projects[projectId]?.stacks || [], verification: "unknown" });
       }

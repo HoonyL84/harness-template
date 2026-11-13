@@ -58,6 +58,7 @@ const { createEnvCheckCleanupCommands } = require("./env-check-cleanup-command")
 const { createSingleRepoTaskCommands } = require("./single-repo-task-command");
 const { createAutonomyRecoverCommands } = require("./autonomy-recover-command");
 const { createVerifyCommands } = require("./verify-command");
+const { isValidLocalTaskName, normalizeTaskName } = require("./task-format");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 process.chdir(ROOT);
@@ -160,7 +161,7 @@ function listTaskNames(folder) {
   return fs.readdirSync(dir)
     .filter((name) => name.endsWith(".md") && name !== ".gitkeep")
     .sort()
-    .map((name) => name.replace(/\.md$/, ""));
+    .map((name) => name.replace(/\.md$/, "").normalize("NFC"));
 }
 
 function resolveTaskId({ strict = false } = {}) {
@@ -178,8 +179,8 @@ function resolveTaskId({ strict = false } = {}) {
 
 function applyExplicitTaskOption(options) {
   if (!options.task) return;
-  const task = String(options.task).trim();
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(task)) fail("--task must be a kebab-case ticket name");
+  const task = normalizeTaskName(options.task);
+  if (!isValidLocalTaskName(task)) fail("--task must use safe ticket name characters (Korean/letters/numbers with hyphens)");
   const active = listTaskNames("active");
   if (active.length > 0 && !active.includes(task)) {
     fail(`Explicit task is not active: ${task}`);

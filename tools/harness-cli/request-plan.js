@@ -110,6 +110,9 @@ function createRequestPlan({ requestId, goal, projectIds = [], tickets = [], pro
     const profile = profiles[projectId];
     if (!profile || profile.status !== "APPROVED") throw new Error(`Approved onboarding profile required: ${projectId}`);
     const ticketId = requireId(ticket.ticket_id, "Ticket id");
+    if (ticket.title !== undefined && (typeof ticket.title !== "string" || !ticket.title.trim())) {
+      throw new Error("Ticket title must be a non-empty string");
+    }
     const ticketGoal = String(ticket.goal || "").trim();
     if (!ticketGoal) throw new Error(`Ticket goal is required: ${ticketId}`);
     const acceptance = normalizeStringArray(ticket.acceptance_criteria, "Ticket acceptance_criteria");
@@ -121,6 +124,7 @@ function createRequestPlan({ requestId, goal, projectIds = [], tickets = [], pro
     return {
       ticket_id: ticketId,
       project_id: projectId,
+      ...(ticket.title !== undefined ? { title: ticket.title.trim() } : {}),
       ticket_kind: ticketKind,
       deliverables,
       priority: normalizePriority(ticket.priority),
@@ -182,6 +186,7 @@ function validateRequestPlan(plan) {
   if (plan.planning_evidence !== undefined && (!plan.planning_evidence || typeof plan.planning_evidence.ready !== "boolean"
     || !/^planning-[a-f0-9-]{36}$/.test(plan.planning_evidence.id) || !/^[a-f0-9]{64}$/.test(plan.planning_evidence.fingerprint))) throw new Error("Invalid planning evidence binding");
   for (const ticket of plan.tickets) {
+    if (ticket.title !== undefined && (typeof ticket.title !== "string" || !ticket.title.trim())) throw new Error("Ticket title must be a non-empty string");
     ticketRiskMetadata(ticket);
     normalizeContextRefs(ticket.context_refs);
     normalizeReadableLabels(ticket.labels);

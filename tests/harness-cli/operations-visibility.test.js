@@ -191,3 +191,113 @@ test("review ticket resumes through CLI without fabricating completion and canno
   assert.match(fs.readFileSync(path.join(f.root, ".harness/tasks/active/old.md"), "utf8"), /user acceptance/);
   assert.equal(fs.existsSync(path.join(f.root, ".harness/tasks/archive/old.md")), false);
 });
+
+test("Korean local ticket names and plain sections work across CLI, audit, history, context and blocker", { skip: Boolean(process.env.NODE_V8_COVERAGE) }, t => {
+  const f = fixture(t), { spawnSync } = require("node:child_process");
+  const { appendHistory, collectHistory } = require("../../tools/harness-cli/work-history");
+  const { buildAgentContext } = require("../../tools/harness-cli/agent-context");
+  const { blockActiveTask } = require("../../tools/harness-cli/task-blocker");
+  const { isValidLocalTaskName } = require("../../tools/harness-cli/task-format");
+  assert.equal(isValidLocalTaskName("대시보드-업무표시-개선"), true);
+  assert.equal(isValidLocalTaskName("PR머지-실행마감"), true);
+  assert.equal(isValidLocalTaskName("../secret"), false);
+  assert.equal(isValidLocalTaskName("티켓 이름"), false);
+  assert.equal(isValidLocalTaskName("CON"), false);
+
+  fs.cpSync(path.resolve(__dirname, "../../tools/harness-cli"), path.join(f.root, "tools/harness-cli"), { recursive: true });
+  fs.mkdirSync(path.join(f.root, "docs/project"), { recursive: true });
+  fs.mkdirSync(path.join(f.root, "docs/design-docs"), { recursive: true });
+  fs.writeFileSync(path.join(f.root, "AGENTS.md"), "# Rules\n");
+  fs.writeFileSync(path.join(f.root, "docs/project/PLANS.md"), "# Plans\n");
+  fs.writeFileSync(path.join(f.root, "docs/design-docs/core-beliefs.md"), "# Beliefs\n");
+  fs.writeFileSync(path.join(f.root, "docs/design-docs/safety-contract.md"), "# Safety\n");
+  fs.writeFileSync(path.join(f.root, "docs/design-docs/tech-stack.md"), "# Stack\n");
+  const git = spawnSync("git", ["init", "-b", "codex/korean-ticket"], { cwd: f.root, encoding: "utf8" });
+  assert.equal(git.status, 0, git.stderr);
+  const env = { ...process.env, HARNESS_OFFLINE: "true" }; delete env.NODE_V8_COVERAGE;
+  const run = args => spawnSync(process.execPath, [path.join(f.root, "tools/harness-cli/index.js"), ...args], { cwd: f.root, encoding: "utf8", env });
+
+  const created = run(["create-ticket", "대시보드-업무표시", "feat", "--title", "대시보드에서 업무 내용 바로 보기", "--goal", "대시보드 요약 보강", "--why", "ID만 봐서는 무슨 일인지 모름", "--scope", "dashboard 출력 수정", "--acceptance", "대시보드에 제목이 보인다"]);
+  assert.equal(created.status, 0, created.stderr + created.stdout);
+  const started = run(["start-ticket", "대시보드-업무표시"]);
+  assert.equal(started.status, 0, started.stderr + started.stdout);
+
+  const activeContent = fs.readFileSync(path.join(f.root, ".harness/tasks/active/대시보드-업무표시.md"), "utf8");
+  assert.match(activeContent, /# 티켓: 대시보드에서 업무 내용 바로 보기/);
+  assert.match(activeContent, /## 원인 \/ 배경 \(왜 하는가\)/);
+  assert.match(activeContent, /ID만 봐서는 무슨 일인지 모름/);
+
+  const audited = auditTasks(f.root).tasks.find(item => item.ticket_id === "대시보드-업무표시");
+  assert.equal(audited.title, "대시보드에서 업무 내용 바로 보기");
+  assert.equal(audited.pending, 1);
+
+  const hist = collectHistory(f.root, { includeSaved: false }).find(item => item.ticket_id === "대시보드-업무표시");
+  assert.equal(hist.title, "대시보드에서 업무 내용 바로 보기");
+
+  appendHistory(f.root, { project_id: "harness", ticket_id: "대시보드-업무표시", kind: "COMPLETION_EVIDENCE", status: "completed", timestamp: "2026-11-13T12:00:00Z" });
+  const archived = collectHistory(f.root, { includeSaved: true }).filter(item => item.ticket_id === "대시보드-업무표시");
+  assert.equal(archived.some(item => item.kind === "COMPLETION_EVIDENCE"), true);
+  assert.throws(() => appendHistory(f.root, { project_id: "ad-server", ticket_id: "대시보드-업무표시", kind: "COMPLETION_EVIDENCE" }), /kebab-case/);
+
+  const bundle = buildAgentContext(f.root, { taskName: "대시보드-업무표시" });
+  assert.ok(bundle.files.includes(".harness/tasks/active/대시보드-업무표시.md"));
+
+  const blocked = blockActiveTask({ root: f.root, taskId: "대시보드-업무표시", failedStep: { command: "npm", stepArgs: ["test"], label: "test", stderr: "boom" }, reason: "failed" });
+  assert.equal(blocked.moved, true);
+  assert.equal(fs.existsSync(path.join(f.root, ".harness/tasks/blocked/대시보드-업무표시.md")), true);
+});
+
+test("dashboard displays local ticket titles, request goals/progress, and calm advice for COMPLETED executions", async t => {
+  const f = fixture(t);
+  f.save(".harness/tasks/active/한글-티켓.md", "# 티켓: 대시보드 읽기 쉽게 고치기\n\n## Acceptance Criteria\n- [ ] 테스트 통과\n");
+  f.save(".harness/tasks/review/old-review.md", "# TICKET: old-review\n## Goal\n오래된 리뷰 티켓 확인\n");
+  f.save(".harness/tasks/archive/done-task.md", "# 티켓: 이미 끝난 일\n");
+  f.save(".harness/local/requests/plan-only.json", {
+    request_id: "plan-only",
+    status: "APPROVED",
+    goal: "실시간 로그 조회 추가",
+    tickets: [{ ticket_id: "t1", title: "로그 API 추가", goal: "로그 엔드포인트 구현" }]
+  });
+  f.save(".harness/local/requests/done-work.json", {
+    request_id: "done-work",
+    status: "APPROVED",
+    goal: "이전 로드맵 기능 마감",
+    tickets: [{ ticket_id: "t-done", title: "옵셔널 기능 연결", goal: "엔드포인트 연결" }]
+  });
+  f.save(".harness/local/executions/done-work.json", {
+    request_id: "done-work",
+    status: "COMPLETED",
+    tickets: [{ ticket_id: "t-done", status: "COMPLETED" }]
+  });
+  f.save(".harness/local/executions/stuck-work.json", {
+    request_id: "stuck-work",
+    status: "BLOCKED",
+    goal: "배포 가드 확인",
+    tickets: [{ ticket_id: "t-block", status: "BLOCKED", error: "smoke failed" }]
+  });
+
+  const completedAdvice = executionAdvice({ request_id: "done-work", status: "COMPLETED", tickets: [{ ticket_id: "t-done", status: "COMPLETED" }] });
+  assert.equal(completedAdvice.why, "All execution tickets are completed and recorded");
+  assert.equal(completedAdvice.next_action, "node tools/harness-cli/index.js execution status done-work");
+
+  let text = "";
+  const commands = createControlPlaneCommands({
+    root: f.root,
+    parseArgs,
+    reviewFingerprint: () => "x",
+    runGit: () => ({ status: 0, stdout: "" }),
+    log: s => { text = s; },
+    notify: () => {},
+    fetchImpl: () => { throw Error("no network"); },
+    env: {}
+  });
+  await commands.dashboard([]);
+
+  assert.match(text, /Local tickets: active=1 review=1 blocked=0 backlog=0/);
+  assert.match(text, /\[active\] 한글-티켓 — 대시보드 읽기 쉽게 고치기/);
+  assert.match(text, /\[review\] old-review/);
+  assert.equal(text.includes("done-task"), false);
+  assert.match(text, /plan-only: PLAN_APPROVED\nGoal: 실시간 로그 조회 추가\nTickets \(1\):\n  - t1 — 로그 API 추가/);
+  assert.match(text, /done-work: COMPLETED\nGoal: 이전 로드맵 기능 마감\nProgress: 1\/1 completed\n  - \[COMPLETED\] t-done — 옵셔널 기능 연결\nWhy: All execution tickets are completed and recorded\nSafe Next Action: node tools\/harness-cli\/index\.js execution status done-work/);
+  assert.ok(text.indexOf("stuck-work: BLOCKED") < text.indexOf("done-work: COMPLETED"));
+});
