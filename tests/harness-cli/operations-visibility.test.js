@@ -194,7 +194,7 @@ test("review ticket resumes through CLI without fabricating completion and canno
 
 test("Korean local ticket names and plain sections work across CLI, audit, history, context and blocker", { skip: Boolean(process.env.NODE_V8_COVERAGE) }, t => {
   const f = fixture(t), { spawnSync } = require("node:child_process");
-  const { collectHistory } = require("../../tools/harness-cli/work-history");
+  const { appendHistory, collectHistory } = require("../../tools/harness-cli/work-history");
   const { buildAgentContext } = require("../../tools/harness-cli/agent-context");
   const { blockActiveTask } = require("../../tools/harness-cli/task-blocker");
   const { isValidLocalTaskName } = require("../../tools/harness-cli/task-format");
@@ -233,6 +233,11 @@ test("Korean local ticket names and plain sections work across CLI, audit, histo
 
   const hist = collectHistory(f.root, { includeSaved: false }).find(item => item.ticket_id === "대시보드-업무표시");
   assert.equal(hist.title, "대시보드에서 업무 내용 바로 보기");
+
+  appendHistory(f.root, { project_id: "harness", ticket_id: "대시보드-업무표시", kind: "COMPLETION_EVIDENCE", status: "completed", timestamp: "2026-11-13T12:00:00Z" });
+  const archived = collectHistory(f.root, { includeSaved: true }).filter(item => item.ticket_id === "대시보드-업무표시");
+  assert.equal(archived.some(item => item.kind === "COMPLETION_EVIDENCE"), true);
+  assert.throws(() => appendHistory(f.root, { project_id: "ad-server", ticket_id: "대시보드-업무표시", kind: "COMPLETION_EVIDENCE" }), /kebab-case/);
 
   const bundle = buildAgentContext(f.root, { taskName: "대시보드-업무표시" });
   assert.ok(bundle.files.includes(".harness/tasks/active/대시보드-업무표시.md"));

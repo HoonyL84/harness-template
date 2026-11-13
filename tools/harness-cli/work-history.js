@@ -19,7 +19,11 @@ const emptyHistory = () => ({ schema_version: "1.0", events: [], operations: {} 
 
 /** Append immutable evidence once; failure propagates to the managed caller. */
 function appendHistory(root, event) {
-  const normalized = { ...event, project_id: validateProjectId(event.project_id), ticket_id: validateProjectId(event.ticket_id) };
+  const projectId = validateProjectId(event.project_id);
+  const ticketId = projectId === "harness" && isValidLocalTaskName(normalizeTaskName(event.ticket_id))
+    ? normalizeTaskName(event.ticket_id)
+    : validateProjectId(event.ticket_id);
+  const normalized = { ...event, project_id: projectId, ticket_id: ticketId };
   const id = digest(normalized);
   return updateJsonLocked(historyPath(root), emptyHistory(), state => {
     if (!state.events.some(item => item.event_id === id)) state.events.push({ ...normalized, event_id: id });
