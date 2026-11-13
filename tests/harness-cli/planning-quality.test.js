@@ -15,7 +15,8 @@ const { createStateTransitionNotifier } = require("../../tools/harness-cli/trans
 const { writeJsonAtomic } = require("../../tools/harness-cli/control-plane-state");
 const { createSnapshot } = require("../../tools/harness-cli/backup-command");
 const { approveOnboardingProfile, createOnboardingProfile, writeOnboardingProfile } = require("../../tools/harness-cli/project-onboarding");
-const { emptyRegistry, writeRegistry } = require("../../tools/harness-cli/project-registry");
+const { emptyRegistry, inspectGitProject, writeRegistry } = require("../../tools/harness-cli/project-registry");
+const { createExecutionCommand } = require("../../tools/harness-cli/execution-command");
 
 const repository = path.resolve(__dirname, "../..");
 function parseArgs(args) {
@@ -417,4 +418,53 @@ test("real CLI completes single/multi-project capture, draft and approval withou
     assert.equal(failure.stderr.includes("runner reconcile"), false);
     for (const dir of ["executions", "worktrees"]) assert.equal(fs.existsSync(path.join(root, ".harness/local", dir)), false);
   }
+});
+
+test("execution allows planning sources to evolve after prepare while rejecting tampered evidence", async t => {
+  const { root, projectPath, specification, file } = fixture(t);
+  const runGit = (args, cwd) => {
+    const cmd = args.join(" ");
+    if (cwd === projectPath) {
+      if (cmd === "rev-parse --show-toplevel") return { status: 0, stdout: `${projectPath}\n` };
+      if (cmd === "rev-parse HEAD") return { status: 0, stdout: "abc\n" };
+      if (cmd === "branch --show-current") return { status: 0, stdout: "main\n" };
+      if (cmd === "status --porcelain=v1 --untracked-files=all") return { status: 0, stdout: "" };
+      if (cmd === "remote -v") return { status: 0, stdout: "" };
+      if (args[0] === "show-ref") return { status: 1 };
+      if (args[0] === "worktree" && args[1] === "add") {
+        fs.mkdirSync(args[4], { recursive: true });
+        return { status: 0 };
+      }
+    }
+    return { status: 0 };
+  };
+  const liveDiagnosis = { ...inspectGitProject(projectPath, runGit), stacks: ["node"], verify_commands: ["node --test"] };
+  const draftProfile = createOnboardingProfile({ id: "demo", path: projectPath }, liveDiagnosis, [], []);
+  writeOnboardingProfile(path.join(root, ".harness/local/profiles/demo.json"), approveOnboardingProfile(draftProfile, draftProfile));
+  const request = createRequestCommand({ root, parseArgs, log: () => {} });
+  const captured = await request(["capture", "work", "--input-file", file("input.json", specification)]);
+  const draft = await request(["draft", "work", "--output-file", file("output.json", outputFor(captured.input))]);
+  request(["approve", "work"]);
+  const execution = createExecutionCommand({
+    root,
+    parseArgs,
+    reviewFingerprint: () => "fp-ok",
+    runCommand: () => ({ status: 0, stdout: "ok", stderr: "" }),
+    runGit,
+    tokenizeCommand: (value) => value.split(" "),
+    log: () => {}
+  });
+  execution(["prepare", "work"]);
+  fs.appendFileSync(path.join(projectPath, "docs/rules.md"), "Updated by merged PR\n");
+  const reviewReady = execution(["review-ready", "work", "--ticket", "task-0"]);
+  assert.equal(reviewReady.status, "REVIEW_READY");
+  const artifact = path.join(root, ".harness/local/planning", draft.evidence.id + ".json");
+  const originalArtifact = fs.readFileSync(artifact, "utf8");
+  const tampered = JSON.parse(originalArtifact);
+  tampered.output.facts[0].statement = "tampered";
+  fs.writeFileSync(artifact, JSON.stringify(tampered));
+  assert.throws(() => execution(["complete", "work", "--summary", "Merged PR #1", "--pr", "#1"]), /tamper|seal|digest|fingerprint/i);
+  fs.writeFileSync(artifact, originalArtifact);
+  const completed = execution(["complete", "work", "--summary", "Merged PR #1", "--pr", "#1"]);
+  assert.equal(completed.status, "COMPLETED");
 });

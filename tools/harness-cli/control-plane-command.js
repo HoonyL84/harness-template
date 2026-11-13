@@ -119,7 +119,7 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
     if (action === "request") {
       const execution = readJson(path.join(local, "executions", `${requestId}.json`), null);
       if (!execution) throw new Error(`Unknown execution: ${requestId}`);
-      assertExecutionMatchesPlan(execution, readPlan(path.join(local, "requests", `${requestId}.json`)), root);
+      assertExecutionMatchesPlan(execution, readPlan(path.join(local, "requests", `${requestId}.json`), { fresh: false }), root);
       const ticketIds = options.ticket && options.ticket !== true
         ? [...new Set(String(options.ticket).split(",").map((value) => validateProjectId(value.trim())).filter(Boolean))]
         : [];

@@ -28,6 +28,12 @@ test("explicit context schema rejects unsafe, mixed and duplicate references", (
   assert.deepEqual(normalizeContextRefs(), []);
   for (const value of [null, {}, [null], Array(11).fill({ path: "README.md" }), [{ path: "docs/../a.md" }], [{ path: "docs\\a.md" }], [{ path: ".env.local" }], [{ path: "docs/a.md", page_id: "34" }], [{ path: "docs/NUL.md" }], [{ path: "docs/a.md:stream" }], [{ path: "docs/a\n.md" }], [{ path: "docs/node_modules/a.md" }], [{ path: "docs/a.md", section: " " }], [{ path: "docs/a.md", sha256: "bad" }], [{ page_id: "34" }], [{ page_id: "34", version: 1, max_age_minutes: 0 }], [{ page_id: "34", version: 1, max_age_minutes: 1441 }], [{ page_id: "34", version: "1" }], [{ page_id: "34", version: 1, section: "No HTML parsing" }], [{ path: "docs/A.md" }, { path: "docs/a.md" }], [{ page_id: "34", version: 1 }, { page_id: "34", version: 2 }]]) assert.throws(() => normalizeContextRefs(value));
   assert.deepEqual(normalizeContextRefs([{ page_id: "34", version: 3 }]), [{ page_id: "34", version: 3, max_age_minutes: 1440 }]);
+  assert.deepEqual(normalizeContextRefs([{ path: "task.md", section: "Step 18" }, { path: "ROADMAP.md" }, { path: "PLANS.md" }]), [
+    { path: "task.md", section: "Step 18" },
+    { path: "ROADMAP.md" },
+    { path: "PLANS.md" }
+  ]);
+  assert.throws(() => normalizeContextRefs([{ path: "notes.md" }]), /Context path/);
 });
 
 test("exact section extraction ignores fenced headings and includes nested headings", () => {

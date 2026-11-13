@@ -36,7 +36,13 @@ const CONTEXT_SOURCES = Object.freeze([
   { relativePath: "memory/semantic", category: "semantic-memory", priority: 7, directory: true },
   { relativePath: "memory/procedural", category: "procedural-memory", priority: 8, directory: true },
   { relativePath: "memory/episodic", category: "episodic-memory", priority: 9, directory: true },
-  { relativePath: "README.md", category: "readme", priority: 10 }
+  { relativePath: "README.md", category: "readme", priority: 10 },
+  { relativePath: "PLANS.md", category: "roadmap", priority: 11 },
+  { relativePath: "ROADMAP.md", category: "roadmap", priority: 12 },
+  { relativePath: "task.md", category: "tasks", priority: 13 },
+  { relativePath: "TASK.md", category: "tasks", priority: 14 },
+  { relativePath: "GEMINI.md", category: "instructions-entry", priority: 15 },
+  { relativePath: "CLAUDE.md", category: "instructions-entry", priority: 16 }
 ]);
 
 function normalizedRelative(root, candidate) {
@@ -127,7 +133,9 @@ function contextWarnings(files) {
   const paths = new Set(files.map((file) => file.path));
   const warnings = [];
   if (!paths.has("AGENTS.md")) warnings.push("AGENTS.md is missing; repository-specific agent rules are unavailable");
-  if (!paths.has("docs/project/PLANS.md")) warnings.push("docs/project/PLANS.md is missing; project goals and roadmap are unavailable");
+  if (!paths.has("docs/project/PLANS.md") && !paths.has("PLANS.md") && !paths.has("ROADMAP.md")) {
+    warnings.push("docs/project/PLANS.md is missing; project goals and roadmap are unavailable");
+  }
   return warnings;
 }
 

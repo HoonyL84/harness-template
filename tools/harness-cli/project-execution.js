@@ -47,11 +47,12 @@ function buildExecutionState(plan, root, now = new Date().toISOString()) {
 function finalizeExecutionState(state, now = new Date().toISOString()) {
   state.updated_at = now;
   if (state.tickets.some((ticket) => ticket.status === "BLOCKED")) state.status = "BLOCKED";
+  else if (state.tickets.every((ticket) => ticket.status === "COMPLETED")) state.status = "COMPLETED";
   else if (state.tickets.every((ticket) => ticket.status === "REVIEW_READY")) state.status = "REVIEW_READY";
   else if (state.tickets.every((ticket) => ticket.status === "PREPARED")) state.status = "PREPARED";
   else if (state.tickets.every((ticket) => ticket.status === "WAITING_DEPENDENCY")) state.status = "WAITING_DEPENDENCY";
   else if (state.tickets.every((ticket) => new Set(["PREPARED", "WAITING_DEPENDENCY"]).has(ticket.status))) state.status = "PREPARED";
-  else if (state.tickets.every((ticket) => new Set(["PREPARED", "WAITING_DEPENDENCY", "REVIEW_READY", "RUNNING", "VERIFYING"]).has(ticket.status))) state.status = "IN_PROGRESS";
+  else if (state.tickets.every((ticket) => new Set(["PREPARED", "WAITING_DEPENDENCY", "REVIEW_READY", "RUNNING", "VERIFYING", "COMPLETED"]).has(ticket.status))) state.status = "IN_PROGRESS";
   return state;
 }
 
@@ -77,12 +78,14 @@ function dependencyReadiness(ticket, state) {
   };
 }
 
-function assertProjectSnapshot(profile, diagnosis) {
+function assertProjectSnapshot(profile, diagnosis, syncedSnapshot = null) {
   if (profile.status !== "APPROVED") throw new Error(`Project profile is not approved: ${profile.project_id}`);
   if (profile.git.dirty || diagnosis.dirty) throw new Error(`Original project worktree is dirty: ${profile.project_id}; resolve changes and repeat onboarding and request approval`);
-  if (profile.git.head !== diagnosis.head) throw new Error(`Project HEAD changed after onboarding: ${profile.project_id}`);
-  if (profile.git.worktree_fingerprint !== diagnosis.worktree_fingerprint) {
-    throw new Error(`Project worktree changed after onboarding: ${profile.project_id}`);
+  const expected = syncedSnapshot || profile.git;
+  const suffix = syncedSnapshot ? "sync-base" : "onboarding";
+  if (expected.head !== diagnosis.head) throw new Error(`Project HEAD changed after ${suffix}: ${profile.project_id}`);
+  if (expected.worktree_fingerprint !== diagnosis.worktree_fingerprint) {
+    throw new Error(`Project worktree changed after ${suffix}: ${profile.project_id}`);
   }
 }
 

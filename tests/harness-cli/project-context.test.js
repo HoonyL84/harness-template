@@ -40,6 +40,12 @@ test("context discovery follows project priority and only includes known Markdow
   ]);
   assert.equal(files.some((file) => file.path.includes(".env")), false);
   assert.equal(files.some((file) => file.path === "unrelated.md"), false);
+  fs.writeFileSync(path.join(root, "ROADMAP.md"), "# Roadmap\n");
+  fs.writeFileSync(path.join(root, "task.md"), "# Tasks\n## Step 20\nWarmer\n");
+  const withCanonical = discoverProjectContext(root);
+  assert.ok(withCanonical.some((file) => file.path === "ROADMAP.md"));
+  assert.ok(withCanonical.some((file) => file.path === "task.md"));
+  assert.equal(contextWarnings([{ path: "AGENTS.md" }, { path: "ROADMAP.md" }]).length, 0);
 });
 
 test("context bundle remains project-scoped and enforces a byte budget", () => {

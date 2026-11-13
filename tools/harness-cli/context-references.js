@@ -5,6 +5,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 const MAX_REFS = 10;
 const DEFAULT_REMOTE_AGE_MINUTES = 1440;
+const ALLOWED_ROOT_MARKDOWN = new Set([
+  "AGENTS.md",
+  "README.md",
+  "GEMINI.md",
+  "CLAUDE.md",
+  "PLANS.md",
+  "ROADMAP.md",
+  "TASK.md",
+  "task.md"
+]);
 
 /** Explicit references are required inputs, not permissions or semantic evidence. */
 function normalizeContextRefs(value = []) {
@@ -14,8 +24,8 @@ function normalizeContextRefs(value = []) {
     if (ref.path !== undefined) {
       if (Object.keys(ref).some(key => !["path", "section", "sha256"].includes(key))
           || typeof ref.path !== "string" || ref.path.length > 500 || (/[<>|"?*]/.test(ref.path) || [...ref.path].some(char => char.charCodeAt(0) < 32))
-          || !(ref.path === "AGENTS.md" || ref.path === "README.md" || /^docs\/[^\\:]+\.md$/i.test(ref.path))
-          || ref.path.split("/").some(segment => !segment || segment.startsWith(".") || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment) || ["node_modules", "vendor"].includes(segment.toLowerCase()))) throw new Error("Context path must be safe project-relative Markdown under docs/, AGENTS.md or README.md");
+          || !(ALLOWED_ROOT_MARKDOWN.has(ref.path) || /^docs\/[^\\:]+\.md$/i.test(ref.path))
+          || ref.path.split("/").some(segment => !segment || segment.startsWith(".") || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment) || ["node_modules", "vendor"].includes(segment.toLowerCase()))) throw new Error("Context path must be safe project-relative Markdown under docs/ or canonical root docs (AGENTS.md, README.md, PLANS.md, ROADMAP.md, task.md)");
       if (ref.section !== undefined && (typeof ref.section !== "string" || !ref.section.trim() || ref.section.length > 200 || /[\r\n\0]/.test(ref.section))) throw new Error("Context section must be an exact heading up to 200 characters");
       if (ref.sha256 !== undefined && (typeof ref.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(ref.sha256))) throw new Error("Context sha256 must be lowercase SHA-256");
       return { path: ref.path, ...(ref.section !== undefined ? { section: ref.section.trim() } : {}), ...(ref.sha256 !== undefined ? { sha256: ref.sha256 } : {}) };

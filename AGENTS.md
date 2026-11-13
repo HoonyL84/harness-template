@@ -94,6 +94,8 @@
 [6] 구현 커밋(원격이 있으면 푸시) → npm run harness -- complete-task <ticket> → 완료 기록 커밋(원격이 있으면 푸시)
 ```
 
+> Windows PowerShell에서 `npm.ps1` 실행 정책 오류가 발생하면 `npm.cmd run harness -- <cmd>` 또는 `node tools/harness-cli/index.js <cmd>`를 사용한다.
+
 ---
 
 ## 4. 세부 문서 링크
