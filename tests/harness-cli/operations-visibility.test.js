@@ -323,3 +323,41 @@ test("dashboard ticket summary lines prefix project_id once when present", async
   assert.match(text, /  - pay-retry — \[payments-server\] 웹훅 재시도/);
   assert.equal(text.includes("[payments-server] [payments-server]"), false);
 });
+
+test("dashboard shows pending Atlassian ticket target and summary without exposing payload bodies", async t => {
+  const f = fixture(t);
+  f.save(".harness/local/atlassian/outbox.json", {
+    entries: [
+      {
+        id: "abc123pending",
+        project_id: "ad-server",
+        ticket_id: "ad-settlement-alert",
+        service: "jira",
+        operation: "create",
+        status: "PENDING",
+        payload: {
+          fields: {
+            project: { key: "ADS" },
+            summary: "[ad-server] 정산 지연 슬랙 알림 추가",
+            description: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "secret-description-body" }] }] }
+          }
+        }
+      },
+      {
+        id: "lost",
+        status: "NEEDS_RECONCILIATION",
+        payload: "private"
+      }
+    ]
+  });
+  let text = "";
+  const commands = createControlPlaneCommands({
+    root: f.root, parseArgs, reviewFingerprint: () => "x", runGit: () => ({ status: 0, stdout: "" }),
+    log: s => { text = s; }, notify: () => {}, fetchImpl: () => { throw Error("no network"); }, env: {}
+  });
+  const report = await commands.dashboard([]);
+  assert.match(text, /abc123pending: PENDING\nTarget: \[ad-server\] ad-settlement-alert \(jira create -> ADS\)\nSummary: \[ad-server\] 정산 지연 슬랙 알림 추가\nWhy:/);
+  assert.equal(text.includes("secret-description-body"), false);
+  assert.equal(text.includes("private"), false);
+  assert.equal(JSON.stringify(report.recovery).includes("private"), false);
+});

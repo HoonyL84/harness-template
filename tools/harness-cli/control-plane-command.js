@@ -11,7 +11,7 @@ const { assertExecutionMatchesPlan } = require("./project-execution");
 const { readPlan } = require("./request-command");
 const { requireJiraFresh } = require("./jira-input");
 const { latestUserReview, requireAcceptedReview } = require("./work-history");
-const { dashboardOverview, executionStatusLabel, formatExecutionBlock, formatRequestBlock, overviewLines } = require("./dashboard-status");
+const { dashboardOverview, executionStatusLabel, formatExecutionBlock, formatPublicationBlock, formatRequestBlock, overviewLines } = require("./dashboard-status");
 const { inspectionAdvice, executionAdvice, adviceText } = require("./safe-next-action");
 const { recoveryAdvice } = require("./publication-recovery");
 const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
@@ -318,13 +318,14 @@ function createControlPlaneCommands({ root, parseArgs, notify, reviewFingerprint
     lines.push(...orderedExecutions.map((state) => (
       formatExecutionBlock(state, requestsById.get(state.request_id), adviceText(executionAdvice(state)))
     )));
+    const pendingEntries = (readJson(path.join(local, "atlassian/outbox.json"), { entries: [] }).entries || [])
+      .filter(entry => entry.status !== "SYNCED");
     const recovery = {
       executions: executions.map(state => ({ request_id: state.request_id, ...executionAdvice(state) })),
       releases: releases.map(release => ({ approval_id: release.approval_id || release.request_id, ...inspectionAdvice("release", release.approval_id || release.request_id) })),
-      publications: (readJson(path.join(local, "atlassian/outbox.json"), { entries: [] }).entries || [])
-        .filter(entry => entry.status !== "SYNCED").map(recoveryAdvice)
+      publications: pendingEntries.map(recoveryAdvice)
     };
-    lines.push(...recovery.publications.map(advice => `${advice.id || "unknown"}: ${advice.status}\n${adviceText(advice)}`));
+    lines.push(...pendingEntries.map((entry, idx) => formatPublicationBlock(entry, recovery.publications[idx], adviceText(recovery.publications[idx]))));
     lines.push(...releases.map((release) => {
       const next = adviceText(inspectionAdvice("release", release.approval_id || release.request_id));
       if (release.status === "PENDING") return `${release.request_id}: APPROVAL_REQUIRED\nFingerprint: ${release.fingerprint}\n${next}`;
