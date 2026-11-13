@@ -301,3 +301,25 @@ test("dashboard displays local ticket titles, request goals/progress, and calm a
   assert.match(text, /done-work: COMPLETED\nGoal: 이전 로드맵 기능 마감\nProgress: 1\/1 completed\n  - \[COMPLETED\] t-done — 옵셔널 기능 연결\nWhy: All execution tickets are completed and recorded\nSafe Next Action: node tools\/harness-cli\/index\.js execution status done-work/);
   assert.ok(text.indexOf("stuck-work: BLOCKED") < text.indexOf("done-work: COMPLETED"));
 });
+
+test("dashboard ticket summary lines prefix project_id once when present", async t => {
+  const f = fixture(t);
+  f.save(".harness/local/requests/multi.json", {
+    request_id: "multi",
+    status: "APPROVED",
+    goal: "멀티 프로젝트 알림",
+    tickets: [
+      { ticket_id: "ad-alert", project_id: "ad-server", title: "정산 지연 알림" },
+      { ticket_id: "pay-retry", project_id: "payments-server", title: "[payments-server] 웹훅 재시도" }
+    ]
+  });
+  let text = "";
+  const commands = createControlPlaneCommands({
+    root: f.root, parseArgs, reviewFingerprint: () => "x", runGit: () => ({ status: 0, stdout: "" }),
+    log: s => { text = s; }, notify: () => {}, fetchImpl: () => { throw Error("no network"); }, env: {}
+  });
+  await commands.dashboard([]);
+  assert.match(text, /  - ad-alert — \[ad-server\] 정산 지연 알림/);
+  assert.match(text, /  - pay-retry — \[payments-server\] 웹훅 재시도/);
+  assert.equal(text.includes("[payments-server] [payments-server]"), false);
+});

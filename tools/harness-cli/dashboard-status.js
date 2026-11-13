@@ -5,6 +5,7 @@ const { readRegistry } = require("./project-registry");
 const { readJson } = require("./control-plane-state");
 const { auditTasks } = require("./operations-report");
 const { createProviderUsageService } = require("./provider-usage");
+const { prefixProjectLabel } = require("./task-format");
 const configured = v => typeof v === "string" && !!v.trim() && !/your_|replace|placeholder|example|your\/webhook/i.test(v);
 /** Local snapshot by default. Explicit probes are read-only and never return credentials. */
 async function dashboardOverview({ root, runGit, env, fetchImpl, options, checkAtlassian }) {
@@ -71,7 +72,9 @@ function localTicketLines(tasks = []) {
 
 function ticketSummaryLine(ticket, planTicket = null) {
   const id = ticket.ticket_id || planTicket?.ticket_id || "unknown";
-  const label = compactText(ticket.title || planTicket?.title || ticket.goal || planTicket?.goal, 60);
+  const projectId = ticket.project_id || planTicket?.project_id || "";
+  const rawLabel = compactText(ticket.title || planTicket?.title || ticket.goal || planTicket?.goal, 60);
+  const label = prefixProjectLabel(projectId, rawLabel);
   const status = ticket.status ? `[${ticket.status}] ` : "";
   return `  - ${status}${id}${label && label !== id ? ` — ${label}` : ""}`;
 }
