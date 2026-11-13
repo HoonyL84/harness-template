@@ -51,7 +51,7 @@ All commands, integrations, recovery and experimental modes: help --all
 
 [Single-Repo Mode]
   node tools/harness-cli/index.js check
-  node tools/harness-cli/index.js create-ticket <name> <type> --goal "..."
+  node tools/harness-cli/index.js create-ticket <name> <type> [--title "..."] --goal "..." [--why "..."] [--scope "..."] [--acceptance "..."]
   node tools/harness-cli/index.js start-ticket <name> [--from-review]
   node tools/harness-cli/index.js verify [--quick|--full] [--offline] [--diagnose] [--auto-fix]
   node tools/harness-cli/index.js complete-task <name> [--force]
