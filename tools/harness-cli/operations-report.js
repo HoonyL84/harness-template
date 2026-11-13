@@ -5,6 +5,7 @@ const path = require("node:path");
 const { readJson } = require("./control-plane-state");
 const { validateProjectId } = require("./project-registry");
 const { assertArtifactEvidence, isArtifactTicket } = require("./ticket-artifacts");
+const { extractTicketTitle, isValidLocalTaskName, normalizeTaskName, parseAcceptanceProgress } = require("./task-format");
 
 const TIME_FIELDS = ["requirements", "setup", "review", "recovery"];
 const REPORT_ACTIONS = new Set(["report", "measure", "map-check", "audit-tasks"]);
@@ -90,15 +91,13 @@ function auditTasks(root) {
     if (!fs.existsSync(directory)) continue;
     const realRoot = fs.realpathSync(root), rel = path.relative(realRoot, fs.realpathSync(directory));
     if (rel.startsWith("..") || path.isAbsolute(rel)) throw new Error("Task directory escapes root");
-    for (const name of fs.readdirSync(directory).filter(name => /^[a-z0-9]+(?:-[a-z0-9]+)*\.md$/.test(name))) {
+    for (const name of fs.readdirSync(directory).filter(name => name.endsWith(".md") && isValidLocalTaskName(name.slice(0, -3)))) {
       const file = path.join(directory, name);
       if (fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > 256 * 1024) continue;
       const content = fs.readFileSync(file, "utf8");
-      const section = content.match(/^## Acceptance(?: Criteria)?\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] || "";
-      const pending = (section.match(/^- \[ \]/gm) || []).length, checked = (section.match(/^- \[x\]/gim) || []).length;
-      const operational = content.match(/^## Operational Review\s*\r?\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1] || "";
-      const remaining_conditions = [...operational.matchAll(/^- \[ \] (.+)$/gm)].map(m => m[1].trim());
-      tasks.push({ remaining_conditions, ticket_id: name.slice(0, -3), state, checked, pending,
+      const ticketId = normalizeTaskName(name.slice(0, -3));
+      const { checked, pending, remaining_conditions } = parseAcceptanceProgress(content);
+      tasks.push({ remaining_conditions, ticket_id: ticketId, title: extractTicketTitle(content, ticketId), state, checked, pending,
         disposition: state === "review" ? "operational-review-required; not-completed" : state === "archive" ? "recorded-archive; not-reverified" : pending > 0 || checked === 0 ? "criteria-review-required" : "implementation-checked; completion-review-required" });
     }
   }

@@ -1,5 +1,7 @@
 "use strict";
 
+const { isValidLocalTaskName, normalizeTaskName } = require("./task-format");
+
 function createSingleRepoTaskCommands({
   ROOT,
   VALID_TYPES,
@@ -36,38 +38,51 @@ function createSingleRepoTaskCommands({
 
   function commandCreateTicket(args) {
     const { positional, options } = parseArgs(args);
-    const [name, type] = positional;
-    if (!name || !type) fail("Usage: node tools/harness-cli/index.js create-ticket <name> <type> --goal \"...\"");
+    const [rawName, type] = positional;
+    const name = normalizeTaskName(rawName);
+    const summary = options.goal || options.summary;
+    if (!name || !type) fail("Usage: node tools/harness-cli/index.js create-ticket <name> <type> --goal \"...\" [--title \"...\"] [--why \"...\"] [--scope \"...\"]");
+    if (!isValidLocalTaskName(name)) fail("Ticket name must use safe characters (Korean/letters/numbers with hyphens, no spaces or path separators)");
     if (!VALID_TYPES.has(type)) fail(`ticket type must be one of ${Array.from(VALID_TYPES).join(", ")}`);
-    if (!options.goal) fail("--goal is required");
+    if (!summary) fail("--goal or --summary is required");
 
     const ticketRel = `.harness/tasks/backlog/${name}.md`;
     if (exists(ticketRel)) fail(`Ticket already exists: ${ticketRel}`);
     if (exists(`.harness/tasks/active/${name}.md`)) fail(`Active ticket already exists: .harness/tasks/active/${name}.md`);
     if (exists(`.harness/tasks/review/${name}.md`)) fail(`Review ticket already exists: .harness/tasks/review/${name}.md; resume with start-ticket --from-review`);
 
-    const content = `# TICKET: ${name}
+    const title = String(options.title || name).trim() || name;
+    const why = options.why || options.reason || "[원인 / 배경 작성 필요]";
+    const todo = options.scope || options.todo || "[할 일 작성 필요]";
+    const outOfScope = options["out-of-scope"] || "[제외 범위 작성 필요]";
+    const acceptance = options.acceptance || "완료 기준 작성";
+    const risk = options.risk || "낮음";
 
-## Type
+    const content = `# 티켓: ${title}
+
+## 유형
 ${type}
 
-## Goal
-- ${options.goal}
+## 내용 (무슨 일인가)
+- ${summary}
 
-## Scope
-- ${options.scope || "[작성 필요]"}
+## 원인 / 배경 (왜 하는가)
+- ${why}
 
-## Out of Scope
-- ${options["out-of-scope"] || "[작성 필요]"}
+## 할 일 (무엇을 바꾸는가)
+- ${todo}
 
-## Acceptance Criteria
-- [ ] ${options.acceptance || "검증 기준 작성"}
+## 제외 범위 (안 건드리는 것)
+- ${outOfScope}
 
-## Risk
-- ${options.risk || "낮음"}
+## 완료 기준 (어떻게 확인하는가)
+- [ ] ${acceptance}
 
-## Notes
-- Created from harness CLI.
+## 위험도
+- ${risk}
+
+## 메모
+- 하네스 CLI로 생성됨 (티켓 ID: ${name})
 `;
 
     writeText(ticketRel, content);
@@ -76,8 +91,9 @@ ${type}
 
   function commandStartTicket(args) {
     const { positional, options } = parseArgs(args);
-    const [name] = positional;
+    const name = normalizeTaskName(positional[0]);
     if (!name) fail("Usage: node tools/harness-cli/index.js start-ticket <name> [--from-review] [--allow-parallel]");
+    if (!isValidLocalTaskName(name)) fail("Ticket name must use safe characters (Korean/letters/numbers with hyphens, no spaces or path separators)");
 
     const backlogRel = `.harness/tasks/${options["from-review"] ? "review" : "backlog"}/${name}.md`;
     const activeRel = `.harness/tasks/active/${name}.md`;
@@ -97,8 +113,9 @@ ${type}
 
   function commandCompleteTask(args) {
     const { positional, options } = parseArgs(args);
-    const [name] = positional;
+    const name = normalizeTaskName(positional[0]);
     if (!name) fail("Usage: node tools/harness-cli/index.js complete-task <name> [--force]");
+    if (!isValidLocalTaskName(name)) fail("Ticket name must use safe characters (Korean/letters/numbers with hyphens, no spaces or path separators)");
     if (!options.force) {
       try {
         requireTaskOrchestrationReady(ROOT, name);
@@ -211,10 +228,10 @@ ${type}
     }
     const created = [];
     for (const task of plan.tasks.slice(0, 20)) {
-      const name = String(task.name || "").trim();
+      const name = normalizeTaskName(task.name);
       const type = String(task.type || "feat").trim();
       const goal = String(task.description || task.goal || "").trim();
-      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || !VALID_TYPES.has(type) || !goal) {
+      if (!isValidLocalTaskName(name) || !VALID_TYPES.has(type) || !goal) {
         fail(`Planner returned an invalid ticket: ${JSON.stringify(task)}`);
       }
       if (exists(`.harness/tasks/backlog/${name}.md`) || exists(`.harness/tasks/active/${name}.md`) || exists(`.harness/tasks/archive/${name}.md`) || exists(`.harness/tasks/review/${name}.md`)) {

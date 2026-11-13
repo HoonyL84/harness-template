@@ -116,3 +116,18 @@ test("readable label validation rejects reserved IDs, whitespace, duplicates and
   assert.equal(Object.hasOwn(plan.tickets[0], "labels"), false);
   assert.doesNotThrow(() => validateRequestPlan(approveRequestPlan(plan)));
 });
+
+test("request plan and execution state carry optional human-readable ticket title", () => {
+  const { buildExecutionState, assertExecutionMatchesPlan } = require("../../tools/harness-cli/project-execution");
+  const plan = createRequestPlan({
+    requestId: "readable",
+    goal: "대시보드 개선",
+    profiles: { demo: profile("demo") },
+    tickets: [{ ticket_id: "t-1", project_id: "demo", title: "한글 티켓 제목 지원", goal: "티켓에 title 필드 추가" }]
+  });
+  assert.equal(plan.tickets[0].title, "한글 티켓 제목 지원");
+  const approved = approveRequestPlan(plan);
+  const state = buildExecutionState(approved, process.cwd());
+  assert.equal(state.tickets[0].title, "한글 티켓 제목 지원");
+  assert.equal(assertExecutionMatchesPlan(state, approved, process.cwd()), true);
+});

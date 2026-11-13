@@ -191,3 +191,53 @@ test("review ticket resumes through CLI without fabricating completion and canno
   assert.match(fs.readFileSync(path.join(f.root, ".harness/tasks/active/old.md"), "utf8"), /user acceptance/);
   assert.equal(fs.existsSync(path.join(f.root, ".harness/tasks/archive/old.md")), false);
 });
+
+test("Korean local ticket names and plain sections work across CLI, audit, history, context and blocker", { skip: Boolean(process.env.NODE_V8_COVERAGE) }, t => {
+  const f = fixture(t), { spawnSync } = require("node:child_process");
+  const { collectHistory } = require("../../tools/harness-cli/work-history");
+  const { buildAgentContext } = require("../../tools/harness-cli/agent-context");
+  const { blockActiveTask } = require("../../tools/harness-cli/task-blocker");
+  const { isValidLocalTaskName } = require("../../tools/harness-cli/task-format");
+  assert.equal(isValidLocalTaskName("대시보드-업무표시-개선"), true);
+  assert.equal(isValidLocalTaskName("PR머지-실행마감"), true);
+  assert.equal(isValidLocalTaskName("../secret"), false);
+  assert.equal(isValidLocalTaskName("티켓 이름"), false);
+  assert.equal(isValidLocalTaskName("CON"), false);
+
+  fs.cpSync(path.resolve(__dirname, "../../tools/harness-cli"), path.join(f.root, "tools/harness-cli"), { recursive: true });
+  fs.mkdirSync(path.join(f.root, "docs/project"), { recursive: true });
+  fs.mkdirSync(path.join(f.root, "docs/design-docs"), { recursive: true });
+  fs.writeFileSync(path.join(f.root, "AGENTS.md"), "# Rules\n");
+  fs.writeFileSync(path.join(f.root, "docs/project/PLANS.md"), "# Plans\n");
+  fs.writeFileSync(path.join(f.root, "docs/design-docs/core-beliefs.md"), "# Beliefs\n");
+  fs.writeFileSync(path.join(f.root, "docs/design-docs/safety-contract.md"), "# Safety\n");
+  fs.writeFileSync(path.join(f.root, "docs/design-docs/tech-stack.md"), "# Stack\n");
+  const git = spawnSync("git", ["init", "-b", "codex/korean-ticket"], { cwd: f.root, encoding: "utf8" });
+  assert.equal(git.status, 0, git.stderr);
+  const env = { ...process.env, HARNESS_OFFLINE: "true" }; delete env.NODE_V8_COVERAGE;
+  const run = args => spawnSync(process.execPath, [path.join(f.root, "tools/harness-cli/index.js"), ...args], { cwd: f.root, encoding: "utf8", env });
+
+  const created = run(["create-ticket", "대시보드-업무표시", "feat", "--title", "대시보드에서 업무 내용 바로 보기", "--goal", "대시보드 요약 보강", "--why", "ID만 봐서는 무슨 일인지 모름", "--scope", "dashboard 출력 수정", "--acceptance", "대시보드에 제목이 보인다"]);
+  assert.equal(created.status, 0, created.stderr + created.stdout);
+  const started = run(["start-ticket", "대시보드-업무표시"]);
+  assert.equal(started.status, 0, started.stderr + started.stdout);
+
+  const activeContent = fs.readFileSync(path.join(f.root, ".harness/tasks/active/대시보드-업무표시.md"), "utf8");
+  assert.match(activeContent, /# 티켓: 대시보드에서 업무 내용 바로 보기/);
+  assert.match(activeContent, /## 원인 \/ 배경 \(왜 하는가\)/);
+  assert.match(activeContent, /ID만 봐서는 무슨 일인지 모름/);
+
+  const audited = auditTasks(f.root).tasks.find(item => item.ticket_id === "대시보드-업무표시");
+  assert.equal(audited.title, "대시보드에서 업무 내용 바로 보기");
+  assert.equal(audited.pending, 1);
+
+  const hist = collectHistory(f.root, { includeSaved: false }).find(item => item.ticket_id === "대시보드-업무표시");
+  assert.equal(hist.title, "대시보드에서 업무 내용 바로 보기");
+
+  const bundle = buildAgentContext(f.root, { taskName: "대시보드-업무표시" });
+  assert.ok(bundle.files.includes(".harness/tasks/active/대시보드-업무표시.md"));
+
+  const blocked = blockActiveTask({ root: f.root, taskId: "대시보드-업무표시", failedStep: { command: "npm", stepArgs: ["test"], label: "test", stderr: "boom" }, reason: "failed" });
+  assert.equal(blocked.moved, true);
+  assert.equal(fs.existsSync(path.join(f.root, ".harness/tasks/blocked/대시보드-업무표시.md")), true);
+});
