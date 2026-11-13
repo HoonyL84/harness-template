@@ -164,7 +164,7 @@ function createProjectCommand({ root, parseArgs, runGit, log }) {
       return removed;
     }
 
-    throw new Error("Usage: project <add|list|show|check|context|onboard|profile|remove> [id] [--path <git-root>] [--bundle] [--approve] [--json]");
+    throw new Error("Usage: project <add|list|show|check|context|onboard|profile|remove> [id] [--path <git-root>] [--bundle] [--approve] [--allow-fast-track] [--json]");
   };
 }
 

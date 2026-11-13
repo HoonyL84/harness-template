@@ -173,7 +173,7 @@ function createHistoryCommand({ root, parseArgs, log, reviewFingerprint }) {
       const state = readJson(path.join(root, ".harness", "local", "executions", `${validateProjectId(options.request)}.json`), null);
       const ticket = state?.tickets?.find(item => item.ticket_id === options.ticket && item.project_id === options.project);
       const planPath = path.join(root, ".harness/local/requests", `${validateProjectId(options.request)}.json`);
-      if (fs.existsSync(planPath)) assertExecutionMatchesPlan(state, readPlan(planPath), root);
+      if (fs.existsSync(planPath)) assertExecutionMatchesPlan(state, readPlan(planPath, { fresh: false }), root);
       if (ticket && isArtifactTicket(ticket)) assertArtifactEvidence(ticket);
       if (!reviewFingerprint || !ticket || reviewFingerprint(ticket.worktree) !== options.fingerprint) throw new Error("Review content changed; verify again");
       if (!["accepted", "changes-requested"].includes(options.result) || typeof options.reason !== "string") throw new Error("Review requires --result accepted|changes-requested and --reason");

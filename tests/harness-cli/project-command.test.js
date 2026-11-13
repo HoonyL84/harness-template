@@ -85,5 +85,29 @@ test("project command handles empty, JSON, unknown, and failed diagnostics paths
   assert.throws(() => command(["show", "missing"]), /Unknown project/);
   assert.throws(() => command(["check", "missing"]), /Unknown project/);
   assert.throws(() => command(["remove", "missing"]), /Unknown project/);
-  assert.throws(() => command(["invalid"]), /Usage/);
+  assert.throws(() => command(["invalid"]), /--allow-fast-track/);
+});
+
+test("project onboard supports --allow-fast-track discovery and approval", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-project-fast-track-"));
+  const projectPath = path.join(root, "demo-project");
+  fs.mkdirSync(projectPath);
+  const logs = [];
+  const runGit = (args) => {
+    const cmd = args.join(" ");
+    if (cmd === "rev-parse --show-toplevel") return { status: 0, stdout: `${projectPath}\n` };
+    if (cmd === "rev-parse HEAD") return { status: 0, stdout: "head123\n" };
+    if (cmd === "branch --show-current") return { status: 0, stdout: "main\n" };
+    if (cmd === "status --porcelain=v1 --untracked-files=all") return { status: 0, stdout: "" };
+    if (cmd === "remote -v") return { status: 1, stderr: "" };
+    return { status: 1, stderr: "unexpected" };
+  };
+  const command = createProjectCommand({ root, parseArgs, runGit, log: (line) => logs.push(line) });
+  command(["add", "demo", "--path", projectPath]);
+  const draft = command(["onboard", "demo"]);
+  assert.equal(draft.execution_policy.fast_track_allowed, undefined);
+  const approved = command(["onboard", "demo", "--approve", "--allow-fast-track"]);
+  assert.equal(approved.status, "APPROVED");
+  assert.equal(approved.execution_policy.fast_track_allowed, true);
+  assert.ok(logs.some((line) => line.includes("fast_track_allowed=true")));
 });

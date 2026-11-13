@@ -28,7 +28,7 @@ All commands, integrations, recovery and experimental modes: help --all
 [Multi-Project Control Plane]
   node tools/harness-cli/index.js dashboard [--json] [--cost] [--check-connections] [--notify]
   node tools/harness-cli/index.js bootstrap <request|approve|apply|status> <id> [--path <project-root>] [--summary <text>] [--message <commit-message>]
-  node tools/harness-cli/index.js project <add|list|show|check|context|onboard|profile|remove> [id] [--path <git-root>] [--bundle] [--approve] [--json]
+  node tools/harness-cli/index.js project <add|list|show|check|context|onboard|profile|remove> [id] [--path <git-root>] [--bundle] [--approve] [--allow-fast-track] [--json]
   node tools/harness-cli/index.js project context ID --bundle [--request ID --ticket ID] [--query TEXT] [--max-files N] [--max-bytes N]
   node tools/harness-cli/index.js request <create|revise|show|approve|ready> <id> [--project <id,...>] [--goal <text>] [--plan-file <json>]
   node tools/harness-cli/index.js request import-jira <id> --project <id> --issues <KEY-1,KEY-2>
@@ -38,7 +38,7 @@ All commands, integrations, recovery and experimental modes: help --all
   node tools/harness-cli/index.js request planning <id>
   node tools/harness-cli/index.js request planning-review <id> --review-file <json>
   node tools/harness-cli/index.js request generate <id> --provider <openai|anthropic|gemini> [--model-tier standard|strong] [--live --approve-send --max-requests 1 --input-fingerprint <sha256>]
-  node tools/harness-cli/index.js execution <prepare|advance|review-ready|status> <request-id>
+  node tools/harness-cli/index.js execution <prepare|advance|sync-base|review-ready|complete|status> <request-id>
   node tools/harness-cli/index.js runner <run|reconcile|status|notify> <request-id> [--ticket <ticket-id>] [--max-attempts N] [--max-tickets N] [--full-context]
   node tools/harness-cli/index.js release request <request-id> [--ticket <id>] [--approval <id>] --summary "..." [--operation record|commit|push|merge]
   node tools/harness-cli/index.js release <approve|apply|consume> <request-id> --fingerprint <sha256>

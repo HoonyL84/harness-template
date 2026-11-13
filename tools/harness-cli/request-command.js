@@ -16,7 +16,7 @@ const { readRegistry, validateProjectId } = require("./project-registry");
 const { readJiraTickets, requireJiraFresh, requirePublishedDraftImported } = require("./jira-input");
 const { assertPlanningEvidence, createPlanningCommand } = require("./planning-command");
 
-function readPlan(filePath) {
+function readPlan(filePath, { fresh = true } = {}) {
   if (!fs.existsSync(filePath)) throw new Error(`Unknown request plan: ${path.basename(filePath, ".json")}`);
   let plan;
   try {
@@ -25,7 +25,7 @@ function readPlan(filePath) {
     throw new Error(`Request plan is invalid JSON: ${error.message}`);
   }
   validateRequestPlan(plan);
-  if (plan.planning_evidence) assertPlanningEvidence(path.resolve(path.dirname(filePath), "../../.."), plan);
+  if (plan.planning_evidence) assertPlanningEvidence(path.resolve(path.dirname(filePath), "../../.."), plan, { fresh });
   return plan;
 }
 
