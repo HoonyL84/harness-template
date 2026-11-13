@@ -108,7 +108,7 @@ function setup(t) {
         data = { ok: true, contentType: "page", content: { id: "12", type: "page", spaceId: "4", parentId: "5", title: args.title } };
       } else if (name === "getConfluenceContent") data = content;
       else if (name === "getConfluenceContentAncestors") data = { results: [{ id: state.parent }] };
-      else if (name === "createJiraIssue") { state.writes++; assert.match(args.description, /^```json\n/); Object.assign(remoteIssue.fields, { description: args.description, labels: args.labels }); data = { id: "30", key: "TEST-1" }; }
+      else if (name === "createJiraIssue") { state.writes++; assert.match(args.description, /^```json\n/); Object.assign(remoteIssue.fields, { summary: args.summary, description: args.description, labels: args.labels }); data = { id: "30", key: "TEST-1" }; }
       else if (name === "getJiraIssue") data = remoteIssue;
       else if (name === "listJiraIssueTransitions") data = transitions();
       else if (name === "listJiraStatuses") { data = statusList(); if (state.ambiguous) { data.statuses.push({ id: "3", name: "Review", category: "indeterminate" }); data.workTypes[0].statusIds.push("3"); } }
