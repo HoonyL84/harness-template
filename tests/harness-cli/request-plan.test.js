@@ -130,4 +130,11 @@ test("request plan and execution state carry optional human-readable ticket titl
   const state = buildExecutionState(approved, process.cwd());
   assert.equal(state.tickets[0].title, "한글 티켓 제목 지원");
   assert.equal(assertExecutionMatchesPlan(state, approved, process.cwd()), true);
+
+  const { ticketDraft } = require("../../tools/harness-cli/atlassian-payloads");
+  const jiraConfig = { jira_projects: { demo: "DEMO" }, jira_issue_types: { demo: "10001" } };
+  const summaryWithAutoPrefix = ticketDraft(jiraConfig, plan, plan.tickets[0]).build("marker").fields.summary;
+  assert.equal(summaryWithAutoPrefix, "[demo] 한글 티켓 제목 지원");
+  const prefixedTicket = { ...plan.tickets[0], title: "[demo] 이미 태그 있음" };
+  assert.equal(ticketDraft(jiraConfig, plan, prefixedTicket).build("marker").fields.summary, "[demo] 이미 태그 있음");
 });

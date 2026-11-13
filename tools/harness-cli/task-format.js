@@ -64,11 +64,21 @@ function parseAcceptanceProgress(content) {
   return { checked, pending, remaining_conditions };
 }
 
+function prefixProjectLabel(projectId, text) {
+  const clean = String(text || "").trim();
+  const id = String(projectId || "").trim();
+  if (!id) return clean;
+  const tag = `[${id}]`;
+  const body = clean.startsWith(tag) ? clean.slice(tag.length).trim() : clean;
+  return body ? `${tag} ${body}` : tag;
+}
+
 module.exports = {
   extractTicketCause,
   extractTicketSection,
   extractTicketTitle,
   isValidLocalTaskName,
   normalizeTaskName,
-  parseAcceptanceProgress
+  parseAcceptanceProgress,
+  prefixProjectLabel
 };
