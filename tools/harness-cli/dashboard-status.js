@@ -54,10 +54,77 @@ async function dashboardOverview({ root, runGit, env, fetchImpl, options, checkA
   return { projects, tasks: auditTasks(root).tasks, usage: { month: usage.month, providers }, connections,
     notice: "Local configuration is not connection health. Token budget is local, not account balance. Probes do not prove notification delivery or write permission.", offline };
 }
+function compactText(value, max = 90) {
+  const single = String(value || "").replace(/\s+/g, " ").trim();
+  if (!single) return "";
+  return single.length > max ? `${single.slice(0, max - 1)}…` : single;
+}
+
+function localTicketLines(tasks = []) {
+  return ["active", "blocked", "backlog", "review"]
+    .flatMap(state => tasks.filter(t => t.state === state))
+    .map(t => {
+      const label = t.title && t.title !== t.ticket_id ? `${t.ticket_id} — ${compactText(t.title, 70)}` : t.ticket_id;
+      return `  - [${t.state}] ${label}`;
+    });
+}
+
+function ticketSummaryLine(ticket, planTicket = null) {
+  const id = ticket.ticket_id || planTicket?.ticket_id || "unknown";
+  const label = compactText(ticket.title || planTicket?.title || ticket.goal || planTicket?.goal, 60);
+  const status = ticket.status ? `[${ticket.status}] ` : "";
+  return `  - ${status}${id}${label && label !== id ? ` — ${label}` : ""}`;
+}
+
+function executionStatusLabel(state) {
+  const tickets = state.tickets || [];
+  if (tickets.some(t => t.status === "BLOCKED")) return "BLOCKED";
+  if (state.status === "REVIEW_READY") return "REVIEW_READY";
+  if (tickets.some(t => t.status === "REVIEW_READY" && !t.committed_sha)) return "PARTIAL_REVIEW_READY";
+  if (tickets.some(t => t.status === "WAITING_DEPENDENCY")) return "WAITING_DEPENDENCY";
+  return state.status;
+}
+
+function formatRequestBlock(request, next) {
+  const status = request.status === "DRAFT" ? "PLAN_READY" : `PLAN_${request.status}`;
+  const parts = [`${request.request_id}: ${status}`];
+  const goal = compactText(request.goal);
+  if (goal) parts.push(`Goal: ${goal}`);
+  const tickets = request.tickets || [];
+  if (tickets.length) {
+    parts.push(`Tickets (${tickets.length}):`, ...tickets.map(ticket => ticketSummaryLine(ticket)));
+  }
+  if (next) parts.push(next);
+  return parts.join("\n");
+}
+
+function formatExecutionBlock(state, request, next) {
+  const status = executionStatusLabel(state);
+  const tickets = state.tickets || [];
+  const planById = new Map((request?.tickets || []).map(t => [t.ticket_id, t]));
+  const parts = [`${state.request_id}: ${status}`];
+  const goal = compactText(state.goal || request?.goal);
+  if (goal) parts.push(`Goal: ${goal}`);
+  if (tickets.length) {
+    const done = tickets.filter(t => t.status === "COMPLETED").length;
+    parts.push(`Progress: ${done}/${tickets.length} completed`);
+    if (tickets.some(t => t.ticket_id)) {
+      parts.push(...tickets.map(t => ticketSummaryLine(t, planById.get(t.ticket_id))));
+    }
+  }
+  const blocked = tickets.filter(t => t.status === "BLOCKED");
+  if (blocked.length) parts.push(`Evidence: ${blocked.map(t => `${t.ticket_id}=${t.error}`).join("; ")}`);
+  else if (status === "PARTIAL_REVIEW_READY") parts.push(`Tickets: ${tickets.filter(t => t.status === "REVIEW_READY" && !t.committed_sha).map(t => t.ticket_id).join(", ")}`);
+  else if (status === "WAITING_DEPENDENCY") parts.push(`Tickets: ${tickets.filter(t => t.status === "WAITING_DEPENDENCY").map(t => `${t.ticket_id} (${t.waiting_reason})`).join("; ")}`);
+  if (next) parts.push(next);
+  return parts.join("\n");
+}
+
 function overviewLines(o) {
+  const ticketHeader = "Local tickets: " + ["active", "review", "blocked", "backlog"].map(s => s + "=" + o.tasks.filter(t => t.state === s).length).join(" ");
   return ["Projects: " + (o.projects.map(p => p.project_id + "=" + p.git_state).join(", ") || "none"),
-    "Local tickets: " + ["active", "review", "blocked", "backlog"].map(s => s + "=" + o.tasks.filter(t => t.state === s).length).join(" "),
+    [ticketHeader, ...localTicketLines(o.tasks)].join("\n"),
     "Observed tokens (" + o.usage.month + "): " + o.usage.providers.map(p => p.provider + "=" + p.observed_tokens + " remaining=" + (p.remaining_tokens ?? "unknown") + (p.estimated_cost ? " estimate_USD=" + (p.estimated_cost.usd ?? "unknown") : "")).join("; "),
     "Connections: " + Object.entries(o.connections).map(([k, v]) => k + "=" + v.status).join(", "), o.notice];
 }
-module.exports = { dashboardOverview, overviewLines };
+module.exports = { dashboardOverview, executionStatusLabel, formatExecutionBlock, formatRequestBlock, overviewLines };

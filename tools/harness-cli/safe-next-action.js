@@ -30,6 +30,10 @@ function executionAdvice(state) {
     return { ...advice, why: "A runner/verification may still own this work. Lease expiry alone does not prove it is safe to retry" };
   }
   if (tickets.some(t => t.status === "BLOCKED")) return { ...advice, why: "Execution is blocked. Inspect attempt, verification and rollback evidence before choosing recovery" };
+  if (state.status === "COMPLETED" || (tickets.length > 0 && tickets.every(t => t.status === "COMPLETED"))) {
+    const inspect = inspectionAdvice("execution", state.request_id);
+    return { ...inspect, why: "All execution tickets are completed and recorded" };
+  }
   if (tickets.some(t => t.status === "REVIEW_READY")) return { ...advice, why: "Verification evidence is available, not final human acceptance or Git release permission" };
   if (tickets.some(t => t.status === "WAITING_DEPENDENCY")) return { ...advice, why: "Required predecessor commits or an approved integration are not ready" };
   return advice;

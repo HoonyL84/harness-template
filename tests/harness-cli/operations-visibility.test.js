@@ -246,3 +246,58 @@ test("Korean local ticket names and plain sections work across CLI, audit, histo
   assert.equal(blocked.moved, true);
   assert.equal(fs.existsSync(path.join(f.root, ".harness/tasks/blocked/대시보드-업무표시.md")), true);
 });
+
+test("dashboard displays local ticket titles, request goals/progress, and calm advice for COMPLETED executions", async t => {
+  const f = fixture(t);
+  f.save(".harness/tasks/active/한글-티켓.md", "# 티켓: 대시보드 읽기 쉽게 고치기\n\n## Acceptance Criteria\n- [ ] 테스트 통과\n");
+  f.save(".harness/tasks/review/old-review.md", "# TICKET: old-review\n## Goal\n오래된 리뷰 티켓 확인\n");
+  f.save(".harness/tasks/archive/done-task.md", "# 티켓: 이미 끝난 일\n");
+  f.save(".harness/local/requests/plan-only.json", {
+    request_id: "plan-only",
+    status: "APPROVED",
+    goal: "실시간 로그 조회 추가",
+    tickets: [{ ticket_id: "t1", title: "로그 API 추가", goal: "로그 엔드포인트 구현" }]
+  });
+  f.save(".harness/local/requests/done-work.json", {
+    request_id: "done-work",
+    status: "APPROVED",
+    goal: "이전 로드맵 기능 마감",
+    tickets: [{ ticket_id: "t-done", title: "옵셔널 기능 연결", goal: "엔드포인트 연결" }]
+  });
+  f.save(".harness/local/executions/done-work.json", {
+    request_id: "done-work",
+    status: "COMPLETED",
+    tickets: [{ ticket_id: "t-done", status: "COMPLETED" }]
+  });
+  f.save(".harness/local/executions/stuck-work.json", {
+    request_id: "stuck-work",
+    status: "BLOCKED",
+    goal: "배포 가드 확인",
+    tickets: [{ ticket_id: "t-block", status: "BLOCKED", error: "smoke failed" }]
+  });
+
+  const completedAdvice = executionAdvice({ request_id: "done-work", status: "COMPLETED", tickets: [{ ticket_id: "t-done", status: "COMPLETED" }] });
+  assert.equal(completedAdvice.why, "All execution tickets are completed and recorded");
+  assert.equal(completedAdvice.next_action, "node tools/harness-cli/index.js execution status done-work");
+
+  let text = "";
+  const commands = createControlPlaneCommands({
+    root: f.root,
+    parseArgs,
+    reviewFingerprint: () => "x",
+    runGit: () => ({ status: 0, stdout: "" }),
+    log: s => { text = s; },
+    notify: () => {},
+    fetchImpl: () => { throw Error("no network"); },
+    env: {}
+  });
+  await commands.dashboard([]);
+
+  assert.match(text, /Local tickets: active=1 review=1 blocked=0 backlog=0/);
+  assert.match(text, /\[active\] 한글-티켓 — 대시보드 읽기 쉽게 고치기/);
+  assert.match(text, /\[review\] old-review/);
+  assert.equal(text.includes("done-task"), false);
+  assert.match(text, /plan-only: PLAN_APPROVED\nGoal: 실시간 로그 조회 추가\nTickets \(1\):\n  - t1 — 로그 API 추가/);
+  assert.match(text, /done-work: COMPLETED\nGoal: 이전 로드맵 기능 마감\nProgress: 1\/1 completed\n  - \[COMPLETED\] t-done — 옵셔널 기능 연결\nWhy: All execution tickets are completed and recorded\nSafe Next Action: node tools\/harness-cli\/index\.js execution status done-work/);
+  assert.ok(text.indexOf("stuck-work: BLOCKED") < text.indexOf("done-work: COMPLETED"));
+});
