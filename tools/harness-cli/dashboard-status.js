@@ -123,6 +123,29 @@ function formatExecutionBlock(state, request, next) {
   return parts.join("\n");
 }
 
+function formatPublicationBlock(entry, advice, next) {
+  const parts = [`${advice?.id || "unknown"}: ${advice?.status || "unknown"}`];
+  const project = typeof entry?.project_id === "string" ? compactText(entry.project_id, 60) : "";
+  const ticket = typeof entry?.ticket_id === "string"
+    ? compactText(entry.ticket_id, 80)
+    : (typeof entry?.transition?.issue_key === "string" ? compactText(entry.transition.issue_key, 40) : "");
+  const service = typeof entry?.service === "string" ? compactText(entry.service, 30) : "";
+  const op = typeof entry?.operation === "string" ? compactText(entry.operation, 30) : "";
+  const payloadObj = entry?.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : null;
+  const rawBoard = payloadObj?.fields?.project?.key ?? entry?.transition?.project_key;
+  const boardKey = typeof rawBoard === "string" && /^[A-Z][A-Z0-9_]{0,30}$/.test(rawBoard) ? rawBoard : "";
+  const subject = [project ? `[${project}]` : "", ticket].filter(Boolean).join(" ");
+  const detail = [[service, op].filter(Boolean).join(" "), boardKey ? `-> ${boardKey}` : ""].filter(Boolean).join(" ");
+  const target = [subject, detail ? `(${detail})` : ""].filter(Boolean).join(" ");
+  if (target) parts.push(`Target: ${target}`);
+  // Only read structured public summary/title metadata; never inspect string payloads or bodies.
+  const rawSummary = payloadObj?.fields?.summary ?? payloadObj?.title;
+  const summary = typeof rawSummary === "string" ? compactText(rawSummary, 120) : "";
+  if (summary) parts.push(`Summary: ${summary}`);
+  if (next) parts.push(next);
+  return parts.join("\n");
+}
+
 function overviewLines(o) {
   const ticketHeader = "Local tickets: " + ["active", "review", "blocked", "backlog"].map(s => s + "=" + o.tasks.filter(t => t.state === s).length).join(" ");
   return ["Projects: " + (o.projects.map(p => p.project_id + "=" + p.git_state).join(", ") || "none"),
@@ -130,4 +153,4 @@ function overviewLines(o) {
     "Observed tokens (" + o.usage.month + "): " + o.usage.providers.map(p => p.provider + "=" + p.observed_tokens + " remaining=" + (p.remaining_tokens ?? "unknown") + (p.estimated_cost ? " estimate_USD=" + (p.estimated_cost.usd ?? "unknown") : "")).join("; "),
     "Connections: " + Object.entries(o.connections).map(([k, v]) => k + "=" + v.status).join(", "), o.notice];
 }
-module.exports = { dashboardOverview, executionStatusLabel, formatExecutionBlock, formatRequestBlock, overviewLines };
+module.exports = { dashboardOverview, executionStatusLabel, formatExecutionBlock, formatPublicationBlock, formatRequestBlock, overviewLines };
